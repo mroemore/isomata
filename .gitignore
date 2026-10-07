@@ -1,0 +1,33 @@
+# Build directories
+build/
+build-*/
+builddir/
+_superbuild/
+
+# SDD plan workspaces (scratch, per-plan)
+.superpowers/
+
+# Local scratch (never commit)
+.tmp_files/
+downloads/
+
+# IDE / editor state
+.idea/
+.vscode/
+.zed/
+.cache/
+.clang-format.bak
+
+# Android build state
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.cxx/
+
+# Compiled artifacts — note: shaders/*.spv are DELIBERATELY committed
+# (checked-in SPIR-V fallback when SDL_shadercross is unavailable).
+*.o
+*.a
+*.so
+*.apk
