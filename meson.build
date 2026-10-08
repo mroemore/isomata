@@ -23,9 +23,16 @@ sdl3_dep = dependency('sdl3', version : '>= 3.4.0')
 
 # SDL3_ttf is not packaged system-wide on this box; falls back to
 # subprojects/sdl3-ttf.wrap when the pkg-config lookup fails.
+#
+# default_options b_sanitize=none: the wrap is a cmake-method subproject whose
+# shared library link does not receive the sanitizer runtime flags Meson adds
+# to first-party targets, so an instrumented build of it fails to link
+# (undefined __asan/__ubsan refs). Keeping the vendored dependency
+# uninstrumented lets the asan matrix build and run our own code under ASan.
 sdl3_ttf_dep = dependency(
 	'sdl3-ttf',
 	version : '>= 3.2.0',
+	default_options : ['b_sanitize=none'],
 )
 
 math_dep = cc.find_library('m', required : false)

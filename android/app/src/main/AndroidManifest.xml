@@ -4,6 +4,14 @@
 	from the same src/ tree the Meson build compiles. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+	<!-- The renderer is SDL_gpu, which on Android uses Vulkan; there is no
+	     software fallback. Declared here (required=false so installs are not
+	     hard-filtered and emulators still install) to document the runtime
+	     dependency surfaced by the emulator verification. -->
+	<uses-feature
+		android:name="android.hardware.vulkan.version"
+		android:required="false" />
+
 	<application
 		android:label="Isomata"
 		android:allowBackup="false"

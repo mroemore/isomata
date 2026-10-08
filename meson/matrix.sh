@@ -49,9 +49,11 @@ run_one() {
   case "$cfg" in
     asan)
       dir=build-matrix-asan
-      setup_build "$dir" "$CLANG" \
-        -Dc_args='["-fsanitize=address,undefined","-fno-omit-frame-pointer"]' \
-        -Dc_link_args='["-fsanitize=address,undefined"]' || rc=1
+      # b_sanitize (not raw c_args/c_link_args): Meson then adds the matching
+      # runtime to every link, and the sdl3-ttf wrap's default_options
+      # b_sanitize=none keeps that vendored cmake subproject uninstrumented
+      # (its shared-lib link otherwise misses the sanitizer runtime).
+      setup_build "$dir" "$CLANG" -Db_sanitize=address,undefined || rc=1
       [ "$rc" = 0 ] && { ASAN_OPTIONS=detect_leaks=0 meson test -C "$ROOT/$dir" >/dev/null 2>&1 || rc=1; }
       ;;
     trapv|uchar|schar)

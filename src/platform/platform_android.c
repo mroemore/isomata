@@ -33,6 +33,42 @@ void platformDisplaySize(int *outWidth, int *outHeight) {
 	}
 }
 
+void platformSafeArea(void *window, int *outX, int *outY, int *outW, int *outH) {
+	SDL_Window *w = window;
+	SDL_Rect rect = { 0, 0, 0, 0 };
+
+	if (w != NULL) {
+		int pw = 0;
+		int ph = 0;
+
+		if (SDL_GetWindowSizeInPixels(w, &pw, &ph)) {
+			rect.w = pw;
+			rect.h = ph;
+			/* Android cutouts/status/navigation bars show up here;
+			 * with none, SDL reports the full client rect. */
+			if (!SDL_GetWindowSafeArea(w, &rect) || rect.w <= 0 ||
+			    rect.h <= 0) {
+				rect.x = 0;
+				rect.y = 0;
+				rect.w = pw;
+				rect.h = ph;
+			}
+		}
+	}
+	if (outX) {
+		*outX = rect.x;
+	}
+	if (outY) {
+		*outY = rect.y;
+	}
+	if (outW) {
+		*outW = rect.w;
+	}
+	if (outH) {
+		*outH = rect.h;
+	}
+}
+
 const char *platformAssetPath(const char *relativeName, char *buffer, size_t bufferSize) {
 	/* SDL_IOStream on Android resolves asset names through the APK's
 	 * AAssetManager, so "fonts/foo.ttf" opens the packed asset directly. */

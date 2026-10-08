@@ -30,6 +30,12 @@ struct App {
 	int height;
 	int pixelW;
 	int pixelH;
+	/* Safe-area inset of the window in virtual pixels, refreshed each frame
+	 * (see appSafeArea). Equal to the full window on a desktop display. */
+	int safeX;
+	int safeY;
+	int safeW;
+	int safeH;
 	bool running;
 
 	float uiScale;
@@ -86,6 +92,44 @@ static void smokeProbeFont(void) {
 	SDL_Log("isomata smoke: font measure \"Isomata\" = %dx%d (height %d, rc %d)",
 		w, h, uiFontHeight(font), rc);
 	uiFreeFont(font);
+}
+
+/* Smoke hook: report the safe-area inset the scenes will lay their UI root
+ * in. Exercises the appSafeArea accessor under the dummy-driver smoke run
+ * (the real draw path needs a GPU); a no-inset desktop window reports the
+ * full client rect. */
+static void smokeProbeSafeArea(App *app) {
+	int x;
+	int y;
+	int w;
+	int h;
+
+	/* Exercise the accessor's defensive arms (NULL app / NULL out params)
+	 * so the dummy-driver smoke run covers them, not only the GPU draw
+	 * path; the last call leaves the real values in x/y/w/h for the log. */
+	appSafeArea(NULL, &x, &y, &w, &h);
+	appSafeArea(app, NULL, NULL, NULL, NULL);
+	appSafeArea(app, &x, &y, &w, &h);
+	SDL_Log("isomata smoke: safe area %d,%d %dx%d", x, y, w, h);
+}
+
+/* Refresh the window metrics the scenes read: pixel size and the safe-area
+ * inset. The physical safe rect from the platform seam is converted to
+ * virtual pixels edge-consistently (corners scaled, extents derived) so the
+ * UI root shares edges with the renderer's scale. */
+static void appRefreshMetrics(App *app) {
+	SDL_Rect safe = { 0, 0, 0, 0 };
+	int right;
+	int bottom;
+
+	SDL_GetWindowSizeInPixels(app->window, &app->pixelW, &app->pixelH);
+	platformSafeArea(app->window, &safe.x, &safe.y, &safe.w, &safe.h);
+	right = uiScalePhysicalToVirtual(safe.x + safe.w, app->uiScale);
+	bottom = uiScalePhysicalToVirtual(safe.y + safe.h, app->uiScale);
+	app->safeX = uiScalePhysicalToVirtual(safe.x, app->uiScale);
+	app->safeY = uiScalePhysicalToVirtual(safe.y, app->uiScale);
+	app->safeW = right - app->safeX;
+	app->safeH = bottom - app->safeY;
 }
 
 /* Release the runtime (scenes, input, UI, GPU, font). Idempotent and safe on
@@ -161,6 +205,10 @@ App *appCreate(const char *title, int width, int height) {
 	app->height = height;
 	app->pixelW = width;
 	app->pixelH = height;
+	app->safeX = 0;
+	app->safeY = 0;
+	app->safeW = width;
+	app->safeH = height;
 	app->running = true;
 	app->uiScale = 1.0f;
 	return app;
@@ -198,7 +246,7 @@ static bool appSetupRuntime(App *app, bool smoke) {
 		if (!smoke)
 			return false;
 	} else {
-		SDL_GetWindowSizeInPixels(app->window, &app->pixelW, &app->pixelH);
+		appRefreshMetrics(app);
 		SDL_Log("isomata: window %dx%d pixels (aspect %.3f)", app->pixelW,
 			app->pixelH,
 			app->pixelH > 0 ? (float)app->pixelW / (float)app->pixelH : 1.0f);
@@ -257,6 +305,7 @@ bool appRun(App *app) {
 
 	if (smoke) {
 		smokeProbeFont();
+		smokeProbeSafeArea(app);
 	}
 
 	if (!appSetupRuntime(app, smoke)) {
@@ -288,7 +337,7 @@ bool appRun(App *app) {
 		}
 		inputEndFrame(app->input, &app->frame);
 
-		SDL_GetWindowSizeInPixels(app->window, &app->pixelW, &app->pixelH);
+		appRefreshMetrics(app);
 
 		updateSceneStack(app->stack, app, dt);
 
@@ -365,6 +414,36 @@ int appPixelWidth(const App *app) {
 
 int appPixelHeight(const App *app) {
 	return app != NULL ? app->pixelH : 0;
+}
+
+void appSafeArea(const App *app, int *outX, int *outY, int *outW, int *outH) {
+	if (app == NULL) {
+		if (outX) {
+			*outX = 0;
+		}
+		if (outY) {
+			*outY = 0;
+		}
+		if (outW) {
+			*outW = 0;
+		}
+		if (outH) {
+			*outH = 0;
+		}
+		return;
+	}
+	if (outX) {
+		*outX = app->safeX;
+	}
+	if (outY) {
+		*outY = app->safeY;
+	}
+	if (outW) {
+		*outW = app->safeW;
+	}
+	if (outH) {
+		*outH = app->safeH;
+	}
 }
 
 void appRequestQuit(App *app) {

@@ -93,6 +93,13 @@ Audio *appAudio(App *app);
 int appPixelWidth(const App *app);
 int appPixelHeight(const App *app);
 
+/* Safe-area inset of the window in VIRTUAL (logical UI) pixels, refreshed
+ * each frame (SDL_GetWindowSafeArea via the platform seam). Scenes lay their
+ * UI root in this rect so content clears notches/status/navigation bars;
+ * on a desktop display it equals (0, 0, virtualWidth, virtualHeight). Writes
+ * 0s before the loop starts or for a NULL app. Any out pointer may be NULL. */
+void appSafeArea(const App *app, int *outX, int *outY, int *outW, int *outH);
+
 /* Ask the loop to stop after the current frame (clean exit, code 0). */
 void appRequestQuit(App *app);
 

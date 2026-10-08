@@ -52,6 +52,17 @@ android {
 		prefab true
 	}
 
+	// Pack the repo's runtime assets/ tree into the APK. SDL's AAssetManager
+	// resolves the same relative names the desktop build uses
+	// ("fonts/KiwiSoda.ttf", "shaders/world.vert.spv", "maps/demo.txt", ...)
+	// from the APK's assets/ root, so this single srcDir is all the app needs.
+	// The path is relative to this module directory (android/app).
+	sourceSets {
+		main {
+			assets.srcDirs = ['../../assets']
+		}
+	}
+
 	externalNativeBuild {
 		cmake {
 			path file('jni/CMakeLists.txt')

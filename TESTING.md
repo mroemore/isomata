@@ -125,6 +125,22 @@ One `fuzz/fuzz_<target>.c` per target; list the sources it links in
 (`/proc/self/fd/N`) so nothing touches disk. Seeds and crashers live in
 `fuzz/corpus/<target>/`.
 
+## Dynamic-analysis matrix (P6)
+
+`meson/matrix.sh [config ...]` builds the suite under each configuration and
+runs it; `./meson/check.sh --full` includes it.
+
+| Config | Tool | Notes |
+|--------|------|-------|
+| `asan` | clang `-Db_sanitize=address,undefined` | GCC on this box ships **no** `libasan`/`libubsan`, so the sanitizer build uses clang (`/usr/lib/llvm/21/bin/clang`, or `FUZZ_CC`). The `sdl3-ttf` wrap is configured `default_options : ['b_sanitize=none']` in `meson.build`: its cmake-method shared-library link does not receive the sanitizer runtime flags, so instrumenting the vendored subproject fails to link (`undefined reference to __asan_*`). First-party targets are instrumented normally. |
+| `trapv` / `uchar` / `schar` | gcc `-ftrapv` / `-funsigned-char` / `-fsigned-char` | |
+| `valgrind` | plain build, every test under valgrind | the leak/UAF rung that substitutes for ASan's leak checker on this host (memcheck errors gate; leaks are reported, not gated). |
+| `m32` | gcc `-m32` | skipped without 32-bit multilib (skipped here). |
+
+Leak detection is deliberately **off** for the asan config
+(`ASAN_OPTIONS=detect_leaks=0`): third-party libs leak and first-party leaks are
+covered by the valgrind rung.
+
 ## Process (P8)
 
 The automated tiers prove the code is consistent with what the tests check; they

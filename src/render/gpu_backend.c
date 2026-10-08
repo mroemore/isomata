@@ -21,7 +21,6 @@
 #include <SDL3/SDL_surface.h>
 
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -96,38 +95,24 @@ struct GpuBackend {
 
 /* --- small helpers ---------------------------------------------------- */
 
+/* Read a whole file into a fresh SDL-allocated buffer. SDL_LoadFile resolves
+ * APK assets on Android (the platform seam returns the bare relative asset
+ * name there) and plain filesystem paths on desktop (the seam returns
+ * <basePath>/assets/...). The old stdio path could not read APK assets, so
+ * the Android GPU tier failed to find its SPIR-V. Caller frees with
+ * SDL_free. */
 static Uint8 *readFile(const char *path, size_t *outSize)
 {
-	FILE *file;
-	long length;
-	Uint8 *data;
-	size_t got;
+	size_t size = 0;
+	void *data;
 
 	*outSize = 0;
-	file = fopen(path, "rb");
-	if (file == NULL)
-		return NULL;
-	if (fseek(file, 0, SEEK_END) != 0) {
-		fclose(file);
+	data = SDL_LoadFile(path, &size);
+	if (data == NULL || size == 0) {
+		SDL_free(data);
 		return NULL;
 	}
-	length = ftell(file);
-	if (length <= 0 || fseek(file, 0, SEEK_SET) != 0) {
-		fclose(file);
-		return NULL;
-	}
-	data = malloc((size_t)length);
-	if (data == NULL) {
-		fclose(file);
-		return NULL;
-	}
-	got = fread(data, 1, (size_t)length, file);
-	fclose(file);
-	if (got != (size_t)length) {
-		free(data);
-		return NULL;
-	}
-	*outSize = (size_t)length;
+	*outSize = size;
 	return data;
 }
 
@@ -173,7 +158,7 @@ static SDL_GPUShader *createShader(SDL_GPUDevice *device, const char *path,
 			     stage == SDL_GPU_SHADERSTAGE_VERTEX ? "vertex" : "fragment",
 			     path, SDL_GetError());
 	}
-	free(code);
+	SDL_free(code);
 	return shader;
 }
 

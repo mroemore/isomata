@@ -19,7 +19,6 @@
 #include "ui/element_menu.h"
 #include "ui/layout.h"
 #include "ui/ui_font.h"
-#include "ui/ui_scale.h"
 
 #include <SDL3/SDL.h>
 
@@ -137,11 +136,16 @@ static void menu_draw(void *self, App *app)
 {
 	MenuState *st = scenePayload(self);
 	UiDrawCtx *ctx = appUiDrawCtx(app);
-	float scale = appUiScale(app);
-	int vw = uiScalePhysicalToVirtual(appPixelWidth(app), scale);
-	int vh = uiScalePhysicalToVirtual(appPixelHeight(app), scale);
+	int x;
+	int y;
+	int w;
+	int h;
 
-	uiSetRect(st->root, 0, 0, vw, vh);
+	/* Lay the menu inside the window's safe area (equal to the full window
+	 * on a desktop display), so it clears notches / status / navigation
+	 * bars on Android. */
+	appSafeArea(app, &x, &y, &w, &h);
+	uiSetRect(st->root, x, y, w, h);
 	uiLayout(st->root);
 	uiDraw(st->root, ctx);
 }

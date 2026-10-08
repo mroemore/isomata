@@ -58,33 +58,53 @@ SDL_VIDEODRIVER=dummy ISO_SMOKE_MS=300 build/isomata
 
 ### ARM cross builds (Linux targets)
 
+The cross files are wired for the Void `aarch64-linux-gnu` /
+`arm-linux-gnueabihf` toolchains:
+
 ```
 meson setup build-aarch64 --cross-file cross/aarch64.ini
-meson setup build-armhf --cross-file cross/armhf.ini
+meson setup build-armhf  --cross-file cross/armhf.ini
 ```
 
-Requires the `aarch64-linux-gnu` / `arm-linux-gnueabihf` toolchain packages
-plus SDL3 in both rootfs'/sysroots.
+On this box the Meson cross *configure* stops at `dependency('sdl3')`: there
+is no target-side SDL3 pkg-config/sysroot, so the full ARM app cannot link.
+The code itself is verified for ARM instead: the headless pure test suite
+cross-compiles to a static aarch64/armhf binary and runs under
+`qemu-aarch64-static` / `qemu-arm` (204 tests, 0 failures), and every
+SDL-tier translation unit compiles clean for both targets. See
+[docs/building.md](docs/building.md#arm-linux-cross-builds) for the exact
+commands and the remaining prerequisites for a full app cross-build.
 
 ### Android
 
 The Android build does NOT use Meson. It is a Gradle + CMake project under
-`android/` that compiles the exact same `src/` files via
+`android/` that compiles the exact same `src/` tree via
 `android/app/jni/CMakeLists.txt` into `libmain.so` (SDL3's expected entry
-library), with the `org.libsdl.app.SDLActivity` launcher.
+library), with the `org.libsdl.app.SDLActivity` launcher and the repo
+`assets/` packed into the APK.
 
 Setup:
 
-1. Install the Android SDK (NDK 29 preferred) and JDK 17+.
+1. Install the Android SDK (NDK 29 tested) and JDK 17+ (JDK 21 is used here at
+   `~/.local/opt/jdk-21`).
 2. `android/local.properties` (gitignored) must contain `sdk.dir=<path>`.
-3. Download `SDL3-devel-*-android.zip` from a [libsdl-org SDL release][sdlrel]
-   and copy the `SDL3-*.aar` (and, in later tasks, `SDL3_ttf-*.aar`) into
-   `android/app/libs/`.
-4. Uncomment the corresponding `implementation files('libs/...')` lines in
-   `android/app/build.gradle`.
-5. `cd android && ./gradlew :app:assembleDebug`
+3. Download the prefab AARs from the official libsdl-org releases and copy
+   them into `android/app/libs/` (gitignored):
+   - `SDL3-devel-<ver>-android.zip` → `SDL3-<ver>.aar`
+   - `SDL3_ttf-devel-<ver>-android.zip` → `SDL3_ttf-<ver>.aar`
+4. Build (the AARs are picked up by the `fileTree(dir: 'libs')` dependency; no
+   file names need editing):
+
+```
+cd android
+JAVA_HOME=/home/krang/.local/opt/jdk-21 ./gradlew :app:assembleDebug
+# -> app/build/outputs/apk/debug/app-debug.apk (arm64-v8a + x86_64)
+```
 
 Constraints: `minSdk 26`, ABIs `arm64-v8a` + `x86_64`, AARs from the official
-prefab SDL releases only — never vendored into the repo.
+prefab SDL releases only — never vendored into the repo. Full prerequisites,
+emulator steps, and known limitations are in
+[docs/building.md](docs/building.md#android).
 
 [sdlrel]: https://github.com/libsdl-org/SDL/releases
+[sdlttfrel]: https://github.com/libsdl-org/SDL_ttf/releases

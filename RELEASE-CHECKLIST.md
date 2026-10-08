@@ -12,6 +12,9 @@ check; this proves the feature is right.
 ## 2. Automated gates
 
 - [ ] `./meson/check.sh --full` is green on the release commit.
+- [ ] Sanitizer matrix: the `asan` config runs under clang (GCC here has no
+      `libasan`); the `sdl3-ttf` wrap is `b_sanitize=none` so the vendored
+      subproject links. Leak/UAF coverage comes from the `valgrind` rung.
 - [ ] `meson/coverage-min.txt` floors were raised for any module that closed
       branches this cycle (the ratchet only goes up).
 - [ ] No new mutation survivors on gated targets.
@@ -28,6 +31,19 @@ check; this proves the feature is right.
 - [ ] Build the shipped binary (`ninja -C build && ./build/isomata` or your
       install step) and exercise the user-facing path by hand on a clean
       checkout. This is the step no automation replaces.
+
+## 4b. Platform artifacts
+
+- [ ] **Android**: fetch the SDL3 + SDL3_ttf AARs into `android/app/libs/`,
+      `./gradlew :app:assembleDebug`, and confirm the APK contains both ABIs'
+      `libmain.so` + assets (`unzip -l`). Install on an emulator/device and
+      walk menu → settings → level → pause; Android Back and touch are the
+      two platform-specific inputs to check. Known gap: the level terrain does
+      not load on Android (pure `voxmap.c` uses stdio `fopen`, which cannot
+      read APK assets) — see `docs/building.md`.
+- [ ] **ARM Linux**: the pure suite cross-runs under `qemu-aarch64-static` /
+      `qemu-arm` and all sources compile for aarch64/armhf; a full app build
+      additionally needs a target SDL3 sysroot (`docs/building.md`).
 
 ## 5. Notes and tag
 

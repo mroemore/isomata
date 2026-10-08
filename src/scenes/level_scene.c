@@ -34,7 +34,6 @@
 #include "ui/layout.h"
 #include "ui/toast.h"
 #include "ui/ui_font.h"
-#include "ui/ui_scale.h"
 
 #include <SDL3/SDL.h>
 
@@ -221,15 +220,22 @@ static void level_update(void *self, App *app, float dt)
 static void levelDrawUi(LevelState *st, App *app)
 {
 	UiDrawCtx *ctx = appUiDrawCtx(app);
-	float scale = appUiScale(app);
-	int vw = uiScalePhysicalToVirtual(appPixelWidth(app), scale);
+	int sx;
+	int sy;
+	int sw;
+	int sh;
 	int x;
+	int y;
 
 	if (st->root == NULL || !toastVisible(st->toast))
 		return;
-	x = (vw - LEVEL_TOAST_W) / 2;
-	uiSetRect(st->root, x, LEVEL_TOAST_TOP, LEVEL_TOAST_W, LEVEL_TOAST_H);
-	uiSetRect(st->toast, x, LEVEL_TOAST_TOP, LEVEL_TOAST_W, LEVEL_TOAST_H);
+	/* Keep the toast inside the window's safe area so it clears notches /
+	 * status bars (on a desktop display the safe area is the full window). */
+	appSafeArea(app, &sx, &sy, &sw, &sh);
+	x = sx + (sw - LEVEL_TOAST_W) / 2;
+	y = sy + LEVEL_TOAST_TOP;
+	uiSetRect(st->root, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
+	uiSetRect(st->toast, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
 	uiLayout(st->root);
 	uiDraw(st->root, ctx);
 }

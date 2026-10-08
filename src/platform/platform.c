@@ -31,6 +31,43 @@ void platformDisplaySize(int *outWidth, int *outHeight) {
 	}
 }
 
+void platformSafeArea(void *window, int *outX, int *outY, int *outW, int *outH) {
+	SDL_Window *w = window;
+	SDL_Rect rect = { 0, 0, 0, 0 };
+
+	if (w != NULL) {
+		int pw = 0;
+		int ph = 0;
+
+		if (SDL_GetWindowSizeInPixels(w, &pw, &ph)) {
+			rect.w = pw;
+			rect.h = ph;
+			/* No usable inset (or SDL cannot answer): fall back to
+			 * the full client rect so the caller always gets a
+			 * valid rect. */
+			if (!SDL_GetWindowSafeArea(w, &rect) || rect.w <= 0 ||
+			    rect.h <= 0) {
+				rect.x = 0;
+				rect.y = 0;
+				rect.w = pw;
+				rect.h = ph;
+			}
+		}
+	}
+	if (outX) {
+		*outX = rect.x;
+	}
+	if (outY) {
+		*outY = rect.y;
+	}
+	if (outW) {
+		*outW = rect.w;
+	}
+	if (outH) {
+		*outH = rect.h;
+	}
+}
+
 const char *platformAssetPath(const char *relativeName, char *buffer, size_t bufferSize) {
 	if (!buffer || bufferSize == 0 || !relativeName || *relativeName == '\0') {
 		return NULL;

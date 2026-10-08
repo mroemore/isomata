@@ -19,6 +19,12 @@
  *         value to multiply logical pixels by for physical pixels.
  *       * platformDisplaySize() is the current display mode in *physical*
  *         pixels of the primary display; 0/0 when unavailable.
+ *       * platformSafeArea() is the window's usable inset (notch / status
+ *         bar / gesture bar) in *physical* pixels of the window's client
+ *         area. When SDL reports no usable inset (or cannot answer) the twin
+ *         returns the full client rect (0,0,size); for a NULL window it
+ *         writes 0s. Callers therefore always receive a valid rect to lay
+ *         the UI root in.
  *       * platformAssetPath() returns a SDL_IOStream()-compatible string for
  *         the given relative asset name, written into caller storage; NULL on
  *         failure or when the buffer is too small. Desktop twins prefix the
@@ -36,6 +42,12 @@ float platformDisplayDensity(void);
 /* Current physical-pixel size of the primary display; out params may be NULL
  * to skip. Writes 0 for a value that is unavailable. */
 void platformDisplaySize(int *outWidth, int *outHeight);
+
+/* Safe-area inset of a window's client area, in physical pixels. `window` is
+ * an SDL_Window* passed as void* so this header stays SDL-free; a NULL
+ * window writes 0s. Writes the full client rect when SDL reports no usable
+ * inset. Any out pointer may be NULL. */
+void platformSafeArea(void *window, int *outX, int *outY, int *outW, int *outH);
 
 /* Compose the SDL_IOStream()-compatible path for an asset name (no leading
  * slash, e.g. "fonts/test.ttf"). Returns buffer on success, NULL when
