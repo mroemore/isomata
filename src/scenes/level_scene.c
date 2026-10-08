@@ -323,6 +323,8 @@ static void levelDrawUi(LevelState *st, App *app)
 	int sw;
 	int sh;
 	int rowY;
+	int resetX;
+	int rotRight;
 
 	if (st->root == NULL)
 		return;
@@ -339,8 +341,16 @@ static void levelDrawUi(LevelState *st, App *app)
 	uiSetRect(st->rotR,
 		  sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W + LEVEL_BUTTON_GAP,
 		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
-	uiSetRect(st->reset, sx + sw - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_W,
-		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
+	/* RESET hugs the safe-area right edge, but at narrow virtual widths
+	 * it is pushed to just right of ROT R (rotR.right + gap) so the two
+	 * buttons never overlap: resetX = max(safeRight - width, rotR.right +
+	 * gap). */
+	resetX = sx + sw - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_W;
+	rotRight = sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W +
+		   LEVEL_BUTTON_GAP + LEVEL_BUTTON_W;
+	if (resetX < rotRight + LEVEL_BUTTON_GAP)
+		resetX = rotRight + LEVEL_BUTTON_GAP;
+	uiSetRect(st->reset, resetX, rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
 
 	uiDraw(st->rotL, ctx);
 	uiDraw(st->rotR, ctx);

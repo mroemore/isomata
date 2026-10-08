@@ -11,7 +11,7 @@ Runtime assets live here (fonts, maps, shaders, textures, audio). The desktop bu
 ## Audio
 
 - `audio/menu.wav` — short two-tone blip (menu activation).
-- `audio/rotate.wav` — upward sweep (camera quarter turn).
+- `audio/rotate.wav` — upward sweep (camera rotation step).
 - `audio/achievement.wav` — rising arpeggio jingle (Orienteer unlock).
 
 All three are 16-bit mono 44100 Hz, generated reproducibly by
