@@ -59,6 +59,8 @@ void run_test_camera(void);
 void run_test_voxmap(void);
 void run_test_drawlist(void);
 void run_test_sprites(void);
+void run_test_frame(void);
+void run_test_ui_bridge(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
 void run_test_layout(void);
@@ -82,6 +84,8 @@ int main(void)
 	run_test_voxmap();
 	run_test_drawlist();
 	run_test_sprites();
+	run_test_frame();
+	run_test_ui_bridge();
 	run_test_ui_scale();
 	run_test_element();
 	run_test_layout();

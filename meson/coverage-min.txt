@@ -22,7 +22,12 @@
 # driver smoke run cannot take (GPU-init failure tolerance, the render-asset
 # path guards, the per-frame draw branch); they are exercised only on a real
 # GPU (X11 verification), not under SDL_VIDEODRIVER=dummy.
-src/app.c			42
+# Task 9: app.c moves 42 -> 44. The T7/T8 scaffolding (hardcoded quad, key
+# controls, ISO_CAMERA_TURNS) is gone; the loop now owns the scene stack,
+# input frame, UI context and the BeginFrame/draw/EndFrame sequence. The
+# dummy smoke exercises the setup + loop + menu scene (init/update/draw), so
+# the measured branch % rises to 44.3 (106 branches).
+src/app.c			44
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
@@ -61,7 +66,10 @@ src/ui/ui_font.c		45
 # not yet drive it, so its floor starts at 0 (tracked, like platform.c) and
 # rises when Task 9 wires the input loop.
 src/input/input.c		97
-src/input/input_sdl.c		0
+# Task 9: the app loop now drives the SDL glue (inputHandleSdlEvent), so the
+# smoke run takes its entry guards/default arm; floor starts at the measured
+# 5.
+src/input/input_sdl.c		5
 
 # Task 7: the SDL_gpu render tier. math3d.c is branch-free arithmetic pinned
 # to 100 by its suite; camera3d.c closes every branch (tween compose/clamp/
@@ -85,4 +93,20 @@ src/render/gpu_backend.c	0
 src/render/voxmap.c		92
 src/render/drawlist.c		95
 src/render/sprites.c		100
+
+# Task 9: per-frame draw-list construction extracted from app.c (ruling #1).
+# Fully covered by its twin suite.
+src/render/frame.c		100
+# Task 9: the pure Command -> UiIntent bridge. The untaken arm is the
+# commandToIntent default (rotate/zoom/unknown), reached only through the
+# public dispatch (which filters) — the twin suite covers the rest.
+src/scenes/ui_bridge.c		95
+# Task 9 SDL tier (app target only): ui_gpu + the four scenes are exercised
+# by the X11 integration run, not by the headless/dummy suites, so they are
+# tracked at 0 like gpu_backend.c / input_sdl.c.
+src/ui/ui_gpu.c			0
+src/scenes/menu_scene.c		0
+src/scenes/settings_scene.c	0
+src/scenes/level_scene.c	0
+src/scenes/pause_scene.c	0
 

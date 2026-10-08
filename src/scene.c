@@ -360,3 +360,15 @@ void drawSceneStack(SceneStack *stack, App *app)
 		return;
 	drawScene(activeScene(stack), app);
 }
+
+/* Overlay draw: every applied scene, bottom-to-top, so a retained underlay
+ * renders beneath its overlay. Updates stay top-only (updateSceneStack). */
+void drawSceneStackAll(SceneStack *stack, App *app)
+{
+	size_t i;
+
+	if (stack == NULL)
+		return;
+	for (i = 0; i < stack->depth; i++)
+		drawScene(stack->live[i], app);
+}

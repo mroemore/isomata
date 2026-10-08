@@ -11,6 +11,11 @@
  *     App type is opaque to callers.
  *   - No Android conditionals here: platform differences go through
  *     src/platform/platform.h only.
+ *   - Task 9: the App owns the SceneStack, the SDL_gpu backend and the
+ *     UiDrawCtx, and publishes the current InputFrame + uiScale to scenes
+ *     through the accessors below. Scenes are SDL-tier (engine_sources) and
+ *     may include this header; the pure engine (scene.c) only forward-
+ *     declares App.
  */
 #ifndef ISOMATA_APP_H
 #define ISOMATA_APP_H
@@ -18,6 +23,17 @@
 #include <stdbool.h>
 
 typedef struct App App;
+
+/* Opaque forward declarations (all named struct tags), so this header pulls
+ * in no SDL/pure headers. Scene code includes the concrete headers itself. */
+typedef struct InputFrame InputFrame;
+typedef struct UiDrawCtx UiDrawCtx;
+typedef struct SceneStack SceneStack;
+typedef struct GpuBackend GpuBackend;
+typedef struct UiFont UiFont;
+
+/* Design pixel size for UI text (label/menu/button styles). */
+#define APP_UI_FONT_PIXELS 32
 
 /* Initialize SDL3 and create the window. Returns NULL on failure
  * (SDL_GetError() carries the reason; SDL_Quit state is cleaned up). */
@@ -29,5 +45,36 @@ bool appRun(App *app);
 
 /* Destroy the window and release SDL. Call once, then discard the pointer. */
 void appDestroy(App *app);
+
+/* --- scene-facing accessors -------------------------------------------------
+ * Valid during scene init/update/draw/unload. NULL app or an unset field
+ * yields NULL / 0 / 1.0 as appropriate. */
+
+/* The frame's command/tap/pan/zoom output (input.h). */
+const InputFrame *appInputFrame(const App *app);
+
+/* The UI's physical-pixel scale (ui_scale.h). 1.0 before the loop starts. */
+float appUiScale(const App *app);
+
+/* The abstract UI draw context (NULL when no GPU backend is up, e.g. the
+ * dummy-driver smoke run). Scenes pass this to uiDraw. */
+UiDrawCtx *appUiDrawCtx(App *app);
+
+/* The scene stack scenes push/pop/replace on. */
+SceneStack *appSceneStack(App *app);
+
+/* The SDL_gpu backend (NULL when unavailable); the level scene draws its
+ * world list through it. */
+GpuBackend *appGpuBackend(App *app);
+
+/* The measurement font (ui_font.h); NULL when no font could be loaded. */
+UiFont *appFont(const App *app);
+
+/* Window pixel size, refreshed each frame. */
+int appPixelWidth(const App *app);
+int appPixelHeight(const App *app);
+
+/* Ask the loop to stop after the current frame (clean exit, code 0). */
+void appRequestQuit(App *app);
 
 #endif /* ISOMATA_APP_H */

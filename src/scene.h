@@ -40,8 +40,10 @@
  *   later queued ops simply act on the stack as it stands). updateSceneStack
  *   then updates ONLY the top scene; drawSceneStack draws ONLY the top
  *   scene. Underneath scenes stay loaded (their unload does not run) but
- *   are frozen: not updated, not drawn. A future overlay mode may draw
- *   lower scenes; no hook for that exists yet by design.
+ *   are frozen: not updated, not drawn. drawSceneStackAll is the overlay
+ *   exception: it draws EVERY applied scene bottom-to-top, so a retained
+ *   underlay (a menu behind a settings/pause overlay) renders beneath the
+ *   overlay. Updates remain top-only.
  * - The active scene is the APPLIED top only. Queued-but-unapplied ops are
  *   never visible through activeScene — a queued push may fail init and
  *   never run, so reporting it as active would lie about what is running;
@@ -138,8 +140,11 @@ bool replaceScene(SceneStack *stack, Scene *scene);
 Scene *activeScene(const SceneStack *stack);
 
 /* The frame entry points: apply pending ops in recorded order, then update
- * / draw the top scene only. Both tolerate NULL. */
+ * / draw the top scene only. Both tolerate NULL. drawSceneStackAll draws
+ * every APPLIED scene bottom-to-top (retained underlays render beneath
+ * overlays); it does not apply pending ops. */
 void updateSceneStack(SceneStack *stack, App *app, float dt);
 void drawSceneStack(SceneStack *stack, App *app);
+void drawSceneStackAll(SceneStack *stack, App *app);
 
 #endif /* ISOMATA_SCENE_H */

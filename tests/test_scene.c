@@ -349,6 +349,46 @@ static void test_only_the_active_scene_updates_and_draws(void)
 	(void)sb;
 }
 
+/* drawSceneStackAll draws EVERY applied scene bottom-to-top (retained
+ * underlays render beneath overlays), while updates stay top-only. */
+static void test_draw_all_draws_underlay_beneath_overlay(void)
+{
+	SceneStack *stack = createSceneStack(4);
+	Scene *a = makeFake(&fakeVt, 'A');
+	Scene *b = makeFake(&fakeVt, 'B');
+	FakeState *sa = fakeState(a);
+	FakeState *sb = fakeState(b);
+
+	resetGlobals();
+	TEST_ASSERT_TRUE(pushScene(stack, a));
+	updateSceneStack(stack, NULL, 1.0f);	/* Ai Au */
+	TEST_ASSERT_TRUE(pushScene(stack, b));
+	updateSceneStack(stack, NULL, 1.0f);	/* Bi Bu */
+
+	resetGlobals();
+	drawSceneStackAll(stack, NULL);		/* Ad then Bd */
+	TEST_ASSERT_EQUAL_STRING("AdBd", g_log);
+	TEST_ASSERT_EQUAL_INT(1, sa->drawn);
+	TEST_ASSERT_EQUAL_INT(1, sb->drawn);
+
+	/* Updates remain top-only: a is frozen while covered. */
+	updateSceneStack(stack, NULL, 1.0f);
+	TEST_ASSERT_EQUAL_INT(1, sa->updated);
+	TEST_ASSERT_EQUAL_INT(2, sb->updated);
+
+	/* Pop b: only a remains, so draw-all draws just it. */
+	TEST_ASSERT_TRUE(popScene(stack));
+	updateSceneStack(stack, NULL, 1.0f);	/* Bx Au */
+	resetGlobals();
+	drawSceneStackAll(stack, NULL);
+	TEST_ASSERT_EQUAL_STRING("Ad", g_log);
+
+	drawSceneStackAll(NULL, NULL);		/* NULL-safe */
+	TEST_ASSERT_EQUAL_STRING("Ad", g_log);	/* NULL draw touched nothing */
+
+	destroySceneStack(stack);
+}
+
 /* A scene pushed and popped in the same frame: pending ops apply in FIFO
  * order, so it inits then unloads without ever running update/draw. */
 static void test_same_frame_push_then_pop_applies_in_order(void)
@@ -529,6 +569,7 @@ void run_test_scene(void)
 	RUN_TEST(test_replace_unloads_all_and_installs_new_top_down);
 	RUN_TEST(test_overlay_retains_underlying_scene_loaded);
 	RUN_TEST(test_only_the_active_scene_updates_and_draws);
+	RUN_TEST(test_draw_all_draws_underlay_beneath_overlay);
 	RUN_TEST(test_same_frame_push_then_pop_applies_in_order);
 	RUN_TEST(test_capacity_and_pending_queue_bounds);
 	RUN_TEST(test_aliased_scene_is_rejected_until_dropped);

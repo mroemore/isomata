@@ -1,27 +1,38 @@
 #include "app.h"
 
+#include "input/input.h"
+#include "input/input_sdl.h"
 #include "platform/platform.h"
-#include "render/camera3d.h"
-#include "render/drawlist.h"
 #include "render/gpu_backend.h"
-#include "render/math3d.h"
-#include "render/sprites.h"
-#include "render/voxmap.h"
+#include "scenes/menu_scene.h"
+#include "scene.h"
 #include "ui/ui_font.h"
+#include "ui/ui_gpu.h"
+#include "ui/ui_scale.h"
 
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 
 #define APP_TITLE "Isomata"
 #define APP_FRAME_DELAY_MS 15
-#define APP_DRAWLIST_CAPACITY 4096
-#define APP_SPRITE_COUNT 3
+#define APP_SCENE_STACK_CAPACITY 8
 
 struct App {
 	SDL_Window *window;
 	int width;
 	int height;
+	int pixelW;
+	int pixelH;
 	bool running;
+
+	float uiScale;
+	UiFont *font;
+	GpuBackend *gpu;
+	UiGpu *uiGpu;
+	UiDrawCtx *uiCtx;
+	SceneStack *stack;
+	Input *input;
+	InputFrame frame;
 };
 
 static bool g_sdlInitialized = false;
@@ -37,23 +48,6 @@ static Uint64 smokeDeadlineMs(void) {
 		return 0;
 	}
 	return value;
-}
-
-/* Read an integer environment variable (ISO_CAMERA_TURNS verification hook).
- * A missing or unparsable value yields the fallback. */
-static int envInt(const char *name, int fallback) {
-	const char *env = SDL_getenv(name);
-	char *end = NULL;
-	long value;
-
-	if (!env || *env == '\0') {
-		return fallback;
-	}
-	value = strtol(env, &end, 10);
-	if (end == env) {
-		return fallback;
-	}
-	return (int)value;
 }
 
 /* Smoke hook: when ISO_SMOKE_MS drives the loop, prove the SDL text tier
@@ -83,47 +77,32 @@ static void smokeProbeFont(void) {
 	uiFreeFont(font);
 }
 
-/* Minimal temporary camera controls for the Task 8 verification pass: arrow
- * keys rotate a quarter turn, +/- zoom. Task 9 replaces this with the input
- * layer. */
-static void appHandleEvents(App *app, Camera3D *camera) {
-	SDL_Event event;
-	while (SDL_PollEvent(&event)) {
-		if (event.type == SDL_EVENT_QUIT) {
-			app->running = false;
-		} else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-			app->running = false;
-		} else if (event.type == SDL_EVENT_KEY_DOWN) {
-			switch (event.key.key) {
-			case SDLK_LEFT:
-				cameraRotateQuarterTurn(camera, -1);
-				break;
-			case SDLK_RIGHT:
-				cameraRotateQuarterTurn(camera, 1);
-				break;
-			case SDLK_PLUS:
-			case SDLK_EQUALS:
-				cameraZoom(camera, 1.0f);
-				break;
-			case SDLK_MINUS:
-				cameraZoom(camera, -1.0f);
-				break;
-			default:
-				break;
-			}
-		}
+/* Release the runtime (scenes, input, UI, GPU, font). Idempotent and safe on
+ * a partially-initialized App; the window/SDL lifecycle stays with
+ * appDestroy. uiGpu is released before the backend it borrows the device
+ * from. */
+static void appReleaseRuntime(App *app) {
+	if (app->stack != NULL) {
+		destroySceneStack(app->stack);
+		app->stack = NULL;
 	}
-}
-
-/* The demo's three billboards: two on the height-2 plateau and one on the
- * tower top, so their painter order is visible against the terrain. */
-static void buildDemoSprites(SpriteEntity sprites[APP_SPRITE_COUNT]) {
-	sprites[0] = (SpriteEntity){ 6.5f, 2.0f, 9.5f, 1.2f, 1.8f,
-				     DRAW_TINT(255, 255, 255, 255) };
-	sprites[1] = (SpriteEntity){ 11.5f, 2.0f, 10.5f, 1.2f, 1.8f,
-				     DRAW_TINT(255, 255, 255, 255) };
-	sprites[2] = (SpriteEntity){ 7.0f, 9.0f, 8.0f, 1.5f, 2.2f,
-				     DRAW_TINT(255, 255, 255, 255) };
+	if (app->input != NULL) {
+		destroyInput(app->input);
+		app->input = NULL;
+	}
+	if (app->uiGpu != NULL) {
+		uiGpuDestroy(app->uiGpu);
+		app->uiGpu = NULL;
+		app->uiCtx = NULL;
+	}
+	if (app->gpu != NULL) {
+		gpuBackendDestroy(app->gpu);
+		app->gpu = NULL;
+	}
+	if (app->font != NULL) {
+		uiFreeFont(app->font);
+		app->font = NULL;
+	}
 }
 
 App *appCreate(const char *title, int width, int height) {
@@ -145,7 +124,7 @@ App *appCreate(const char *title, int width, int height) {
 		return NULL;
 	}
 
-	App *app = malloc(sizeof(*app));
+	App *app = calloc(1, sizeof(*app));
 	if (!app) {
 		SDL_DestroyWindow(window);
 		SDL_Quit();
@@ -155,8 +134,75 @@ App *appCreate(const char *title, int width, int height) {
 	app->window = window;
 	app->width = width;
 	app->height = height;
+	app->pixelW = width;
+	app->pixelH = height;
 	app->running = true;
+	app->uiScale = 1.0f;
 	return app;
+}
+
+/* Build the runtime: font, GPU backend, UI draw context, scene stack (menu
+ * on top) and input. Returns false when a non-smoke run cannot render. */
+static bool appSetupRuntime(App *app, bool smoke) {
+	char shaderDir[512];
+	char texturePath[512];
+	char fontPath[512];
+	const char *screenshot = SDL_getenv("ISO_SCREENSHOT");
+
+	app->uiScale = uiScaleFromDensity(platformDisplayDensity());
+
+	fontPath[0] = '\0';
+	if (platformAssetPath("fonts/KiwiSoda.ttf", fontPath, sizeof(fontPath)) != NULL)
+		app->font = uiLoadFont(fontPath, APP_UI_FONT_PIXELS);
+	if (app->font == NULL)
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "isomata: UI font unavailable");
+
+	if (platformAssetPath("shaders", shaderDir, sizeof(shaderDir)) != NULL &&
+	    platformAssetPath("textures/placeholder.png", texturePath,
+			      sizeof(texturePath)) != NULL) {
+		app->gpu = gpuBackendCreate(app->window, shaderDir, texturePath,
+					    screenshot);
+	} else {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: render asset paths unresolved");
+	}
+	if (app->gpu == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: GPU backend unavailable%s",
+			     smoke ? " (tolerated in smoke mode)" : "");
+		if (!smoke)
+			return false;
+	} else {
+		SDL_GetWindowSizeInPixels(app->window, &app->pixelW, &app->pixelH);
+		SDL_Log("isomata: window %dx%d pixels (aspect %.3f)", app->pixelW,
+			app->pixelH,
+			app->pixelH > 0 ? (float)app->pixelW / (float)app->pixelH : 1.0f);
+		if (fontPath[0] != '\0')
+			app->uiGpu = uiGpuCreate(app->gpu, fontPath, APP_UI_FONT_PIXELS);
+		if (app->uiGpu == NULL)
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "isomata: UI draw context unavailable (UI will not render)");
+		else
+			uiGpuSetScale(app->uiGpu, app->uiScale);
+		app->uiCtx = uiGpuDrawCtx(app->uiGpu);
+	}
+
+	app->stack = createSceneStack(APP_SCENE_STACK_CAPACITY);
+	app->input = createInput();
+	if (app->stack == NULL || app->input == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: scene stack / input allocation failed");
+		return false;
+	}
+
+	Scene *menu = menuSceneCreate();
+	if (menu == NULL || !pushScene(app->stack, menu)) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: could not install the startup menu scene");
+		destroyScene(menu);
+		return false;
+	}
+	return true;
 }
 
 bool appRun(App *app) {
@@ -166,75 +212,15 @@ bool appRun(App *app) {
 	const Uint64 startMs = SDL_GetTicks();
 	const Uint64 deadline = smokeDeadlineMs();
 	const bool smoke = deadline != 0;
+	Uint64 lastMs = startMs;
+
 	if (smoke) {
 		smokeProbeFont();
 	}
 
-	/* Task 8: build the demo voxmap and sprites, then each frame fill, sort
-	 * and draw the list. The smoke path runs under SDL_VIDEODRIVER=dummy,
-	 * where claiming a swapchain fails by design, so a GPU-init failure is
-	 * tolerated there and still exits 0; a normal run fails hard. */
-	char shaderDir[512];
-	char texturePath[512];
-	char mapPath[512];
-	const char *screenshot = SDL_getenv("ISO_SCREENSHOT");
-	Camera3D camera;
-	GpuBackend *gpu = NULL;
-	Voxmap *map = NULL;
-	DrawList list;
-	SpriteEntity sprites[APP_SPRITE_COUNT];
-	int turns;
-	int i;
-	Uint64 lastMs = startMs;
-
-	initCamera3D(&camera);
-	/* Centre the 16x16 map: at yaw 0, pan x moves +X and pan y moves -Z. */
-	cameraPan(&camera, 8.0f, -8.0f);
-	/* Verification hook: scripted initial yaw in quarter turns. */
-	turns = envInt("ISO_CAMERA_TURNS", 0);
-	for (i = 0; i < turns; i++) {
-		cameraRotateQuarterTurn(&camera, 1);
-		updateCamera3D(&camera, CAMERA_TURN_SECONDS);
-	}
-	for (i = 0; i > turns; i--) {
-		cameraRotateQuarterTurn(&camera, -1);
-		updateCamera3D(&camera, CAMERA_TURN_SECONDS);
-	}
-
-	initDrawList(&list, APP_DRAWLIST_CAPACITY);
-	buildDemoSprites(sprites);
-
-	if (platformAssetPath("maps/demo.txt", mapPath, sizeof(mapPath)) != NULL)
-		map = loadVoxmap(mapPath);
-	if (map == NULL)
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "isomata: demo map unavailable");
-
-	if (platformAssetPath("shaders", shaderDir, sizeof(shaderDir)) != NULL &&
-	    platformAssetPath("textures/placeholder.png", texturePath,
-			      sizeof(texturePath)) != NULL) {
-		gpu = gpuBackendCreate(app->window, shaderDir, texturePath,
-				       screenshot);
-	} else {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "isomata: render asset paths unresolved");
-	}
-	if (gpu == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "isomata: GPU backend unavailable%s",
-			     smoke ? " (tolerated in smoke mode)" : "");
-		if (!smoke) {
-			destroyDrawList(&list);
-			destroyVoxmap(map);
-			return false;
-		}
-	} else {
-		int pixelW = 0;
-		int pixelH = 0;
-
-		SDL_GetWindowSizeInPixels(app->window, &pixelW, &pixelH);
-		SDL_Log("isomata: window %dx%d pixels (aspect %.3f)", pixelW,
-			pixelH, pixelH > 0 ? (float)pixelW / (float)pixelH : 1.0f);
+	if (!appSetupRuntime(app, smoke)) {
+		appReleaseRuntime(app);
+		return false;
 	}
 
 	while (app->running) {
@@ -246,31 +232,35 @@ bool appRun(App *app) {
 			app->running = false;
 			break;
 		}
-		appHandleEvents(app, &camera);
-		updateCamera3D(&camera, dt);
-		if (gpu != NULL) {
-			int pixelW = 0;
-			int pixelH = 0;
-			SDL_GetWindowSizeInPixels(app->window, &pixelW, &pixelH);
-			const float aspect = pixelH > 0 ? (float)pixelW / (float)pixelH : 1.0f;
-			const Mat4 projection = cameraProjection(&camera, aspect);
-			const Mat4 view = cameraView(&camera);
-			const Mat4 viewProj = mat4Multiply(&projection, &view);
 
-			clearDrawList(&list);
-			if (map != NULL)
-				voxmapEmitFaces(map, &list, &camera,
-						DRAW_TINT(255, 255, 255, 255));
-			for (i = 0; i < APP_SPRITE_COUNT; i++)
-				appendSprite(&list, &sprites[i], &camera);
-			sortDrawList(&list, &camera);
-			gpuBackendDrawList(gpu, &viewProj, &list);
+		inputBeginFrame(app->input, app->uiScale);
+		{
+			SDL_Event event;
+
+			while (SDL_PollEvent(&event)) {
+				if (event.type == SDL_EVENT_QUIT ||
+				    event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+					app->running = false;
+				else
+					inputHandleSdlEvent(app->input, &event);
+			}
+		}
+		inputEndFrame(app->input, &app->frame);
+
+		SDL_GetWindowSizeInPixels(app->window, &app->pixelW, &app->pixelH);
+
+		updateSceneStack(app->stack, app, dt);
+
+		/* TODO(Task 10): dispatchEvents(eventBus, app) here. */
+
+		if (app->gpu != NULL && gpuBackendBeginFrame(app->gpu)) {
+			drawSceneStackAll(app->stack, app);
+			gpuBackendEndFrame(app->gpu);
 		}
 		SDL_Delay(APP_FRAME_DELAY_MS);
 	}
-	destroyDrawList(&list);
-	destroyVoxmap(map);
-	gpuBackendDestroy(gpu);
+
+	appReleaseRuntime(app);
 	return true;
 }
 
@@ -278,6 +268,7 @@ void appDestroy(App *app) {
 	if (!app) {
 		return;
 	}
+	appReleaseRuntime(app);
 	if (app->window) {
 		SDL_DestroyWindow(app->window);
 	}
@@ -286,4 +277,43 @@ void appDestroy(App *app) {
 		SDL_Quit();
 		g_sdlInitialized = false;
 	}
+}
+
+/* --- scene-facing accessors ------------------------------------------------- */
+
+const InputFrame *appInputFrame(const App *app) {
+	return app != NULL ? &app->frame : NULL;
+}
+
+float appUiScale(const App *app) {
+	return app != NULL ? app->uiScale : 1.0f;
+}
+
+UiDrawCtx *appUiDrawCtx(App *app) {
+	return app != NULL ? app->uiCtx : NULL;
+}
+
+SceneStack *appSceneStack(App *app) {
+	return app != NULL ? app->stack : NULL;
+}
+
+GpuBackend *appGpuBackend(App *app) {
+	return app != NULL ? app->gpu : NULL;
+}
+
+UiFont *appFont(const App *app) {
+	return app != NULL ? app->font : NULL;
+}
+
+int appPixelWidth(const App *app) {
+	return app != NULL ? app->pixelW : 0;
+}
+
+int appPixelHeight(const App *app) {
+	return app != NULL ? app->pixelH : 0;
+}
+
+void appRequestQuit(App *app) {
+	if (app != NULL)
+		app->running = false;
 }
