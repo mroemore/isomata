@@ -113,6 +113,46 @@ static void smokeProbeSafeArea(App *app) {
 	SDL_Log("isomata smoke: safe area %d,%d %dx%d", x, y, w, h);
 }
 
+/* Smoke hook: push a synthetic mouse press/motion/release through the SDL
+ * event queue so the dummy-driver run drives the mouse branch of
+ * inputHandleSdlEvent (including the window->pixel conversion). The window is
+ * real (appCreate); under the dummy driver its pixel density is 1.0, so the
+ * conversion is identity here. The density != 1 path is reasoned about in the
+ * final-fix report and exercised on a real HiDPI display. */
+static void smokeProbeInput(App *app) {
+	SDL_WindowID id = SDL_GetWindowID(app->window);
+	SDL_Event ev;
+
+	if (id == 0)
+		return;
+	SDL_zero(ev);
+	ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+	ev.button.windowID = id;
+	ev.button.which = 1;		/* a real mouse, not SDL_TOUCH_MOUSEID */
+	ev.button.button = SDL_BUTTON_LEFT;
+	ev.button.x = 10.0f;
+	ev.button.y = 20.0f;
+	SDL_PushEvent(&ev);
+
+	SDL_zero(ev);
+	ev.type = SDL_EVENT_MOUSE_MOTION;
+	ev.motion.windowID = id;
+	ev.motion.which = 1;
+	ev.motion.state = SDL_BUTTON_LMASK;
+	ev.motion.x = 40.0f;
+	ev.motion.y = 20.0f;
+	SDL_PushEvent(&ev);
+
+	SDL_zero(ev);
+	ev.type = SDL_EVENT_MOUSE_BUTTON_UP;
+	ev.button.windowID = id;
+	ev.button.which = 1;
+	ev.button.button = SDL_BUTTON_LEFT;
+	ev.button.x = 40.0f;
+	ev.button.y = 20.0f;
+	SDL_PushEvent(&ev);
+}
+
 /* Refresh the window metrics the scenes read: pixel size and the safe-area
  * inset. The physical safe rect from the platform seam is converted to
  * virtual pixels edge-consistently (corners scaled, extents derived) so the
@@ -312,6 +352,9 @@ bool appRun(App *app) {
 		appReleaseRuntime(app);
 		return false;
 	}
+
+	if (smoke)
+		smokeProbeInput(app);
 
 	while (app->running) {
 		const Uint64 now = SDL_GetTicks();

@@ -13,7 +13,10 @@
  * - Mouse: a left button press/release/motion is a pointer gesture; wheel
  *   y is forwarded to inputWheel. Events synthesized from touch
  *   (which == SDL_TOUCH_MOUSEID) are ignored so a touch is not counted
- *   twice.
+ *   twice. SDL mouse coordinates are "relative to window" (window
+ *   coordinates / points), NOT physical pixels; the glue scales them by the
+ *   window's pixel density before feeding the core, so the mouse and touch
+ *   paths hand the core the same coordinate space (see inputMouseToPhysical).
  * - Touch: finger down/motion/up (and canceled, treated as up) are
  *   normalized 0..1 in the event; the glue converts to physical pixels with
  *   the window's pixel size and feeds the pointer entry points.
@@ -130,6 +133,27 @@ static void inputHandleFinger(Input *input, const SDL_Event *event)
 	}
 }
 
+/* Convert window coordinates (SDL mouse x/y, "relative to window") to
+ * PHYSICAL pixels so the core receives the same space as the touch path.
+ *
+ * SDL_GetWindowPixelDensity() is documented in SDL_video.h as "a ratio of
+ * pixel size to window size. For example, if the window is 1920x1080 and it
+ * has a high density back buffer of 3840x2160 pixels, it would have a pixel
+ * density of 2.0." That ratio is exactly the window->pixel factor. (The
+ * similarly named SDL_GetWindowDisplayScale is the UI content scale, not this
+ * ratio.) A window with no high-density back buffer reports 1.0; a lookup
+ * failure (<= 0) falls back to identity so a missing window never zeroes a
+ * coordinate. */
+static void inputMouseToPhysical(SDL_Window *window, float *x, float *y)
+{
+	float density = window != NULL ? SDL_GetWindowPixelDensity(window) : 0.0f;
+
+	if (!(density > 0.0f))
+		density = 1.0f;
+	*x *= density;
+	*y *= density;
+}
+
 void inputHandleSdlEvent(Input *input, const SDL_Event *event)
 {
 	if (input == NULL || event == NULL)
@@ -147,18 +171,36 @@ void inputHandleSdlEvent(Input *input, const SDL_Event *event)
 	}
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		if (event->button.button == SDL_BUTTON_LEFT &&
-		    event->button.which != SDL_TOUCH_MOUSEID)
-			inputPointerDown(input, event->button.x, event->button.y);
+		    event->button.which != SDL_TOUCH_MOUSEID) {
+			float x = event->button.x;
+			float y = event->button.y;
+
+			inputMouseToPhysical(
+				SDL_GetWindowFromID(event->button.windowID), &x, &y);
+			inputPointerDown(input, x, y);
+		}
 		break;
 	case SDL_EVENT_MOUSE_BUTTON_UP:
 		if (event->button.button == SDL_BUTTON_LEFT &&
-		    event->button.which != SDL_TOUCH_MOUSEID)
-			inputPointerUp(input, event->button.x, event->button.y);
+		    event->button.which != SDL_TOUCH_MOUSEID) {
+			float x = event->button.x;
+			float y = event->button.y;
+
+			inputMouseToPhysical(
+				SDL_GetWindowFromID(event->button.windowID), &x, &y);
+			inputPointerUp(input, x, y);
+		}
 		break;
 	case SDL_EVENT_MOUSE_MOTION:
 		if ((event->motion.state & SDL_BUTTON_LMASK) &&
-		    event->motion.which != SDL_TOUCH_MOUSEID)
-			inputPointerMove(input, event->motion.x, event->motion.y);
+		    event->motion.which != SDL_TOUCH_MOUSEID) {
+			float x = event->motion.x;
+			float y = event->motion.y;
+
+			inputMouseToPhysical(
+				SDL_GetWindowFromID(event->motion.windowID), &x, &y);
+			inputPointerMove(input, x, y);
+		}
 		break;
 	case SDL_EVENT_MOUSE_WHEEL:
 		inputWheel(input, event->wheel.y);
