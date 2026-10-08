@@ -1,0 +1,13 @@
+# SDL3_ttf 3.2.2 — fallback for systems without the SDL3_ttf-devel package
+# (this machine ships only the runtime library, no headers/pc file).
+# SDL_ttf upstream has no Meson build, so this wrap uses the cmake method.
+# FreeType comes from ttf's vendored third-party sources.
+[wrap-file]
+directory = SDL3_ttf-3.2.2
+method = cmake
+source_url = https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.2/SDL3_ttf-3.2.2.tar.gz
+source_filename = SDL3_ttf-3.2.2.tar.gz
+source_hash = 63547d58d0185c833213885b635a2c0548201cc8f301e6587c0be1a67e1e045d
+
+[provide]
+sdl3-ttf = SDL3_ttf_shared_dep

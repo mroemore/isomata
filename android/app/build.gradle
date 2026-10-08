@@ -1,0 +1,65 @@
+// Isomata Android app module. The engine is NOT wrapped in its own library
+// model: android/app/jni/CMakeLists.txt compiles the exact same src/ tree the
+// Meson build compiles, producing libmain.so (SDL3 loads it by that name).
+//
+// SDL3 and SDL3_ttf arrive via the official prefab AARs (never committed):
+//   1. Download SDL3-devel-*-android.zip from a libsdl-org SDL 3.x release.
+//   2. Copy the SDL3-*.aar (and, in later tasks, SDL3_ttf-*.aar) into
+//      android/app/libs/ (gitignored).
+// The wildcard dependency below picks up whatever AARs are present there;
+// with none installed, the CMake find_package(SDL3) step fails with the
+// exact missing-dependency message.
+plugins {
+	id 'com.android.application'
+}
+
+android {
+	namespace 'com.isomata.app'
+	compileSdk 34
+	ndkVersion '29.0.14206865'
+
+	defaultConfig {
+		applicationId 'com.isomata.app'
+		minSdk 26
+		targetSdk 34
+		versionCode 1
+		versionName '0.1.0'
+
+		ndk {
+			abiFilters 'arm64-v8a', 'x86_64'
+		}
+
+		externalNativeBuild {
+			cmake {
+				arguments '-DANDROID_STL=c++_shared'
+			}
+		}
+	}
+
+	buildTypes {
+		release {
+			minifyEnabled false
+		}
+	}
+
+	compileOptions {
+		sourceCompatibility JavaVersion.VERSION_1_8
+		targetCompatibility JavaVersion.VERSION_1_8
+	}
+
+	// Exposes the prefab modules bundled inside the SDL3 AARs to CMake.
+	buildFeatures {
+		prefab true
+	}
+
+	externalNativeBuild {
+		cmake {
+			path file('jni/CMakeLists.txt')
+			version '3.22.1'
+		}
+	}
+}
+
+dependencies {
+	implementation fileTree(dir: 'libs', include: ['*.aar'])
+}

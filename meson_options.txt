@@ -1,0 +1,3 @@
+# No build options yet. Later tasks add subsystem toggles here if needed.
+# Meson options introduced should stay minimal; default optimization/warning
+# policy lives in project(..., default_options : [...]).

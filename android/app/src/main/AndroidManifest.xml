@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Isomata Android manifest. SDLActivity (from the SDL3 prefab AAR) is the
+	launcher activity; it loads libmain.so, which the CMake build produces
+	from the same src/ tree the Meson build compiles. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+	<application
+		android:label="Isomata"
+		android:allowBackup="false"
+		android:hardwareAccelerated="true">
+
+		<activity
+			android:name="org.libsdl.app.SDLActivity"
+			android:exported="true"
+			android:configChanges="orientation|screenSize|density|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+	</application>
+</manifest>

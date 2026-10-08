@@ -24,6 +24,7 @@ android/app/build/
 android/build/
 android/local.properties
 android/.cxx/
+android/app/.cxx/
 
 # Compiled artifacts — note: shaders/*.spv are DELIBERATELY committed
 # (checked-in SPIR-V fallback when SDL_shadercross is unavailable).
@@ -31,3 +32,12 @@ android/.cxx/
 *.a
 *.so
 *.apk
+
+# SDL3 prefetch AARs (never vendored into the repo)
+android/app/libs/
+
+# Meson wrap artifacts: keep only .wrap files in the repo, ignore the
+# extracted sources and the download cache (a build-time fetch, not vendoring)
+subprojects/.wraplock
+subprojects/packagecache/
+subprojects/SDL3_ttf-*/
