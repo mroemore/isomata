@@ -331,8 +331,17 @@ static void levelDrawUi(LevelState *st, App *app)
 	 * status bars (on a desktop display the safe area is the full window). */
 	appSafeArea(app, &sx, &sy, &sw, &sh);
 
-	uiSetRect(st->toast, sx + (sw - LEVEL_TOAST_W) / 2, sy + LEVEL_TOAST_TOP,
-		  LEVEL_TOAST_W, LEVEL_TOAST_H);
+	/* Toast: clamp to the safe width so it cannot overflow a narrow
+	 * virtual viewport (the boosted phone scale makes those the norm),
+	 * keeping it centred. */
+	{
+		int toastW = LEVEL_TOAST_W;
+
+		if (toastW > sw - 2 * LEVEL_BUTTON_MARGIN)
+			toastW = sw - 2 * LEVEL_BUTTON_MARGIN;
+		uiSetRect(st->toast, sx + (sw - toastW) / 2, sy + LEVEL_TOAST_TOP,
+			  toastW, LEVEL_TOAST_H);
+	}
 
 	rowY = sy + sh - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_H;
 	uiSetRect(st->rotL, sx + LEVEL_BUTTON_MARGIN, rowY, LEVEL_BUTTON_W,
@@ -340,16 +349,23 @@ static void levelDrawUi(LevelState *st, App *app)
 	uiSetRect(st->rotR,
 		  sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W + LEVEL_BUTTON_GAP,
 		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
-	/* RESET hugs the safe-area right edge, but at narrow virtual widths
-	 * it is pushed to just right of ROT R (rotR.right + gap) so the two
-	 * buttons never overlap: resetX = max(safeRight - width, rotR.right +
-	 * gap). */
+	/* RESET hugs the safe-area right edge. At narrow virtual widths (a
+	 * phone: 1080 px / 3.41 = ~316 virtual px) that would collide with
+	 * ROT R (resetX < rotR.right + gap), so RESET is lifted onto a second
+	 * row above the pair, still right-aligned inside the safe area; no
+	 * button ever crosses the safe-area right edge. On a desktop (uiScale
+	 * 1, 1280 virtual) the collision arm is not taken and the layout is
+	 * byte-identical to the pre-fallback layout. */
 	resetX = sx + sw - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_W;
 	rotRight = sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W +
 		   LEVEL_BUTTON_GAP + LEVEL_BUTTON_W;
 	if (resetX < rotRight + LEVEL_BUTTON_GAP)
-		resetX = rotRight + LEVEL_BUTTON_GAP;
-	uiSetRect(st->reset, resetX, rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
+		uiSetRect(st->reset, resetX,
+			  rowY - LEVEL_BUTTON_H - LEVEL_BUTTON_GAP,
+			  LEVEL_BUTTON_W, LEVEL_BUTTON_H);
+	else
+		uiSetRect(st->reset, resetX, rowY, LEVEL_BUTTON_W,
+			  LEVEL_BUTTON_H);
 
 	uiDraw(st->rotL, ctx);
 	uiDraw(st->rotR, ctx);

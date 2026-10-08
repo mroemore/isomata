@@ -13,12 +13,21 @@ const SDL_DisplayMode *platformCurrentMode(void) {
 	return SDL_GetCurrentDisplayMode(display);
 }
 
-float platformDisplayDensity(void) {
-	const SDL_DisplayMode *mode = platformCurrentMode();
+float platformDisplayDensity(void *window) {
+	const SDL_DisplayMode *mode;
+
+	/* The window is accepted for the shared contract but the desktop keeps
+	 * its pixel-density behavior unchanged. */
+	(void)window;
+	mode = platformCurrentMode();
 	if (!mode || mode->pixel_density <= 0.0f) {
 		return 1.0f;
 	}
 	return mode->pixel_density;
+}
+
+float platformUiScaleBoost(void) {
+	return 1.0f;	/* desktop has no touch targets to enlarge */
 }
 
 void platformDisplaySize(int *outWidth, int *outHeight) {

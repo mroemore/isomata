@@ -15,8 +15,19 @@
  *     branches on platform; it calls these functions and trusts the twins to
  *     agree on semantics.
  *   - Twins must agree on semantics:
- *       * platformDisplayDensity() is the OS UI scale (1.0 when unknown), the
- *         value to multiply logical pixels by for physical pixels.
+ *       * platformDisplayDensity(void *window) is the OS UI scale (1.0 when
+ *         unknown), the value to multiply logical pixels by for physical
+ *         pixels. `window` is an SDL_Window* passed as void* (this header
+ *         stays SDL-free); the Android twin reads the window's display
+ *         scale, the desktop twin ignores the window and keeps the display
+ *         mode's pixel density.
+ *       * platformUiScaleBoost() is a per-platform touch-target multiplier
+ *         composed on TOP of the clamped density scale (1.0 on desktop, > 1
+ *         on touch platforms). The caller composes:
+ *             uiScale = uiScaleFromDensity(platformDisplayDensity(window))
+ *                       * platformUiScaleBoost();
+ *         The ui_scale.h [1, 3] clamp applies to the density step only, so a
+ *         boosted scale may exceed 3.
  *       * platformDisplaySize() is the current display mode in *physical*
  *         pixels of the primary display; 0/0 when unavailable.
  *       * platformSafeArea() is the window's usable inset (notch / status
@@ -36,8 +47,16 @@
 
 #include <stddef.h>
 
-/* OS UI scale factor (primary display), 1.0 when unknown. */
-float platformDisplayDensity(void);
+/* OS UI scale factor, 1.0 when unknown. `window` is an SDL_Window* passed as
+ * void* (may be NULL); the desktop twin ignores it and reports the primary
+ * display's pixel density, the Android twin prefers the window's display
+ * scale (points -> pixels, the dp density Android itself uses). */
+float platformDisplayDensity(void *window);
+
+/* Touch-target multiplier composed on top of the clamped density scale:
+ * 1.0 on desktop, > 1 on touch platforms (a named constant per twin). The
+ * caller must apply uiScaleFromDensity() to the density BEFORE multiplying. */
+float platformUiScaleBoost(void);
 
 /* Current physical-pixel size of the primary display; out params may be NULL
  * to skip. Writes 0 for a value that is unavailable. */

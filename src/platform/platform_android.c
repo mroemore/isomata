@@ -2,25 +2,50 @@
  *
  * Compiled only by android/app/jni/CMakeLists.txt (never by Meson; the
  * Meson cross files under cross/ stay Linux-on-Linux). Implements the exact
- * contract in platform.h; differences from the desktop twin are confined to
- * platformAssetPath(), because SDL on Android resolves APK assets itself and
- * wants the bare relative name.
+ * contract in platform.h; differences from the desktop twin are
+ * platformAssetPath() (SDL on Android resolves APK assets itself and wants
+ * the bare relative name), platformDisplayDensity() (window display scale)
+ * and platformUiScaleBoost() (touch targets).
  */
 #include "platform.h"
 
 #include <SDL3/SDL.h>
+
+/* Touch targets read ~30% larger than the dp baseline on a phone; composed
+ * on top of the clamped density scale (platform.h). */
+#define ANDROID_UI_SCALE_BOOST 1.3f
 
 static const SDL_DisplayMode *androidCurrentMode(void) {
 	const SDL_DisplayID display = SDL_GetPrimaryDisplay();
 	return SDL_GetCurrentDisplayMode(display);
 }
 
-float platformDisplayDensity(void) {
-	const SDL_DisplayMode *mode = androidCurrentMode();
-	if (!mode || mode->pixel_density <= 0.0f) {
-		return 1.0f;
+float platformDisplayDensity(void *window) {
+	SDL_Window *w = window;
+
+	/* Prefer the window's display scale: a points -> pixels ratio (the dp
+	 * density Android itself uses). The display mode's pixel_density is
+	 * reported as 1.0 on the tested Android targets, so it is only the
+	 * fallback, then 1.0. */
+	if (w != NULL) {
+		const float scale = SDL_GetWindowDisplayScale(w);
+
+		if (scale > 0.0f) {
+			return scale;
+		}
 	}
-	return mode->pixel_density;
+	{
+		const SDL_DisplayMode *mode = androidCurrentMode();
+
+		if (mode && mode->pixel_density > 0.0f) {
+			return mode->pixel_density;
+		}
+	}
+	return 1.0f;
+}
+
+float platformUiScaleBoost(void) {
+	return ANDROID_UI_SCALE_BOOST;
 }
 
 void platformDisplaySize(int *outWidth, int *outHeight) {

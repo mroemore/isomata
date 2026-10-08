@@ -273,7 +273,8 @@ static bool appSetupRuntime(App *app, bool smoke) {
 	char fontPath[512];
 	const char *screenshot = SDL_getenv("ISO_SCREENSHOT");
 
-	app->uiScale = uiScaleFromDensity(platformDisplayDensity());
+	/* app->uiScale is resolved in appRun before this runs (the startup log
+	 * reports it); the runtime just consumes it. */
 
 	fontPath[0] = '\0';
 	if (platformAssetPath("fonts/KiwiSoda.ttf", fontPath, sizeof(fontPath)) != NULL)
@@ -359,20 +360,29 @@ bool appRun(App *app) {
 		smokeProbeSafeArea(app);
 	}
 
-	/* Startup INFO line: SDL version, video driver and the window's
-	 * physical pixel size. Logged for every run, GPU or not. */
+	/* Startup INFO line: SDL version, video driver, the window's physical
+	 * pixel size and its logical (point) size, the display density and the
+	 * resulting UI scale. Logged for every run, GPU or not. The UI scale is
+	 * resolved here (density clamped to [1, 3], then the platform touch
+	 * boost composed on top) so the runtime below and the log agree. */
 	{
 		int sdlVersion = SDL_GetVersion();
 		const char *driver = SDL_GetCurrentVideoDriver();
 		int windowW = 0;
 		int windowH = 0;
+		int pointsW = 0;
+		int pointsH = 0;
+		float density = platformDisplayDensity(app->window);
 
+		app->uiScale = uiScaleFromDensity(density) * platformUiScaleBoost();
 		SDL_GetWindowSizeInPixels(app->window, &windowW, &windowH);
-		SDL_Log("isomata: SDL %d.%d.%d, video driver %s, window %dx%d pixels",
+		SDL_GetWindowSize(app->window, &pointsW, &pointsH);
+		SDL_Log("isomata: SDL %d.%d.%d, video driver %s, window %dx%d pixels (%dx%d points, density %.2f), UI scale %.2f",
 			SDL_VERSIONNUM_MAJOR(sdlVersion),
 			SDL_VERSIONNUM_MINOR(sdlVersion),
 			SDL_VERSIONNUM_MICRO(sdlVersion),
-			driver != NULL ? driver : "?", windowW, windowH);
+			driver != NULL ? driver : "?", windowW, windowH,
+			pointsW, pointsH, density, app->uiScale);
 	}
 
 	if (!appSetupRuntime(app, smoke)) {
