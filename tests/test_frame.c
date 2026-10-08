@@ -2,7 +2,8 @@
  * Frame draw-list construction tests (CTOL rung 1: unit + boundary).
  *
  * Pins buildFrameDrawList: clear -> voxel faces -> sprites -> painter sort,
- * the NULL-argument rules, the opaque-white voxel tint, and that the result
+ * the NULL-argument rules, the voxel tint (FRAME_VOXEL_TINT, 240 to leave
+ * the checker boost headroom), and that the result
  * is exactly the primitives' composition (count and per-item equality
  * against a reference list built by hand) and is painter-sorted (view-space
  * depth is non-decreasing).

@@ -147,9 +147,9 @@ Audio *audioCreate(void)
 		a->voices[i] = stream;
 	}
 
-	SDL_Log("audio: ready (%d voices, device %u, %d Hz %d ch)",
-		AUDIO_VOICE_COUNT, (unsigned)a->device, deviceSpec.freq,
-		deviceSpec.channels);
+	SDL_Log("audio: ready (driver %s, %d voices, device %u, %d Hz %d ch)",
+		SDL_GetCurrentAudioDriver(), AUDIO_VOICE_COUNT,
+		(unsigned)a->device, deviceSpec.freq, deviceSpec.channels);
 	return a;
 }
 
