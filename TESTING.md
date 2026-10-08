@@ -32,6 +32,25 @@ on the first failure. Install the hook once per clone:
 ln -sf ../../meson/pre-push .git/hooks/pre-push
 ```
 
+### GUI runs: Xvfb only (user directive)
+
+**Every automated GUI/input run goes under Xvfb — never on the live display.**
+Popping windows onto the user's desktop and hardware beeps from test audio are
+unacceptable. Always set `SDL_AUDIODRIVER=dummy` for automated runs.
+
+```sh
+Xvfb :77 -screen 0 1280x720x24 -nolisten tcp &   # pick a free display (:99 is taken)
+DISPLAY=:77 SDL_AUDIODRIVER=dummy ISO_SMOKE_MS=2500 build/isomata &
+sleep 1.6
+DISPLAY=:77 import -window root shot.png          # xwd/scrot also available
+DISPLAY=:77 xdotool key Return / xdotool click N  # input injection
+kill %1 %2
+```
+
+Verified on this box: `gpu_backend: ready (driver vulkan)` under Xvfb and the
+menu renders in the captured PNG. Interactive hand-testing on the real display
+is the user's own; agents do not use it.
+
 ## The oracle ladder
 
 Start at the top; only reach for the next rung when the one above cannot
