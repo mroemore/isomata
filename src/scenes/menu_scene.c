@@ -9,6 +9,8 @@
 #include "scenes/menu_scene.h"
 
 #include "app.h"
+#include "audio/audio.h"
+#include "events.h"
 #include "input/input.h"
 #include "scenes/level_scene.h"
 #include "scenes/settings_scene.h"
@@ -51,11 +53,21 @@ static void menuPushOrDrop(Scene *scene, bool pushed)
 	}
 }
 
+/* Every menu activation plays the menu blip through the event bus. */
+static void menuPlayBlip(App *app)
+{
+	AudioPlayRequest play = { SOUND_MENU };
+
+	publishEvent(appEventBus(app), EV_TOPIC_AUDIO, EV_AUDIO_PLAY, &play,
+		     sizeof(play));
+}
+
 static void menuOnStart(void *ctx)
 {
 	App *app = ctx;
 	Scene *level = levelSceneCreate();
 
+	menuPlayBlip(app);
 	if (level == NULL)
 		return;
 	menuPushOrDrop(level, replaceScene(appSceneStack(app), level));
@@ -66,6 +78,7 @@ static void menuOnSettings(void *ctx)
 	App *app = ctx;
 	Scene *settings = settingsSceneCreate();
 
+	menuPlayBlip(app);
 	if (settings == NULL)
 		return;
 	menuPushOrDrop(settings, pushScene(appSceneStack(app), settings));
@@ -73,6 +86,7 @@ static void menuOnSettings(void *ctx)
 
 static void menuOnQuit(void *ctx)
 {
+	menuPlayBlip((App *)ctx);
 	appRequestQuit((App *)ctx);
 }
 

@@ -27,10 +27,27 @@
  *   toastAlpha (empty text draws no text call).
  */
 
+#include "events.h"
 #include "ui/element.h"
 
 #define TOAST_HOLD_SECONDS 3.0f
 #define TOAST_FADE_SECONDS 0.5f
+
+/*
+ * Event vocabulary (topic EV_TOPIC_UI, per-topic types start at 0):
+ * - EV_UI_TOAST_SHOW: a request to show a toast. The payload IS a
+ *   NUL-terminated `const char *text` (payloadSize = strlen(text) + 1); the
+ *   bus copies the pointer, not the string, so the text must stay valid until
+ *   the event is delivered (the next dispatch). String literals and other
+ *   static-lifetime text are safe. A toast owner subscribes to EV_TOPIC_UI
+ *   and calls toastShow(toast, event->payload) for this type.
+ *
+ * (Task 10 routes the achievement toast directly from EV_TOPIC_ACHIEVEMENT,
+ * so no publisher uses this yet; it is the declared UI-owned vocabulary.)
+ */
+enum {
+	EV_UI_TOAST_SHOW = 0,
+};
 
 Element *uiCreateToast(const TextStyle *style);
 

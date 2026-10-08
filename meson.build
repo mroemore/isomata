@@ -57,7 +57,7 @@ engine_deps = [
 # (the SDL glue, app-only) calls into the pure input core, and Task 9's scenes
 # consume the other pure modules the same way. The pure lib carries no SDL
 # dependency, so linking it into the SDL app is safe.
-ctol_sources = files('src/events.c', 'src/scene.c',
+ctol_sources = files('src/events.c', 'src/achievement.c', 'src/scene.c',
 		     'src/input/input.c',
 		     'src/render/math3d.c', 'src/render/camera3d.c',
 		     'src/render/voxmap.c', 'src/render/drawlist.c',
@@ -85,6 +85,7 @@ engine_sources = [
 	'src/app.c',
 	'src/platform/platform.c',
 	'src/input/input_sdl.c',
+	'src/audio/audio.c',
 	'src/render/gpu_backend.c',
 	'src/ui/ui_font.c',
 	'src/ui/ui_gpu.c',
@@ -133,5 +134,16 @@ run_command('cp', files('assets/textures/placeholder.png'),
 	    _stage_texture_dir / 'placeholder.png', check : true)
 run_command('cp', files('assets/maps/demo.txt'),
 	    _stage_map_dir / 'demo.txt', check : true)
+
+# Stage the committed WAVs (Task 10) so the app smoke / X11 run can load
+# "audio/*.wav" relative to the executable.
+_stage_audio_dir = meson.current_build_dir() / 'assets' / 'audio'
+run_command('mkdir', '-p', _stage_audio_dir, check : true)
+run_command('cp', files('assets/audio/menu.wav'),
+	    _stage_audio_dir / 'menu.wav', check : true)
+run_command('cp', files('assets/audio/rotate.wav'),
+	    _stage_audio_dir / 'rotate.wav', check : true)
+run_command('cp', files('assets/audio/achievement.wav'),
+	    _stage_audio_dir / 'achievement.wav', check : true)
 
 subdir('tests')

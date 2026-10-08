@@ -49,6 +49,7 @@ if not meson.is_cross_build()
 	test('app smoke', isomata_exe,
 		env : [
 			'SDL_VIDEODRIVER=dummy',
+			'SDL_AUDIODRIVER=dummy',
 			'ISO_SMOKE_MS=300',
 		],
 		timeout : 60,

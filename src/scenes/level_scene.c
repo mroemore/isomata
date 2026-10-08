@@ -1,12 +1,24 @@
 /*
  * Level scene (see level_scene.h). SDL-tier: loads the demo map, owns a
- * Camera3D + DrawList + billboards, and per frame builds and draws the world
- * list, then handles the world commands from the InputFrame.
+ * Camera3D + DrawList + billboards and the achievement toast (a small UI
+ * root), and per frame builds/draws the world list, then handles the world
+ * commands from the InputFrame.
+ *
+ * Task 10 event wiring:
+ * - Every successful camera quarter turn publishes EV_GAMEPLAY_CAMERA_TURNED
+ *   (topic EV_TOPIC_GAMEPLAY) and an EV_AUDIO_PLAY request for the rotate
+ *   sound.
+ * - The scene subscribes to EV_TOPIC_ACHIEVEMENT; an EV_ACHIEVEMENT_UNLOCKED
+ *   payload shows the toast with the achievement title. The subscription is
+ *   removed in unload.
  */
 
 #include "scenes/level_scene.h"
 
+#include "achievement.h"
 #include "app.h"
+#include "audio/audio.h"
+#include "events.h"
 #include "input/input.h"
 #include "platform/platform.h"
 #include "render/camera3d.h"
@@ -18,6 +30,11 @@
 #include "render/voxmap.h"
 #include "scenes/pause_scene.h"
 #include "scenes/ui_bridge.h"
+#include "ui/element.h"
+#include "ui/layout.h"
+#include "ui/toast.h"
+#include "ui/ui_font.h"
+#include "ui/ui_scale.h"
 
 #include <SDL3/SDL.h>
 
@@ -25,12 +42,21 @@
 #define LEVEL_SPRITE_COUNT 3
 #define LEVEL_PAN_PER_PIXEL 0.05f	/* world units per virtual drag pixel */
 
+#define LEVEL_TOAST_W 300
+#define LEVEL_TOAST_H 48
+#define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
+
 typedef struct LevelState {
 	Voxmap *map;
 	Camera3D camera;
 	DrawList list;
 	SpriteEntity sprites[LEVEL_SPRITE_COUNT];
 	size_t spriteCount;
+
+	EventBus *bus;		/* borrowed from the App; may be NULL */
+	int quarterTurns;	/* running count of applied quarter turns */
+	Element *root;		/* UI root (a transparent container for the toast) */
+	Element *toast;
 } LevelState;
 
 /* The demo's three billboards (Task 8): two on the plateau, one on the
@@ -46,12 +72,39 @@ static void levelBuildSprites(LevelState *st)
 	st->spriteCount = LEVEL_SPRITE_COUNT;
 }
 
+static TextStyle levelStyle(const App *app)
+{
+	UiFont *font = appFont(app);
+	TextStyle style;
+
+	style.font = font;
+	style.measure = uiFontMeasure(font);
+	style.pixelSize = APP_UI_FONT_PIXELS;
+	return style;
+}
+
+/* EV_TOPIC_ACHIEVEMENT subscriber: show the unlock title in the toast. */
+static void levelOnAchievement(void *ctx, const Event *event)
+{
+	LevelState *st = ctx;
+	const AchievementUnlocked *unlock;
+
+	if (event->topic != EV_TOPIC_ACHIEVEMENT ||
+	    event->type != EV_ACHIEVEMENT_UNLOCKED)
+		return;
+	if (event->payload == NULL ||
+	    event->payloadSize < sizeof(AchievementUnlocked))
+		return;
+	unlock = event->payload;
+	toastShow(st->toast, unlock->title);
+}
+
 static bool level_init(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
+	TextStyle style = levelStyle(app);
 	char mapPath[512];
 
-	(void)app;
 	initCamera3D(&st->camera);
 	/* Centre the 16x16 map: at yaw 0, pan x moves +X and pan y moves -Z. */
 	cameraPan(&st->camera, 8.0f, -8.0f);
@@ -63,7 +116,50 @@ static bool level_init(void *self, App *app)
 	if (st->map == NULL)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");
+
+	/* Toast UI. ui/ has no non-drawing container, so a zero-padding pane
+	 * (sized to the toast each frame in levelDrawUi, and not drawn at all
+	 * while the toast is hidden) is the root the toast hangs off. */
+	st->root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
+	st->toast = uiCreateToast(&style);
+	if (st->root == NULL || st->toast == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: toast UI allocation failed");
+		uiDestroyElement(st->toast);
+		uiDestroyElement(st->root);
+		st->root = NULL;
+		st->toast = NULL;
+	} else {
+		uiAppendChild(st->root, st->toast);
+	}
+
+	/* Subscribe to achievement unlocks (self-unsubscribes in unload). */
+	st->bus = appEventBus(app);
+	if (st->bus != NULL) {
+		if (!subscribeEvent(st->bus, EV_TOPIC_ACHIEVEMENT,
+				    levelOnAchievement, st))
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: achievement subscribe failed");
+	} else {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: no event bus (toast/audio disabled)");
+	}
 	return true;
+}
+
+static void levelPublishTurn(LevelState *st, int direction)
+{
+	GameplayCameraTurn turn;
+	AudioPlayRequest play = { SOUND_ROTATE };
+
+	st->quarterTurns++;
+	turn.direction = direction;
+	turn.quarter = st->quarterTurns;
+	/* NULL bus is tolerated by publishEvent (returns false). */
+	publishEvent(st->bus, EV_TOPIC_GAMEPLAY, EV_GAMEPLAY_CAMERA_TURNED,
+		     &turn, sizeof(turn));
+	publishEvent(st->bus, EV_TOPIC_AUDIO, EV_AUDIO_PLAY, &play,
+		     sizeof(play));
 }
 
 static void levelHandleCommand(LevelState *st, App *app, Command cmd)
@@ -71,9 +167,11 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 	switch (cmd) {
 	case CMD_ROTATE_CW:
 		cameraRotateQuarterTurn(&st->camera, 1);
+		levelPublishTurn(st, 1);
 		break;
 	case CMD_ROTATE_CCW:
 		cameraRotateQuarterTurn(&st->camera, -1);
+		levelPublishTurn(st, -1);
 		break;
 	case CMD_ZOOM_IN:
 		cameraZoom(&st->camera, 1.0f);
@@ -103,8 +201,7 @@ static void level_update(void *self, App *app, float dt)
 	const InputFrame *frame = appInputFrame(app);
 	int i;
 
-	/* No UI yet: always false, but keeps the routing order uniform. */
-	uiBridgeDispatch(NULL, frame);
+	(void)uiBridgeDispatch(st->root, frame);
 
 	for (i = 0; i < frame->commandCount && i < INPUT_MAX_COMMANDS; i++)
 		levelHandleCommand(st, app, frame->commands[i]);
@@ -115,30 +212,46 @@ static void level_update(void *self, App *app, float dt)
 			  -(float)frame->panDy * LEVEL_PAN_PER_PIXEL);
 
 	updateCamera3D(&st->camera, dt);
+	toastUpdate(st->toast, dt);
+}
+
+/* Draw the toast UI on top of the world, centred near the top edge. Nothing
+ * is drawn while the toast is hidden (so the root pane never paints a
+ * persistent backdrop). */
+static void levelDrawUi(LevelState *st, App *app)
+{
+	UiDrawCtx *ctx = appUiDrawCtx(app);
+	float scale = appUiScale(app);
+	int vw = uiScalePhysicalToVirtual(appPixelWidth(app), scale);
+	int x;
+
+	if (st->root == NULL || !toastVisible(st->toast))
+		return;
+	x = (vw - LEVEL_TOAST_W) / 2;
+	uiSetRect(st->root, x, LEVEL_TOAST_TOP, LEVEL_TOAST_W, LEVEL_TOAST_H);
+	uiSetRect(st->toast, x, LEVEL_TOAST_TOP, LEVEL_TOAST_W, LEVEL_TOAST_H);
+	uiLayout(st->root);
+	uiDraw(st->root, ctx);
 }
 
 static void level_draw(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
 	GpuBackend *gpu = appGpuBackend(app);
-	int pw = appPixelWidth(app);
-	int ph = appPixelHeight(app);
-	float aspect;
-	Mat4 projection;
-	Mat4 view;
-	Mat4 viewProj;
 
-	if (gpu == NULL)
-		return;
+	if (gpu != NULL) {
+		int pw = appPixelWidth(app);
+		int ph = appPixelHeight(app);
+		float aspect = ph > 0 ? (float)pw / (float)ph : 1.0f;
+		Mat4 projection = cameraProjection(&st->camera, aspect);
+		Mat4 view = cameraView(&st->camera);
+		Mat4 viewProj = mat4Multiply(&projection, &view);
 
-	aspect = ph > 0 ? (float)pw / (float)ph : 1.0f;
-	projection = cameraProjection(&st->camera, aspect);
-	view = cameraView(&st->camera);
-	viewProj = mat4Multiply(&projection, &view);
-
-	buildFrameDrawList(st->map, st->sprites, st->spriteCount, &st->camera,
-			   &st->list);
-	gpuBackendDrawList(gpu, &viewProj, &st->list);
+		buildFrameDrawList(st->map, st->sprites, st->spriteCount,
+				   &st->camera, &st->list);
+		gpuBackendDrawList(gpu, &viewProj, &st->list);
+	}
+	levelDrawUi(st, app);
 }
 
 static void level_unload(void *self, App *app)
@@ -146,6 +259,12 @@ static void level_unload(void *self, App *app)
 	LevelState *st = scenePayload(self);
 
 	(void)app;
+	if (st->bus != NULL)
+		unsubscribeEvent(st->bus, EV_TOPIC_ACHIEVEMENT,
+				 levelOnAchievement, st);
+	uiDestroyElement(st->root);
+	st->root = NULL;
+	st->toast = NULL;
 	destroyDrawList(&st->list);
 	destroyVoxmap(st->map);
 	st->map = NULL;

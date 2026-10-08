@@ -27,10 +27,20 @@
 # input frame, UI context and the BeginFrame/draw/EndFrame sequence. The
 # dummy smoke exercises the setup + loop + menu scene (init/update/draw), so
 # the measured branch % rises to 44.3 (106 branches).
-src/app.c			44
+# Task 10: app.c moves 44 -> 45. The event bus, achievement system and audio
+# player are created in setup and the bus is dispatched once per frame; the
+# dummy smoke takes those success paths and the (empty-queue) dispatch, so
+# the measured branch % rises to 45.8 (120 branches). The tolerance arms
+# (NULL bus / NULL audio / failed sub-create) need a device-less box and are
+# taken by the X11-less smoke only when audio host init fails.
+src/app.c			45
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
+# Task 10: the pure achievement system. Floor at its measured branch %; the
+# untaken arms are the allocation-failure / subscribe-failure returns (close
+# them under the fault-injection rung, then raise toward 100).
+src/achievement.c		88
 # Task 4: scene.c floor at its measured value (includes the applied-top
 # activeScene, immediate destroy at apply, and aliasing-rejection guards).
 # The untaken arms are again allocation-failure paths (calloc in
@@ -70,6 +80,10 @@ src/input/input.c		97
 # smoke run takes its entry guards/default arm; floor starts at the measured
 # 5.
 src/input/input_sdl.c		5
+# Task 10 SDL tier: audio.c init/destroy is exercised by the dummy-driver
+# smoke run (a dummy playback device opens and 8 voices bind); no plays run
+# because the smoke feeds no input. Floor at the measured branch %.
+src/audio/audio.c		29
 
 # Task 7: the SDL_gpu render tier. math3d.c is branch-free arithmetic pinned
 # to 100 by its suite; camera3d.c closes every branch (tween compose/clamp/

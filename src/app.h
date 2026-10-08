@@ -16,6 +16,13 @@
  *     through the accessors below. Scenes are SDL-tier (engine_sources) and
  *     may include this header; the pure engine (scene.c) only forward-
  *     declares App.
+ *   - Task 10: the App also owns the EventBus (capacity 64), the
+ *     AchievementSystem and the Audio player. It dispatches the bus once per
+ *     frame after updateSceneStack and before drawing, so an event published
+ *     during a scene update is delivered the same frame, and one published
+ *     from inside a callback is delivered on the NEXT frame (snapshot
+ *     semantics, events.h). audio.c init is tolerant, so a box with no audio
+ *     device yields a NULL Audio and a working app.
  */
 #ifndef ISOMATA_APP_H
 #define ISOMATA_APP_H
@@ -31,6 +38,8 @@ typedef struct UiDrawCtx UiDrawCtx;
 typedef struct SceneStack SceneStack;
 typedef struct GpuBackend GpuBackend;
 typedef struct UiFont UiFont;
+typedef struct EventBus EventBus;
+typedef struct Audio Audio;
 
 /* Design pixel size for UI text (label/menu/button styles). */
 #define APP_UI_FONT_PIXELS 32
@@ -69,6 +78,16 @@ GpuBackend *appGpuBackend(App *app);
 
 /* The measurement font (ui_font.h); NULL when no font could be loaded. */
 UiFont *appFont(const App *app);
+
+/* The engine event bus (events.h) owned by the App. Scenes publish gameplay
+ * / UI / audio events and subscribe to topics on it. NULL only if the bus
+ * could not be allocated (a degraded but non-fatal state). */
+EventBus *appEventBus(App *app);
+
+/* The audio player (audio.h); NULL when no audio device could be opened
+ * (audio.c init is tolerant). Scenes pass it to audioPlay or publish
+ * EV_AUDIO_PLAY; a NULL player is a no-op. */
+Audio *appAudio(App *app);
 
 /* Window pixel size, refreshed each frame. */
 int appPixelWidth(const App *app);

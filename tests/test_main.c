@@ -51,6 +51,7 @@ static void test_math_links_libm(void)
  *   1. add files('src/<module>.c') to ctol_sources (../meson.build) and
  *      create tests/test_<module>.c exposing run_test_<module>(void),
  *   2. declare + call it here — test_main.c owns main() for the suite. */
+void run_test_achievement(void);
 void run_test_events(void);
 void run_test_scene(void);
 void run_test_input(void);
@@ -76,6 +77,7 @@ int main(void)
 	UNITY_BEGIN();
 	RUN_TEST(test_unity_assertions_pass);
 	RUN_TEST(test_math_links_libm);
+	run_test_achievement();
 	run_test_events();
 	run_test_scene();
 	run_test_input();

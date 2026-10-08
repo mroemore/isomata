@@ -1,5 +1,8 @@
 #include "app.h"
 
+#include "achievement.h"
+#include "audio/audio.h"
+#include "events.h"
 #include "input/input.h"
 #include "input/input_sdl.h"
 #include "platform/platform.h"
@@ -16,6 +19,10 @@
 #define APP_TITLE "Isomata"
 #define APP_FRAME_DELAY_MS 15
 #define APP_SCENE_STACK_CAPACITY 8
+/* Bounded event queue: comfortably above one frame's publish volume (a
+ * handful of gameplay/audio events), matching events.h's bounded-queue
+ * contract. */
+#define APP_EVENT_CAPACITY 64
 
 struct App {
 	SDL_Window *window;
@@ -33,6 +40,10 @@ struct App {
 	SceneStack *stack;
 	Input *input;
 	InputFrame frame;
+
+	EventBus *bus;
+	AchievementSystem *achievements;
+	Audio *audio;
 };
 
 static bool g_sdlInitialized = false;
@@ -85,6 +96,20 @@ static void appReleaseRuntime(App *app) {
 	if (app->stack != NULL) {
 		destroySceneStack(app->stack);
 		app->stack = NULL;
+	}
+	/* Scenes are gone (their unload unsubscribed); audio and the
+	 * achievement system unsubscribe themselves, then the bus is freed. */
+	if (app->audio != NULL) {
+		audioDestroy(app->audio);
+		app->audio = NULL;
+	}
+	if (app->achievements != NULL) {
+		destroyAchievementSystem(app->achievements);
+		app->achievements = NULL;
+	}
+	if (app->bus != NULL) {
+		destroyEventBus(app->bus);
+		app->bus = NULL;
 	}
 	if (app->input != NULL) {
 		destroyInput(app->input);
@@ -195,6 +220,22 @@ static bool appSetupRuntime(App *app, bool smoke) {
 		return false;
 	}
 
+	/* Event bus + achievement system + audio (Task 10). A failed bus or
+	 * achievement system is logged and tolerated (events go nowhere); a
+	 * NULL Audio is the tolerant no-device case (audio.h). */
+	app->bus = createEventBus(APP_EVENT_CAPACITY);
+	if (app->bus == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: event bus allocation failed (events disabled)");
+	} else {
+		app->achievements = createAchievementSystem(app->bus);
+		if (app->achievements == NULL)
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "isomata: achievement system unavailable");
+	}
+	app->audio = audioCreate();
+	audioSubscribe(app->audio, app->bus);
+
 	Scene *menu = menuSceneCreate();
 	if (menu == NULL || !pushScene(app->stack, menu)) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -251,7 +292,12 @@ bool appRun(App *app) {
 
 		updateSceneStack(app->stack, app, dt);
 
-		/* TODO(Task 10): dispatchEvents(eventBus, app) here. */
+		/* Deliver this frame's queued events. An event published during
+		 * a scene update is delivered here (same frame); one published
+		 * from inside a callback is delivered next frame (snapshot
+		 * semantics, events.h), so the achievement toast/audio land one
+		 * frame after the 4th turn. NULL bus is a harmless no-op. */
+		dispatchEvents(app->bus);
 
 		if (app->gpu != NULL && gpuBackendBeginFrame(app->gpu)) {
 			drawSceneStackAll(app->stack, app);
@@ -303,6 +349,14 @@ GpuBackend *appGpuBackend(App *app) {
 
 UiFont *appFont(const App *app) {
 	return app != NULL ? app->font : NULL;
+}
+
+EventBus *appEventBus(App *app) {
+	return app != NULL ? app->bus : NULL;
+}
+
+Audio *appAudio(App *app) {
+	return app != NULL ? app->audio : NULL;
 }
 
 int appPixelWidth(const App *app) {
