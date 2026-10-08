@@ -141,8 +141,8 @@ src/scenes/pause_scene.c	0
 # supports an integer increase.
 
 # Tweaks Phase 2: the infinite ground grid (pure grid.c + twin suite) and the
-# voxmap shading/checkerboard. grid.c measures 90.0% (9/10 branches): the one
+# voxmap shading/checkerboard. grid.c measures 91.7% (11/12 branches): the one
 # untaken arm is the defensive zoom <= 0 fallback, unreachable through the
 # public camera API (cameraZoom clamps zoom to >= CAMERA_ZOOM_MIN). voxmap.c
 # measures 93.1% (the shading clamps add branches); its 93 floor still holds.
-src/render/grid.c		90
+src/render/grid.c		91
