@@ -48,6 +48,22 @@
  * at an exactly edge-on (dot 0) side still culls it. */
 #define CAMERA_CULL_EPS 1e-4f
 
+/*
+ * Per-face brightness multiplied onto the caller tint (RGB only; alpha is
+ * preserved). The top is the brightest (1.0); the four side constants are
+ * distinct and ordered so the two sides visible at a 45-degree yaw differ
+ * noticeably: +Z bright, +X mid, -Z dark, -X darker.
+ */
+#define VOXMAP_SHADE_TOP 1.00f
+#define VOXMAP_SHADE_SIDE_PZ 0.90f	/* dir 0: +Z */
+#define VOXMAP_SHADE_SIDE_PX 0.80f	/* dir 1: +X */
+#define VOXMAP_SHADE_SIDE_NZ 0.70f	/* dir 2: -Z */
+#define VOXMAP_SHADE_SIDE_NX 0.62f	/* dir 3: -X */
+
+/* Checkerboard: odd tiles ((x + z) & 1) are brightened by this factor on top
+ * of the face shade, for both tops and sides of that column. */
+#define VOXMAP_CHECKER_BOOST 1.06f
+
 typedef struct Voxmap Voxmap;
 
 /* Load a map from a file. Returns NULL with a clear stderr diagnostic on a

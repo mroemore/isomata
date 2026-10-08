@@ -561,6 +561,190 @@ static void test_faces_overflow_drops_and_reports_once(void)
 	destroyVoxmap(map);
 }
 
+/* Tint of the top face at column x (0 = even, 1 = odd), or 0 when absent. */
+static uint32_t topTintAt(const DrawList *list, int x)
+{
+	const float top[4][2] = ATLAS_UV_TOP;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+
+		if (memcmp(item->uv, top, sizeof(top)) == 0 &&
+		    item->worldQuad[0][0] == (float)x)
+			return item->tint;
+	}
+	return 0;
+}
+
+/* Tint of the side face with the given direction (0 = +Z .. 3 = -X). */
+static uint32_t sideTintByDir(const DrawList *list, int dir)
+{
+	const float side[4][2] = ATLAS_UV_SIDE;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+
+		if (memcmp(item->uv, side, sizeof(side)) == 0 &&
+		    sideDirOf(item) == dir)
+			return item->tint;
+	}
+	return 0;
+}
+
+/* Tint of the +Z side face whose low corner x equals `x` (column selector
+ * when several +Z sides are emitted). */
+static uint32_t plusZSideTintAt(const DrawList *list, int x)
+{
+	const float side[4][2] = ATLAS_UV_SIDE;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+
+		if (memcmp(item->uv, side, sizeof(side)) == 0 &&
+		    sideDirOf(item) == 0 && item->worldQuad[0][0] == (float)x)
+			return item->tint;
+	}
+	return 0;
+}
+
+/* The shade constants: top strictly brightest; four distinct side values in
+ * [0.55, 0.92]; checker boost in [1.02, 1.10]. */
+static void test_shade_constants(void)
+{
+	const float sides[4] = { VOXMAP_SHADE_SIDE_PZ, VOXMAP_SHADE_SIDE_PX,
+				 VOXMAP_SHADE_SIDE_NZ, VOXMAP_SHADE_SIDE_NX };
+	int i;
+	int j;
+
+	TEST_ASSERT_TRUE(VOXMAP_SHADE_TOP > VOXMAP_SHADE_SIDE_PZ);
+	TEST_ASSERT_TRUE(VOXMAP_SHADE_TOP > VOXMAP_SHADE_SIDE_PX);
+	TEST_ASSERT_TRUE(VOXMAP_SHADE_TOP > VOXMAP_SHADE_SIDE_NZ);
+	TEST_ASSERT_TRUE(VOXMAP_SHADE_TOP > VOXMAP_SHADE_SIDE_NX);
+	for (i = 0; i < 4; i++) {
+		TEST_ASSERT_TRUE(sides[i] >= 0.55f && sides[i] <= 0.92f);
+		for (j = i + 1; j < 4; j++)
+			TEST_ASSERT_TRUE(fabsf(sides[i] - sides[j]) > 1e-4f);
+	}
+	TEST_ASSERT_TRUE(VOXMAP_CHECKER_BOOST >= 1.02f);
+	TEST_ASSERT_TRUE(VOXMAP_CHECKER_BOOST <= 1.10f);
+}
+
+/* Odd tiles are brightened by exactly the checker boost on the top face; the
+ * even tile keeps the bare top shade. Alpha is preserved. */
+static void test_checker_odd_even_top(void)
+{
+	/* Two height-2 columns in one row: (0,0) even, (1,0) odd. */
+	Voxmap *map = loadTemp("vm_checker_top.txt", "22\n");
+	DrawList list;
+	Camera3D camera;
+	int evenR;
+	int oddR;
+	int expectedOdd;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(200, 200, 200, 77));
+
+	evenR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
+	oddR = (int)((topTintAt(&list, 1) >> 24) & 0xffu);
+	expectedOdd = (int)(200.0f * VOXMAP_SHADE_TOP * VOXMAP_CHECKER_BOOST +
+			    0.5f);
+
+	TEST_ASSERT_EQUAL_INT(200, evenR);		/* (0+0) even */
+	TEST_ASSERT_EQUAL_INT(expectedOdd, oddR);	/* (1+0) odd */
+	/* RGB-only: alpha preserved on both. */
+	TEST_ASSERT_EQUAL_INT(77, (int)(topTintAt(&list, 0) & 0xffu));
+	TEST_ASSERT_EQUAL_INT(77, (int)(topTintAt(&list, 1) & 0xffu));
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* The checker applies to sides too, on top of the side shade. */
+static void test_checker_odd_even_side(void)
+{
+	Voxmap *map = loadTemp("vm_checker_side.txt", "22\n");
+	DrawList list;
+	Camera3D camera;
+	int evenR;
+	int oddR;
+	int expectedOdd;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);		/* yaw 0: +Z sides only */
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+
+	evenR = (int)((plusZSideTintAt(&list, 0) >> 24) & 0xffu);
+	oddR = (int)((plusZSideTintAt(&list, 1) >> 24) & 0xffu);
+	expectedOdd = (int)(200.0f * VOXMAP_SHADE_SIDE_PZ *
+			    VOXMAP_CHECKER_BOOST + 0.5f);
+
+	TEST_ASSERT_EQUAL_INT((int)(200.0f * VOXMAP_SHADE_SIDE_PZ + 0.5f),
+			      evenR);
+	TEST_ASSERT_EQUAL_INT(expectedOdd, oddR);
+	TEST_ASSERT_TRUE(oddR > evenR);
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* At a 45-degree yaw the two visible sides carry their distinct shade
+ * constants: +Z bright, +X mid, and the two differ. */
+static void test_sides_distinct_at_45(void)
+{
+	Voxmap *map = loadTemp("vm_sides45.txt", "2\n");
+	DrawList list;
+	Camera3D camera;
+	int pzR;
+	int pxR;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);
+	cameraRotateStep(&camera, 1);
+	updateCamera3D(&camera, CAMERA_TURN_SECONDS);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&camera));
+
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+	pzR = (int)((sideTintByDir(&list, 0) >> 24) & 0xffu);
+	pxR = (int)((sideTintByDir(&list, 1) >> 24) & 0xffu);
+
+	TEST_ASSERT_EQUAL_INT((int)(200.0f * VOXMAP_SHADE_SIDE_PZ + 0.5f), pzR);
+	TEST_ASSERT_EQUAL_INT((int)(200.0f * VOXMAP_SHADE_SIDE_PX + 0.5f), pxR);
+	TEST_ASSERT_TRUE(pzR != pxR);
+	TEST_ASSERT_TRUE(pzR > pxR);
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* The top face is strictly brighter than any side for the same column/tint. */
+static void test_top_brightest(void)
+{
+	Voxmap *map = loadTemp("vm_topbright.txt", "2\n");
+	DrawList list;
+	Camera3D camera;
+	int topR;
+	int sideR;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+
+	topR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
+	sideR = (int)((sideTintByDir(&list, 0) >> 24) & 0xffu);
+	TEST_ASSERT_TRUE(topR > sideR);
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -587,4 +771,9 @@ void run_test_voxmap(void)
 	RUN_TEST(test_faces_void_cell_and_null_list);
 	RUN_TEST(test_faces_overflow_drops_and_reports_once);
 	RUN_TEST(test_emit_null_safe);
+	RUN_TEST(test_shade_constants);
+	RUN_TEST(test_checker_odd_even_top);
+	RUN_TEST(test_checker_odd_even_side);
+	RUN_TEST(test_sides_distinct_at_45);
+	RUN_TEST(test_top_brightest);
 }

@@ -261,6 +261,40 @@ static void emitFace(DrawList *list, const float quad[4][3], DrawFace face,
 	}
 }
 
+/* Multiply one 0..255 channel by `factor`, clamped, rounded to nearest. */
+static uint8_t shadeChannel(uint8_t c, float factor)
+{
+	float v = (float)c * factor;
+
+	if (v <= 0.0f)
+		return 0;
+	if (v >= 255.0f)
+		return 255;
+	return (uint8_t)(v + 0.5f);
+}
+
+/* Apply the face shade and the per-column checker boost to the caller tint:
+ * RGB multiplied and clamped per channel, alpha preserved. `x`/`z` are the
+ * column's grid coordinates (odd tiles are brightened). */
+static uint32_t shadeTint(uint32_t tint, float faceShade, int x, int z)
+{
+	float factor = faceShade *
+		       (((x + z) & 1) ? VOXMAP_CHECKER_BOOST : 1.0f);
+	uint8_t r = shadeChannel((uint8_t)((tint >> 24) & 0xffu), factor);
+	uint8_t g = shadeChannel((uint8_t)((tint >> 16) & 0xffu), factor);
+	uint8_t b = shadeChannel((uint8_t)((tint >> 8) & 0xffu), factor);
+	uint8_t a = (uint8_t)(tint & 0xffu);
+
+	return ((uint32_t)r << 24) | ((uint32_t)g << 16) |
+	       ((uint32_t)b << 8) | (uint32_t)a;
+}
+
+/* Per-direction side shade (dir 0..3 = +Z, +X, -Z, -X). */
+static const float kSideShade[4] = {
+	VOXMAP_SHADE_SIDE_PZ, VOXMAP_SHADE_SIDE_PX,
+	VOXMAP_SHADE_SIDE_NZ, VOXMAP_SHADE_SIDE_NX,
+};
+
 /* Unit ground-plane direction from the target toward the camera, for yaw
  * degrees. The camera sits at target + (sin yaw, cos yaw) * cos(pitch) *
  * CAMERA_DISTANCE (see cameraView), so the horizontal direction is
@@ -293,7 +327,8 @@ static void emitTop(DrawList *list, int x, int z, int height, uint32_t tint)
 		{ (float)x, (float)height, (float)(z + 1) },
 	};
 
-	emitFace(list, quad, DRAW_FACE_TOP, tint);
+	emitFace(list, quad, DRAW_FACE_TOP,
+		 shadeTint(tint, VOXMAP_SHADE_TOP, x, z));
 }
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		     uint32_t tint)
@@ -328,7 +363,8 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
 		break;
 	}
-	emitFace(list, quad, DRAW_FACE_SIDE, tint);
+	emitFace(list, quad, DRAW_FACE_SIDE,
+		 shadeTint(tint, kSideShade[dir], x, z));
 }
 
 void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
