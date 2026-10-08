@@ -52,6 +52,7 @@ static void test_math_links_libm(void)
  *      create tests/test_<module>.c exposing run_test_<module>(void),
  *   2. declare + call it here — test_main.c owns main() for the suite. */
 void run_test_events(void);
+void run_test_scene(void);
 
 int main(void)
 {
@@ -59,5 +60,6 @@ int main(void)
 	RUN_TEST(test_unity_assertions_pass);
 	RUN_TEST(test_math_links_libm);
 	run_test_events();
+	run_test_scene();
 	return UNITY_END();
 }

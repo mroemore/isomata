@@ -69,7 +69,7 @@ install_subdir('assets',
 # 'isomata_pure.p/src_events.c.o' and captures cleanly, exactly like the
 # isomata exe target. Scripts under meson/ discover the target merely by
 # name, so the move is transparent to coverage-gate.sh and friends.
-ctol_sources = files('src/events.c')
+ctol_sources = files('src/events.c', 'src/scene.c')
 ctol_inc = include_directories('src')
 ctol_deps = [math_dep]
 

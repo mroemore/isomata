@@ -22,3 +22,10 @@ src/app.c			55
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
+# Task 4: scene.c floor at its measured value (includes the applied-top
+# activeScene, immediate destroy at apply, and aliasing-rejection guards).
+# The untaken arms are again allocation-failure paths (calloc in
+# createScene/createSceneStack) plus defensive branches (NULL-vt
+# entry-point arms, the pop-underflow guard, simOp's push-overflow guard)
+# — close them under the fault-injection rung, then raise the floor.
+src/scene.c			80
