@@ -139,3 +139,10 @@ src/scenes/pause_scene.c	0
 #   the measured value eased from 23.0 to 22.6 — still above its 22 floor).
 # No floor number moves: the ratchet only goes up, and no measured value
 # supports an integer increase.
+
+# Tweaks Phase 2: the infinite ground grid (pure grid.c + twin suite) and the
+# voxmap shading/checkerboard. grid.c measures 90.0% (9/10 branches): the one
+# untaken arm is the defensive zoom <= 0 fallback, unreachable through the
+# public camera API (cameraZoom clamps zoom to >= CAMERA_ZOOM_MIN). voxmap.c
+# measures 93.1% (the shading clamps add branches); its 93 floor still holds.
+src/render/grid.c		90
