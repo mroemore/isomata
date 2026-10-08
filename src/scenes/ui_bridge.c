@@ -61,6 +61,17 @@ bool uiBridgeDispatch(Element *root, const InputFrame *frame)
 	return consumed;
 }
 
+bool uiBridgeDispatchPointer(Element *root, const InputFrame *frame)
+{
+	/* Commands are deliberately ignored: a pointer-driven scene's buttons
+	 * have no focus model, so ACTIVATE must not reach them (see the
+	 * header). Same tap coordinate/consumption semantics as the pointer
+	 * half of uiBridgeDispatch. */
+	if (frame == NULL || !frame->tap)
+		return false;
+	return uiHandlePointer(root, frame->tapX, frame->tapY);
+}
+
 bool uiBridgeFrameHasBack(const InputFrame *frame)
 {
 	int i;

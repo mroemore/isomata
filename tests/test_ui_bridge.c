@@ -3,9 +3,11 @@
  *
  * Pins the Command -> UiIntent mapping (only nav/select/back map; rotate and
  * zoom are ignored), first-consumer-wins routing through uiHandleIntent, tap
- * routing through uiHandlePointer, the consumed return value, and NULL
- * safety. One integration case drives a real menu element to show nav/select
- * are consumed while cancel passes through.
+ * routing through uiHandlePointer, the consumed return value, NULL safety, and
+ * the pointer-only dispatch a tap-driven scene uses (commands ignored so a
+ * UI_ACTIVATE never reaches a focusless button). One integration case drives a
+ * real menu element to show nav/select are consumed while cancel passes
+ * through.
  *
  * Pure: links only ui_bridge.c (+ input/element deps) and the Unity subset.
  * Harness convention: no main()/setUp()/tearDown(); exposes run_test_ui_bridge().
@@ -16,7 +18,9 @@
 #include "input/input.h"
 #include "scenes/ui_bridge.h"
 #include "ui/element.h"
+#include "ui/element_button.h"
 #include "ui/element_menu.h"
+#include "ui/layout.h"
 
 #include <string.h>
 
@@ -268,6 +272,76 @@ static void test_menu_integration(void)
 	uiDestroyElement(menu);
 }
 
+/* --- pointer-only dispatch (the level's tap controls) --------------------- */
+
+static int g_pointerHits;
+
+static void onPointerHit(void *ctx)
+{
+	(void)ctx;
+	g_pointerHits++;
+}
+
+/* A pane root with one real button child, mirroring the level's UI root. */
+static Element *makeButtonRoot(void)
+{
+	Element *root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
+	Element *button = uiCreateButton("ROT R", NULL, onPointerHit, NULL);
+
+	TEST_ASSERT_NOT_NULL(root);
+	TEST_ASSERT_NOT_NULL(button);
+	uiAppendChild(root, button);
+	uiSetRect(button, 10, 20, 96, 48);
+	return root;
+}
+
+/* A UI_ACTIVATE command (SELECT) must NOT reach a button: the buttons have no
+ * focus model, so only a tap may fire them. */
+static void test_pointer_only_dispatch_ignores_commands(void)
+{
+	Element *root = makeButtonRoot();
+	InputFrame frame = frameWith((Command[]){ CMD_SELECT }, 1);
+
+	g_pointerHits = 0;
+	TEST_ASSERT_FALSE(uiBridgeDispatchPointer(root, &frame));
+	TEST_ASSERT_EQUAL_INT(0, g_pointerHits);	/* no ACTIVATE routing */
+	uiDestroyElement(root);
+}
+
+/* A tap inside a button's rect fires it exactly once (even alongside a
+ * SELECT command, which is ignored). */
+static void test_pointer_only_dispatch_routes_tap(void)
+{
+	Element *root = makeButtonRoot();
+	InputFrame frame = frameWith((Command[]){ CMD_SELECT }, 1);
+
+	frame.tap = true;
+	frame.tapX = 50;	/* inside [10,106) x [20,68) */
+	frame.tapY = 40;
+	g_pointerHits = 0;
+	TEST_ASSERT_TRUE(uiBridgeDispatchPointer(root, &frame));
+	TEST_ASSERT_EQUAL_INT(1, g_pointerHits);
+	uiDestroyElement(root);
+}
+
+/* A tap outside every button is not consumed; NULL frame/root are false. */
+static void test_pointer_only_dispatch_tap_outside(void)
+{
+	Element *root = makeButtonRoot();
+	InputFrame frame = { 0 };
+
+	frame.tap = true;
+	frame.tapX = 500;
+	frame.tapY = 500;
+	g_pointerHits = 0;
+	TEST_ASSERT_FALSE(uiBridgeDispatchPointer(root, &frame));
+	TEST_ASSERT_EQUAL_INT(0, g_pointerHits);
+
+	TEST_ASSERT_FALSE(uiBridgeDispatchPointer(root, NULL));
+	TEST_ASSERT_FALSE(uiBridgeDispatchPointer(NULL, &frame));
+	uiDestroyElement(root);
+}
+
 /* uiBridgeFrameHasBack reports CMD_BACK presence and is NULL-safe. */
 static void test_frame_has_back(void)
 {
@@ -314,6 +388,9 @@ void run_test_ui_bridge(void)
 	RUN_TEST(test_tap_unconsumed_and_absent);
 	RUN_TEST(test_null_safe);
 	RUN_TEST(test_menu_integration);
+	RUN_TEST(test_pointer_only_dispatch_ignores_commands);
+	RUN_TEST(test_pointer_only_dispatch_routes_tap);
+	RUN_TEST(test_pointer_only_dispatch_tap_outside);
 	RUN_TEST(test_frame_has_back);
 	RUN_TEST(test_over_capacity_frame_guard);
 }

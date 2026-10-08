@@ -270,7 +270,10 @@ static void level_update(void *self, App *app, float dt)
 	const InputFrame *frame = appInputFrame(app);
 	int i;
 
-	(void)uiBridgeDispatch(st->root, frame);
+	/* Pointer-only: the buttons are tap controls with no keyboard focus
+	 * model (Q/E/R own rotation/reset), so ACTIVATE must not fire a
+	 * button. See uiBridgeDispatchPointer. */
+	(void)uiBridgeDispatchPointer(st->root, frame);
 
 	for (i = 0; i < frame->commandCount && i < INPUT_MAX_COMMANDS; i++)
 		levelHandleCommand(st, app, frame->commands[i]);

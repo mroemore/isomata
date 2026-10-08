@@ -32,6 +32,19 @@
 
 bool uiBridgeDispatch(Element *root, const InputFrame *frame);
 
+/* Pointer-only dispatch: route ONLY the frame's tap through
+ * uiHandlePointer(root, tapX, tapY); every command is ignored. Returns
+ * whether the tap was consumed (false for a NULL frame, no tap, or a NULL
+ * root).
+ *
+ * Why a scene uses this instead of uiBridgeDispatch: the level's on-screen
+ * buttons are touch/click controls with NO focus model, and the keyboard
+ * already owns rotate/reset (Q/E/R). Routing UI_ACTIVATE there would fire an
+ * arbitrary sibling (ui walks children in reverse order, first consumer
+ * wins), so Enter/Space would activate the last button. A scene whose UI is
+ * pointer-driven calls this and keeps its own command handling. */
+bool uiBridgeDispatchPointer(Element *root, const InputFrame *frame);
+
 /* True when the frame carries CMD_BACK. The UI never consumes UI_CANCEL, so
  * a scene uses this ONLY as the fallback after uiBridgeDispatch reported the
  * frame was not consumed (a [CMD_SELECT, CMD_BACK] frame is consumed by the
