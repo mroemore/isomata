@@ -37,6 +37,7 @@ static bool commandToIntent(Command command, UiIntent *out)
 bool uiBridgeDispatch(Element *root, const InputFrame *frame)
 {
 	int i;
+	bool consumed = false;
 
 	if (frame == NULL)
 		return false;
@@ -45,13 +46,19 @@ bool uiBridgeDispatch(Element *root, const InputFrame *frame)
 		UiIntent intent;
 
 		if (commandToIntent(frame->commands[i], &intent) &&
-		    uiHandleIntent(root, intent))
-			return true;
+		    uiHandleIntent(root, intent)) {
+			consumed = true;
+			break;	/* first-consumer-wins for the command stream */
+		}
 	}
 
+	/* A tap is a separate gesture, not a command: route it even when a
+	 * command was consumed this frame, so a consumed command never
+	 * swallows a same-frame tap. */
 	if (frame->tap && uiHandlePointer(root, frame->tapX, frame->tapY))
-		return true;
-	return false;
+		consumed = true;
+
+	return consumed;
 }
 
 bool uiBridgeFrameHasBack(const InputFrame *frame)

@@ -16,12 +16,14 @@
  *   BACK -> UI_CANCEL. Every other command (rotate, zoom) is ignored — those
  *   belong to the scene's own control handling, not the UI.
  * - Commands are routed in frame order through uiHandleIntent; the first
- *   consumed intent ends the dispatch (ui's own first-consumer-wins rule),
- *   and the call returns true.
- * - A frame tap is then routed through uiHandlePointer(root, tapX, tapY).
- * - Returns true when the UI consumed any of the frame's input, false when
- *   nothing was consumed (or for a NULL frame; a NULL root consumes
- *   nothing).
+ *   consumed intent ends the COMMAND dispatch (ui's own first-consumer-wins
+ *   rule).
+ * - A frame tap is routed through uiHandlePointer(root, tapX, tapY)
+ *   UNCONDITIONALLY, after the command loop: a tap is a separate gesture, so
+ *   a command consumed earlier in the frame does not swallow it.
+ * - Returns true when the UI consumed any of the frame's input (a command or
+ *   the tap), false when nothing was consumed (or for a NULL frame; a NULL
+ *   root consumes nothing).
  */
 #include "input/input.h"
 #include "ui/element.h"

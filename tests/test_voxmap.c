@@ -312,8 +312,7 @@ static void test_faces_void_cell_and_null_list(void)
 }
 
 /* parseVoxmapText: the in-memory entry point parses the same format. */
-static void test_parse_memory_basic(void)
-{
+static void test_parse_memory_basic(void){
 	const char *text = "12\n34\n";
 	Voxmap *map = parseVoxmapText(text, strlen(text));
 
@@ -378,6 +377,28 @@ static void test_parse_memory_rejects_bad_input(void)
 	TEST_ASSERT_NULL(parseVoxmapText("12\n3\n", 5));
 }
 
+/* A draw list too small for the map drops the overflow faces (appendVoxelFace
+ * returns false) and leaves exactly capacity items; the one-time diagnostic
+ * is emitted on the first drop and suppressed on the next. */
+static void test_faces_overflow_drops_and_reports_once(void)
+{
+	Voxmap *map = loadTemp("vm_overflow.txt", "1111\n1111\n");
+	DrawList list;
+	Camera3D camera;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 2);		/* 8 columns -> far more than 2 faces */
+	initCamera3D(&camera);
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	TEST_ASSERT_EQUAL_INT(2, drawListCount(&list));
+	clearDrawList(&list);
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	TEST_ASSERT_EQUAL_INT(2, drawListCount(&list));
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -399,5 +420,6 @@ void run_test_voxmap(void)
 	RUN_TEST(test_faces_non_axis_yaw_emits_all_sides);
 	RUN_TEST(test_faces_cull_hidden_side);
 	RUN_TEST(test_faces_void_cell_and_null_list);
+	RUN_TEST(test_faces_overflow_drops_and_reports_once);
 	RUN_TEST(test_emit_null_safe);
 }

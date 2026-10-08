@@ -161,15 +161,20 @@ void tearDown(void);
 #define TEST_ASSERT_EQUAL_UINT64_MESSAGE(expected, actual, msg) \
 	UNITY_ASSERT_EQUAL_UINT(expected, actual, (msg))
 
-#define TEST_ASSERT_EQUAL_PTR(expected, actual) \
+#define UNITY_ASSERT_EQUAL_PTR(expected, actual, msg) \
 	do { \
 		const void *_unityE = (const void *)(expected); \
 		const void *_unityA = (const void *)(actual); \
 		if (_unityE != _unityA) { \
-			UnityFail(__FILE__, __LINE__, \
+			UnityFailMsg(__FILE__, __LINE__, (msg), \
 				"Expected %p Was %p", _unityE, _unityA); \
 		} \
 	} while (0)
+
+#define TEST_ASSERT_EQUAL_PTR(expected, actual) \
+	UNITY_ASSERT_EQUAL_PTR(expected, actual, NULL)
+#define TEST_ASSERT_EQUAL_PTR_MESSAGE(expected, actual, msg) \
+	UNITY_ASSERT_EQUAL_PTR(expected, actual, (msg))
 
 /* Strings: either side may be NULL; NULL never equals a string. */
 #define UNITY_ASSERT_EQUAL_STRING(expected, actual, msg) \
@@ -190,25 +195,38 @@ void tearDown(void);
 #define TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, actual, msg) \
 	UNITY_ASSERT_EQUAL_STRING(expected, actual, (msg))
 
-#define TEST_ASSERT_EQUAL_STRING_LEN(expected, actual, len) \
+#define UNITY_ASSERT_EQUAL_STRING_LEN(expected, actual, len, msg) \
 	do { \
 		const char *_unityE = (const char *)(expected); \
 		const char *_unityA = (const char *)(actual); \
 		int _unityN = (int)(len); \
-		if (strncmp(_unityE, _unityA, (size_t)_unityN) != 0) { \
-			UnityFail(__FILE__, __LINE__, \
+		int _unityP = _unityN < 0 ? 0 : _unityN; \
+		if (_unityE == NULL || _unityA == NULL || \
+		    strncmp(_unityE, _unityA, (size_t)_unityP) != 0) { \
+			UnityFailMsg(__FILE__, __LINE__, (msg), \
 				"Expected '%.*s' Was '%.*s'", \
-				_unityN, _unityE, _unityN, _unityA); \
+				_unityP, _unityE ? _unityE : "(null)", \
+				_unityP, _unityA ? _unityA : "(null)"); \
+		} \
+	} while (0)
+
+#define TEST_ASSERT_EQUAL_STRING_LEN(expected, actual, len) \
+	UNITY_ASSERT_EQUAL_STRING_LEN(expected, actual, (len), NULL)
+#define TEST_ASSERT_EQUAL_STRING_LEN_MESSAGE(expected, actual, len, msg) \
+	UNITY_ASSERT_EQUAL_STRING_LEN(expected, actual, (len), (msg))
+
+#define UNITY_ASSERT_EQUAL_MEMORY(expected, actual, len, msg) \
+	do { \
+		if (memcmp((expected), (actual), (size_t)(len)) != 0) { \
+			UnityFailMsg(__FILE__, __LINE__, (msg), \
+				"Memory differs over %zu bytes", (size_t)(len)); \
 		} \
 	} while (0)
 
 #define TEST_ASSERT_EQUAL_MEMORY(expected, actual, len) \
-	do { \
-		if (memcmp((expected), (actual), (size_t)(len)) != 0) { \
-			UnityFail(__FILE__, __LINE__, \
-				"Memory differs over %zu bytes", (size_t)(len)); \
-		} \
-	} while (0)
+	UNITY_ASSERT_EQUAL_MEMORY(expected, actual, (len), NULL)
+#define TEST_ASSERT_EQUAL_MEMORY_MESSAGE(expected, actual, len, msg) \
+	UNITY_ASSERT_EQUAL_MEMORY(expected, actual, (len), (msg))
 
 /* Floating point: absolute-difference comparison in double precision. */
 #define UNITY_ASSERT_WITHIN(delta, expected, actual, msg) \

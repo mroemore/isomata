@@ -106,5 +106,7 @@ int UnityEnd(void)
 	} else {
 		printf("FAIL\n");
 	}
-	return (g_Unity.testFailures == 0) ? 0 : (int)g_Unity.testFailures;
+	/* meson's exitcode protocol reads the low 8 bits; a raw failure count
+	 * >= 256 would wrap to 0 and pass. Report presence, not magnitude. */
+	return (g_Unity.testFailures == 0) ? 0 : 1;
 }

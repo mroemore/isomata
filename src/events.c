@@ -6,10 +6,11 @@
  * Storage:
  * - queue: fixed ring of capacity slots, each holding one event plus its
  *   payload copy. head/count track the live span.
- * - subs: growable record list. unsubscribes during a running dispatch
- *   deactivate (dead-mark) instead of shifting, so no callback can pull the
- *   iteration cursor off track; dead slots are compacted at dispatch entry
- *   and reused by later subscriptions.
+ * - subs: growable append-only record list. unsubscribes during a running
+ *   dispatch deactivate (dead-mark) instead of shifting, so no callback can
+ *   pull the iteration cursor off track. Dead records are compacted at
+ *   dispatch entry; a new subscriber always APPENDS (a freed slot is never
+ *   reused), which is what keeps subscription order observable.
  */
 
 #include "events.h"

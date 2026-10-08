@@ -75,9 +75,9 @@
  *   updateSceneStack drains it.
  * - destroySceneStack unloads and destroys the live scenes top-down, then
  *   destroys the scenes still queued in unapplied pending ops (those were
- *   never initialized and get no unload), and frees the queue. It passes
- *   a NULL App to unload (like all stack APIs it forwards whatever App
- *   the caller provided; destroy has no App to forward).
+ *   never initialized and get no unload), and frees the queue. It takes no
+ *   App, so it unloads with a NULL App; the other stack APIs forward the App
+ *   their caller passed.
  */
 
 #include <stdbool.h>

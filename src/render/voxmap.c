@@ -242,6 +242,23 @@ bool voxmapIsVoid(const Voxmap *map, int x, int y)
 static const int kSideDx[4] = { 0, 1, 0, -1 };
 static const int kSideDz[4] = { 1, 0, -1, 0 };
 
+/* One-time overflow diagnostic: appendVoxelFace returns false when the draw
+ * list is full, and the face is silently dropped by design (a bounded list
+ * must not grow mid-frame). Report the first drop so vanishing geometry is
+ * diagnosable; later drops stay quiet to avoid per-face log spam. */
+static bool g_faceOverflowReported = false;
+
+static void emitFace(DrawList *list, const float quad[4][3], DrawFace face,
+		     uint32_t tint)
+{
+	if (!appendVoxelFace(list, quad, face, tint) && !g_faceOverflowReported) {
+		g_faceOverflowReported = true;
+		fprintf(stderr,
+			"voxmap: draw list full (%zu items); faces dropped (reported once)\n",
+			drawListCount(list));
+	}
+}
+
 /* The single axis-aligned side facing the camera, or -1 mid-tween. The camera
  * yaw quarter index maps directly to the side direction (yaw 0 sees +Z, 90
  * sees +X, 180 sees -Z, 270 sees -X). */
@@ -268,9 +285,8 @@ static void emitTop(DrawList *list, int x, int z, int height, uint32_t tint)
 		{ (float)x, (float)height, (float)(z + 1) },
 	};
 
-	appendVoxelFace(list, quad, DRAW_FACE_TOP, tint);
+	emitFace(list, quad, DRAW_FACE_TOP, tint);
 }
-
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		     uint32_t tint)
 {
@@ -304,7 +320,7 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
 		break;
 	}
-	appendVoxelFace(list, quad, DRAW_FACE_SIDE, tint);
+	emitFace(list, quad, DRAW_FACE_SIDE, tint);
 }
 
 void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,

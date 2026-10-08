@@ -35,6 +35,12 @@ typedef struct TdlText {
 	int y;
 	char text[TDL_TEXT_MAX];
 	uint32_t rgba;
+	/* Snapshot of the style fields the draw call passed, so a test can
+	 * assert style passthrough (the label/button/menu all forward their
+	 * own TextStyle). pixelSize is -1 when style was NULL. */
+	int stylePixelSize;
+	const UiFont *styleFont;
+	int (*styleMeasureFn)(void *ctx, const char *text, int *w, int *h);
 } TdlText;
 
 typedef struct TestDrawLog {
@@ -70,14 +76,24 @@ static inline void tdl_drawText(UiDrawCtx *ctx, int x, int y, const char *text,
 				const struct TextStyle *style, uint32_t rgba)
 {
 	TestDrawLog *log = tdlLog(ctx);
+	TdlText *slot;
 
-	(void)style;
 	if (log == NULL || log->nTexts >= TDL_MAX_CALLS)
 		return;
-	log->texts[log->nTexts].x = x;
-	log->texts[log->nTexts].y = y;
-	snprintf(log->texts[log->nTexts].text, TDL_TEXT_MAX, "%s", text != NULL ? text : "(null)");
-	log->texts[log->nTexts].rgba = rgba;
+	slot = &log->texts[log->nTexts];
+	slot->x = x;
+	slot->y = y;
+	snprintf(slot->text, TDL_TEXT_MAX, "%s", text != NULL ? text : "(null)");
+	slot->rgba = rgba;
+	if (style != NULL) {
+		slot->stylePixelSize = style->pixelSize;
+		slot->styleFont = style->font;
+		slot->styleMeasureFn = style->measure.fn;
+	} else {
+		slot->stylePixelSize = -1;
+		slot->styleFont = NULL;
+		slot->styleMeasureFn = NULL;
+	}
 	log->nTexts++;
 }
 

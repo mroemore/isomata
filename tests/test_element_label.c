@@ -110,6 +110,12 @@ static void test_draw_calls_draw_text_with_style_and_color(void)
 	TEST_ASSERT_EQUAL_INT(7, log.texts[0].y);
 	TEST_ASSERT_EQUAL_STRING("hi", log.texts[0].text);
 	TEST_ASSERT_EQUAL_UINT(UI_COLOR_TEXT, log.texts[0].rgba);
+	/* Style passthrough: the label forwards its own TextStyle, not a
+	 * default (pixelSize + the injected measure fn are the observable
+	 * fields; font is NULL in a pure test). */
+	TEST_ASSERT_EQUAL_INT(16, log.texts[0].stylePixelSize);
+	TEST_ASSERT_NULL(log.texts[0].styleFont);
+	TEST_ASSERT_TRUE(log.texts[0].styleMeasureFn == measure_8x16);
 
 	uiDestroyElement(label);
 }

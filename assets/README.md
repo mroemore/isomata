@@ -1,4 +1,4 @@
-Runtime assets live here (fonts, etc.), installed next to the desktop binary by meson (install_subdir) and packed into the APK android/src/main/assets as needed.
+Runtime assets live here (fonts, maps, shaders, textures, audio). The desktop build installs this tree next to the binary via meson `install_subdir`; the Android build packs the same tree into the APK through the Gradle source set `assets.srcDirs = ['../../assets']` (`android/app/build.gradle`), not by copying into a checked-in `android/src/main/assets` directory.
 
 ## Fonts
 

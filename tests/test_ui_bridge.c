@@ -203,6 +203,26 @@ static void test_tap_unconsumed_and_absent(void)
 	uiDestroyElement(root);
 }
 
+/* A consumed command no longer swallows a same-frame tap: both the intent and
+ * the tap are delivered, and the call reports consumption. */
+static void test_tap_routes_after_consumed_command(void)
+{
+	BridgeRec *rec;
+	Element *root = makeRec(&rec, true, true);
+	InputFrame frame = frameWith((Command[]){ CMD_SELECT }, 1);
+
+	frame.tap = true;
+	frame.tapX = 7;
+	frame.tapY = 9;
+	TEST_ASSERT_TRUE(uiBridgeDispatch(root, &frame));
+	TEST_ASSERT_EQUAL_INT(1, rec->intentCount);
+	TEST_ASSERT_EQUAL_INT(UI_ACTIVATE, rec->intents[0]);
+	TEST_ASSERT_EQUAL_INT(1, rec->pointerCount);
+	TEST_ASSERT_EQUAL_INT(7, rec->lastX);
+	TEST_ASSERT_EQUAL_INT(9, rec->lastY);
+	uiDestroyElement(root);
+}
+
 /* NULL arguments are safe. */
 static void test_null_safe(void)
 {
@@ -289,6 +309,7 @@ void run_test_ui_bridge(void)
 	RUN_TEST(test_first_consumer_wins);
 	RUN_TEST(test_all_commands_delivered_when_unconsumed);
 	RUN_TEST(test_tap_routed);
+	RUN_TEST(test_tap_routes_after_consumed_command);
 	RUN_TEST(test_tap_unconsumed_and_absent);
 	RUN_TEST(test_null_safe);
 	RUN_TEST(test_menu_integration);

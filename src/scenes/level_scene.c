@@ -127,8 +127,8 @@ static bool level_init(void *self, App *app)
 			     "level_scene: demo map unavailable");
 
 	/* Toast UI. ui/ has no non-drawing container, so a zero-padding pane
-	 * (sized to the toast each frame in levelDrawUi, and not drawn at all
-	 * while the toast is hidden) is the root the toast hangs off. */
+	 * is the layout root the toast hangs off; only the toast is drawn
+	 * (see levelDrawUi), so the pane's opaque fill never backs the fade. */
 	st->root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
 	st->toast = uiCreateToast(&style);
 	if (st->root == NULL || st->toast == NULL) {
@@ -224,9 +224,12 @@ static void level_update(void *self, App *app, float dt)
 	toastUpdate(st->toast, dt);
 }
 
-/* Draw the toast UI on top of the world, centred near the top edge. Nothing
- * is drawn while the toast is hidden (so the root pane never paints a
- * persistent backdrop). */
+/* Draw the toast UI on top of the world, centred near the top edge. The pane
+ * root is a layout container only and is NOT drawn: its draw() paints a
+ * constant opaque UI_COLOR_BACKGROUND fill, which would sit behind the
+ * toast's alpha-scaled fill and make the box snap from full opacity to gone
+ * at HIDDEN instead of fading. Drawing the toast alone lets its fill and text
+ * fade together. Nothing is drawn while the toast is hidden. */
 static void levelDrawUi(LevelState *st, App *app)
 {
 	UiDrawCtx *ctx = appUiDrawCtx(app);
@@ -247,7 +250,7 @@ static void levelDrawUi(LevelState *st, App *app)
 	uiSetRect(st->root, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
 	uiSetRect(st->toast, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
 	uiLayout(st->root);
-	uiDraw(st->root, ctx);
+	uiDraw(st->toast, ctx);
 }
 
 static void level_draw(void *self, App *app)
