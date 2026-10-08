@@ -46,10 +46,10 @@ static Camera3D cameraAtYaw(float yawDeg)
 
 	initCamera3D(&camera);
 	if (yawDeg != 0.0f) {
-		int turns = (int)(yawDeg / 90.0f);
+		int steps = (int)(yawDeg / CAMERA_STEP_DEG);
 
-		while (turns-- > 0) {
-			cameraRotateQuarterTurn(&camera, 1);
+		while (steps-- > 0) {
+			cameraRotateStep(&camera, 1);
 			updateCamera3D(&camera, CAMERA_TURN_SECONDS);
 		}
 	}

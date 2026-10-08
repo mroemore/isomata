@@ -8,9 +8,10 @@
  * Model:
  * - The camera orbits a ground-plane look-at point (targetX, targetZ, 0)
  *   at a fixed true-isometric pitch of CAMERA_DEFAULT_PITCH_DEG, from
- *   CAMERA_DISTANCE away. `yaw` rotates that orbit about +Y; quarter turns
- *   are tweened over CAMERA_TURN_SECONDS and compose while one is in
- *   flight. The public yaw is normalized to [0, 360).
+ *   CAMERA_DISTANCE away. `yaw` rotates that orbit about +Y; a step is
+ *   CAMERA_STEP_DEG (45 degrees), tweened over CAMERA_TURN_SECONDS and
+ *   composing while one is in flight. The public yaw is normalized to
+ *   [0, 360) and rests at 45-degree multiples.
  * - cameraProjection is orthographic: the visible half-height is
  *   CAMERA_BASE_HALF_HEIGHT / zoom, the half-width follows the aspect.
  *   Larger zoom = more magnified (a smaller view volume).
@@ -31,7 +32,8 @@
 #include "render/math3d.h"
 
 #define CAMERA_DEFAULT_PITCH_DEG 35.264f	/* true isometric: atan(1/sqrt 2) */
-#define CAMERA_TURN_SECONDS 0.25f		/* one 90-degree tween */
+#define CAMERA_STEP_DEG 45.0f			/* one rotate press */
+#define CAMERA_TURN_SECONDS 0.25f		/* one 45-degree step tween */
 #define CAMERA_ZOOM_MIN 0.25f
 #define CAMERA_ZOOM_MAX 4.0f
 #define CAMERA_ZOOM_DEFAULT 1.0f
@@ -53,12 +55,19 @@ typedef struct Camera3D {
 	float targetZ;
 } Camera3D;
 
-/* Initialize to yaw 0, zoom 1, target at the origin. NULL is a no-op. */
+/* Initialize to yaw 0, zoom CAMERA_ZOOM_DEFAULT, target at the origin (the
+ * startup state cameraReset restores). NULL is a no-op. */
 void initCamera3D(Camera3D *camera);
 
-/* Record a quarter turn: direction > 0 is +90 degrees, < 0 is -90, 0 is a
- * no-op. Calls during a tween compose onto the pending target. */
-void cameraRotateQuarterTurn(Camera3D *camera, int direction);
+/* Record a rotate step of CAMERA_STEP_DEG: direction > 0 is +45 degrees,
+ * < 0 is -45, 0 is a no-op. Calls during a tween compose onto the pending
+ * target. */
+void cameraRotateStep(Camera3D *camera, int direction);
+
+/* Instantly restore the startup state: yaw 0, zoom CAMERA_ZOOM_DEFAULT,
+ * target at the origin, no tween pending. No tween is started (unlike
+ * cameraRotateStep); NULL is a no-op. */
+void cameraReset(Camera3D *camera);
 
 /* Advance the yaw tween by dt seconds. Idle when no tween is pending. */
 void updateCamera3D(Camera3D *camera, float dt);

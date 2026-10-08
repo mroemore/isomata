@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PI_F 3.14159265358979323846f
+
 struct Voxmap {
 	int width;
 	int depth;
@@ -259,21 +261,27 @@ static void emitFace(DrawList *list, const float quad[4][3], DrawFace face,
 	}
 }
 
-/* The single axis-aligned side facing the camera, or -1 mid-tween. The camera
- * yaw quarter index maps directly to the side direction (yaw 0 sees +Z, 90
- * sees +X, 180 sees -Z, 270 sees -X). */
-static int facingSide(float yawDeg)
+/* Unit ground-plane direction from the target toward the camera, for yaw
+ * degrees. The camera sits at target + (sin yaw, cos yaw) * cos(pitch) *
+ * CAMERA_DISTANCE (see cameraView), so the horizontal direction is
+ * (sin yaw, cos yaw). */
+static void cameraGroundDir(float yawDeg, float *outX, float *outZ)
 {
-	float quarters = yawDeg / 90.0f;
-	float nearest = roundf(quarters);
-	int side;
+	float yawRad = yawDeg * (PI_F / 180.0f);
 
-	if (fabsf(quarters - nearest) > 1e-3f)
-		return -1;
-	side = (int)nearest % 4;
-	if (side < 0)
-		side += 4;
-	return side;
+	*outX = sinf(yawRad);
+	*outZ = cosf(yawRad);
+}
+
+/* True when the side with outward normal (kSideDx[dir], kSideDz[dir]) faces
+ * away from the camera and is culled: dot(n, toCameraGround) <=
+ * CAMERA_CULL_EPS. An edge-on side has dot exactly 0, so it is culled. */
+static bool sideCulled(int dir, float toCamX, float toCamZ)
+{
+	float dot = (float)kSideDx[dir] * toCamX +
+		    (float)kSideDz[dir] * toCamZ;
+
+	return dot <= CAMERA_CULL_EPS;
 }
 
 static void emitTop(DrawList *list, int x, int z, int height, uint32_t tint)
@@ -326,14 +334,15 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
 		     uint32_t tint)
 {
-	int facing;
+	float toCamX;
+	float toCamZ;
 	int x;
 	int z;
 	int dir;
 
 	if (map == NULL || list == NULL)
 		return;
-	facing = facingSide(cameraYawDeg(camera));
+	cameraGroundDir(cameraYawDeg(camera), &toCamX, &toCamZ);
 	for (z = 0; z < map->depth; z++) {
 		for (x = 0; x < map->width; x++) {
 			int height = map->cells[(size_t)z * map->width + x];
@@ -344,7 +353,7 @@ void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
 			for (dir = 0; dir < 4; dir++) {
 				int neighbour;
 
-				if (facing >= 0 && dir != facing)
+				if (sideCulled(dir, toCamX, toCamZ))
 					continue;	/* cull away-facing sides */
 				neighbour = voxmapHeightAt(
 					map, x + kSideDx[dir], z + kSideDz[dir]);

@@ -2,10 +2,11 @@
  * Camera3D tests (CTOL rung 1: unit + boundary).
  *
  * Pins the isometric camera: the true-isometric default pitch, the
- * orthographic projection (exact entries at zoom 1 and zoom 2), quarter-
- * turn yaw tweening and mod-360 normalization, zoom multiplicative steps
- * with the [0.25, 4.0] clamp, and screen-relative ground panning at yaw 0
- * and yaw 90 (the two axis-aligned cases that fix the sign convention).
+ * orthographic projection (exact entries at zoom 1 and zoom 2), 45-degree
+ * step yaw tweening and mod-360 normalization, instant reset to the startup
+ * state, zoom multiplicative steps with the [0.25, 4.0] clamp, and
+ * screen-relative ground panning at yaw 0 and yaw 90 (the two axis-aligned
+ * cases that fix the sign convention).
  *
  * Pure: links only camera3d.c/math3d.c plus the Unity subset; no SDL.
  * Harness convention: no main()/setUp()/tearDown(); exposes
@@ -63,85 +64,135 @@ static void test_defaults_are_true_isometric(void)
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.81650f, view.m[5]);
 }
 
-/* A quarter turn is deferred (the tween starts at 0 and runs over
- * CAMERA_TURN_SECONDS); a full tween completes exactly at 90 and the
- * exposed yaw is normalized mod 360 (four turns = 0, five turns = 90). */
-static void test_quarter_turn_completes_and_normalizes(void)
+/* A step is 45 degrees; the macro is the single source of that angle. */
+static void test_step_is_45_degrees(void)
 {
 	Camera3D c = freshCamera();
 
-	cameraRotateQuarterTurn(&c, 1);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, CAMERA_STEP_DEG);
+	cameraRotateStep(&c, 1);
+	updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&c));
+}
+
+/* A step is deferred (the tween starts at 0 and runs over
+ * CAMERA_TURN_SECONDS); a full tween completes exactly at one step and the
+ * exposed yaw is normalized mod 360 (eight steps = 0, nine steps = 45). */
+static void test_step_completes_and_normalizes(void)
+{
+	Camera3D c = freshCamera();
+	int i;
+
+	cameraRotateStep(&c, 1);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));	/* deferred */
 	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, CAMERA_STEP_DEG * 0.5f,
+				 cameraYawDeg(&c));
 	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, CAMERA_STEP_DEG, cameraYawDeg(&c));
 
-	/* Three more turns -> 360 -> 0. */
-	cameraRotateQuarterTurn(&c, 1);
+	/* Seven more steps -> 45 + 7*45 = 360 -> 0. */
+	for (i = 0; i < 7; i++) {
+		cameraRotateStep(&c, 1);
+		updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	}
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, cameraYawDeg(&c));
+
+	/* A ninth step -> 45. */
+	cameraRotateStep(&c, 1);
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	cameraRotateQuarterTurn(&c, 1);
-	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	cameraRotateQuarterTurn(&c, 1);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, CAMERA_STEP_DEG, cameraYawDeg(&c));
+
+	/* Negative steps normalize into [0, 360). */
+	cameraRotateStep(&c, -1);
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, cameraYawDeg(&c));
 
-	/* A fifth turn -> 450 -> 90. */
-	cameraRotateQuarterTurn(&c, 1);
-	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
-
-	/* Negative turns normalize into [0, 360). */
-	cameraRotateQuarterTurn(&c, -1);
-	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, cameraYawDeg(&c));
-
-	/* A negative accumulated yaw wraps up into range (-90 -> 270). */
+	/* A negative accumulated yaw wraps up into range (-45 -> 315). */
 	{
 		Camera3D d = freshCamera();
 
-		cameraRotateQuarterTurn(&d, -1);
+		cameraRotateStep(&d, -1);
 		updateCamera3D(&d, CAMERA_TURN_SECONDS);
-		TEST_ASSERT_FLOAT_WITHIN(1e-3f, 270.0f, cameraYawDeg(&d));
+		TEST_ASSERT_FLOAT_WITHIN(1e-3f, 360.0f - CAMERA_STEP_DEG,
+					 cameraYawDeg(&d));
 	}
 
 	/* An update that overshoots the duration clamps to the target. */
 	{
 		Camera3D e = freshCamera();
 
-		cameraRotateQuarterTurn(&e, 1);
+		cameraRotateStep(&e, 1);
 		updateCamera3D(&e, CAMERA_TURN_SECONDS * 2.0f);
-		TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&e));
+		TEST_ASSERT_FLOAT_WITHIN(1e-3f, CAMERA_STEP_DEG, cameraYawDeg(&e));
 	}
 }
 
-/* A second quarter-turn mid-tween composes onto the pending target: the
- * final yaw is 180, not 90. */
-static void test_quarter_turn_composes_during_tween(void)
+/* A second step mid-tween composes onto the pending target: the final yaw
+ * is 90, not 45. */
+static void test_step_composes_during_tween(void)
 {
 	Camera3D c = freshCamera();
 
-	cameraRotateQuarterTurn(&c, 1);
-	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);	/* at 45 */
-	cameraRotateQuarterTurn(&c, 1);			/* target 180 */
+	cameraRotateStep(&c, 1);
+	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);	/* at 22.5 */
+	cameraRotateStep(&c, 1);			/* target 90 */
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);	/* finish */
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 180.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
 
 	/* An idle update is a no-op. */
 	updateCamera3D(&c, 1.0f);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 180.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
 
 	/* A negative dt clamps to the tween start (never rewinds past it). */
-	cameraRotateQuarterTurn(&c, 1);		/* target 270 */
+	cameraRotateStep(&c, 1);		/* target 135 */
 	updateCamera3D(&c, -5.0f);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 180.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 270.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 135.0f, cameraYawDeg(&c));
 
-	/* A zero-direction turn records nothing. */
-	cameraRotateQuarterTurn(&c, 0);
+	/* A zero-direction step records nothing. */
+	cameraRotateStep(&c, 0);
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 270.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 135.0f, cameraYawDeg(&c));
+}
+
+/* Reset is instant and restores the exact startup state (yaw 0, default
+ * zoom, target origin, no tween pending). */
+static void test_reset_restores_startup_state(void)
+{
+	Camera3D c = freshCamera();
+	float x = 99.0f;
+	float z = 99.0f;
+
+	cameraRotateStep(&c, 1);
+	updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	cameraZoom(&c, 2.0f);
+	cameraPan(&c, 5.0f, 6.0f);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&c));
+
+	cameraReset(&c);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, CAMERA_ZOOM_DEFAULT, cameraZoomLevel(&c));
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
+
+	/* No tween is pending: an update does not move the yaw. */
+	updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));
+}
+
+/* Reset mid-tween cancels the pending target (it does not land on it). */
+static void test_reset_cancels_pending_tween(void)
+{
+	Camera3D c = freshCamera();
+
+	cameraRotateStep(&c, 1);		/* target 45, not yet applied */
+	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);
+	cameraReset(&c);
+	updateCamera3D(&c, CAMERA_TURN_SECONDS * 2.0f);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));
 }
 
 /* cameraTarget fills each out pointer independently. */
@@ -198,7 +249,9 @@ static void test_pan_at_yaw_ninety(void)
 	float x = 0.0f;
 	float z = 0.0f;
 
-	cameraRotateQuarterTurn(&c, 1);
+	cameraRotateStep(&c, 1);
+	updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	cameraRotateStep(&c, 1);
 	updateCamera3D(&c, CAMERA_TURN_SECONDS);
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
 
@@ -290,7 +343,8 @@ static void test_null_arguments_are_safe(void)
 	Mat4 v;
 
 	initCamera3D(NULL);
-	cameraRotateQuarterTurn(NULL, 1);
+	cameraRotateStep(NULL, 1);
+	cameraReset(NULL);
 	updateCamera3D(NULL, 1.0f);
 	cameraZoom(NULL, 1.0f);
 	cameraPan(NULL, 1.0f, 1.0f);
@@ -312,8 +366,11 @@ void run_test_camera(void);
 void run_test_camera(void)
 {
 	RUN_TEST(test_defaults_are_true_isometric);
-	RUN_TEST(test_quarter_turn_completes_and_normalizes);
-	RUN_TEST(test_quarter_turn_composes_during_tween);
+	RUN_TEST(test_step_is_45_degrees);
+	RUN_TEST(test_step_completes_and_normalizes);
+	RUN_TEST(test_step_composes_during_tween);
+	RUN_TEST(test_reset_restores_startup_state);
+	RUN_TEST(test_reset_cancels_pending_tween);
 	RUN_TEST(test_target_getters_partial);
 	RUN_TEST(test_zoom_multiplicative_and_clamped);
 	RUN_TEST(test_pan_at_yaw_zero);

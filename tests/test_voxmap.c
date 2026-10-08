@@ -6,7 +6,9 @@
  * are tolerated and blank lines ignored; ragged/empty/over-large maps fail;
  * the height query returns -1 for void / out-of-bounds / NULL and 0..9 for a
  * real cell; and face generation emits a top face per non-void column plus the
- * exposed side faces, culled to the camera-facing side at axis-aligned yaw.
+ * exposed side faces, culled by the dot-product test against the camera's
+ * ground direction (one side at an axis-aligned yaw, two at 45 degrees,
+ * continuous through a tween).
  *
  * Pure: links only voxmap.c (+ drawlist/camera deps) and the Unity subset.
  * Harness convention: no main()/setUp()/tearDown(); exposes run_test_voxmap().
@@ -18,6 +20,7 @@
 #include "render/drawlist.h"
 #include "render/voxmap.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -129,6 +132,76 @@ static void test_malformed_maps_fail(void)
 	TEST_ASSERT_NULL(loadVoxmap(".tmp_files/definitely_missing_xyz.txt"));
 }
 
+/* Which side a face is, from its world quad: 0 = +Z, 1 = +X, 2 = -Z,
+ * 3 = -X (voxmap.c's kSideDx/kSideDz order). Side quads have exactly one
+ * coordinate constant (x = 0/1 or z = 0/1); the corner values are exact
+ * integers, so the comparison is exact. */
+static int sideDirOf(const DrawItem *item)
+{
+	bool x1 = true;
+	bool z0 = true;
+	bool z1 = true;
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		if (item->worldQuad[i][0] != 1.0f)
+			x1 = false;
+		if (item->worldQuad[i][2] != 0.0f)
+			z0 = false;
+		if (item->worldQuad[i][2] != 1.0f)
+			z1 = false;
+	}
+	if (z1)
+		return 0;
+	if (x1)
+		return 1;
+	if (z0)
+		return 2;
+	return 3;
+}
+
+/* Emit a single-column map at `yawDeg` (a multiple of 45) and report which
+ * of the four sides were emitted plus the top-face count. */
+static void emitColumnAtYaw(float yawDeg, bool sides[4], int *tops)
+{
+	Voxmap *map = loadTemp("vm_cull.txt", "2\n");
+	DrawList list;
+	Camera3D camera;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);
+	if (yawDeg != 0.0f) {
+		int steps = (int)lroundf(yawDeg / CAMERA_STEP_DEG);
+
+		while (steps-- > 0) {
+			cameraRotateStep(&camera, 1);
+			updateCamera3D(&camera, CAMERA_TURN_SECONDS);
+		}
+	}
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, yawDeg, cameraYawDeg(&camera));
+
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(1, 2, 3, 4));
+
+	sides[0] = sides[1] = sides[2] = sides[3] = false;
+	*tops = 0;
+	{
+		const float side[4][2] = ATLAS_UV_SIDE;
+
+		for (i = 0; i < drawListCount(&list); i++) {
+			const DrawItem *item = drawListItem(&list, i);
+
+			if (memcmp(item->uv, side, sizeof(side)) == 0)
+				sides[sideDirOf(item)] = true;
+			else
+				(*tops)++;
+		}
+	}
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 /* A single height-2 column at axis-aligned yaw 0: one top face plus the one
  * exposed camera-facing (+Z) side. */
 static void test_faces_single_column_yaw_zero(void)
@@ -173,25 +246,114 @@ static void test_faces_single_column_yaw_zero(void)
 	destroyVoxmap(map);
 }
 
-/* Mid-tween (non-axis yaw) emits all four exposed sides: 1 top + 4 sides. */
-static void test_faces_non_axis_yaw_emits_all_sides(void)
+/* The cull set at every 45-degree rest yaw. A single column exposes all
+ * four sides, so the emitted set is exactly the sides whose outward normal
+ * has a positive dot with the ground direction toward the camera. */
+static void test_faces_cull_set_at_rest_yaws(void)
 {
-	Voxmap *map = loadTemp("vm_col2.txt", "3\n");
+	static const struct {
+		float yaw;
+		bool expect[4];	/* +Z, +X, -Z, -X */
+	} cases[] = {
+		{ 0.0f,   { true,  false, false, false } },	/* +Z */
+		{ 45.0f,  { true,  true,  false, false } },	/* +Z +X */
+		{ 90.0f,  { false, true,  false, false } },	/* +X */
+		{ 135.0f, { false, true,  true,  false } },	/* +X -Z */
+		{ 180.0f, { false, false, true,  false } },	/* -Z */
+		{ 225.0f, { false, false, true,  true  } },	/* -Z -X */
+		{ 270.0f, { false, false, false, true  } },	/* -X */
+		{ 315.0f, { true,  false, false, true  } },	/* +Z -X */
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		bool sides[4];
+		int tops = 0;
+		int d;
+
+		emitColumnAtYaw(cases[i].yaw, sides, &tops);
+		TEST_ASSERT_EQUAL_INT(1, tops);
+		for (d = 0; d < 4; d++)
+			TEST_ASSERT_EQUAL_INT(cases[i].expect[d], sides[d]);
+	}
+}
+
+/* At a 45-degree rest yaw two sides face the camera (+Z and +X): 1 top +
+ * 2 sides. */
+static void test_faces_yaw45_emits_two_sides(void)
+{
+	bool sides[4];
+	int tops = 0;
+
+	emitColumnAtYaw(45.0f, sides, &tops);
+	TEST_ASSERT_EQUAL_INT(1, tops);
+	TEST_ASSERT_TRUE(sides[0]);
+	TEST_ASSERT_TRUE(sides[1]);
+	TEST_ASSERT_FALSE(sides[2]);
+	TEST_ASSERT_FALSE(sides[3]);
+}
+
+/* Mid-tween the rule is continuous: at 22.5 degrees +Z and +X still face
+ * the camera while -Z and -X are culled (no all-sides special case). */
+static void test_faces_cull_mid_tween_yaw(void)
+{
+	Voxmap *map = loadTemp("vm_cull_mid.txt", "2\n");
 	DrawList list;
 	Camera3D camera;
+	bool sides[4] = { false, false, false, false };
+	int tops = 0;
+	size_t i;
 
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	cameraRotateQuarterTurn(&camera, 1);
-	updateCamera3D(&camera, CAMERA_TURN_SECONDS * 0.5f);	/* yaw 45 */
-	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&camera));
+	cameraRotateStep(&camera, 1);
+	updateCamera3D(&camera, CAMERA_TURN_SECONDS * 0.5f);	/* yaw 22.5 */
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 22.5f, cameraYawDeg(&camera));
 
 	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(1, 2, 3, 4));
-	TEST_ASSERT_EQUAL_INT(5, drawListCount(&list));
+	{
+		const float side[4][2] = ATLAS_UV_SIDE;
+
+		for (i = 0; i < drawListCount(&list); i++) {
+			const DrawItem *item = drawListItem(&list, i);
+
+			if (memcmp(item->uv, side, sizeof(side)) == 0)
+				sides[sideDirOf(item)] = true;
+			else
+				tops++;
+		}
+	}
+	TEST_ASSERT_EQUAL_INT(1, tops);
+	TEST_ASSERT_TRUE(sides[0]);
+	TEST_ASSERT_TRUE(sides[1]);
+	TEST_ASSERT_FALSE(sides[2]);
+	TEST_ASSERT_FALSE(sides[3]);
+	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
 
 	destroyDrawList(&list);
 	destroyVoxmap(map);
+}
+
+/* At an axis-aligned yaw the two edge-on sides have dot(n, toCameraGround)
+ * exactly 0, which the <= CAMERA_CULL_EPS rule culls: only the one facing
+ * side survives. */
+static void test_faces_edge_on_side_culled(void)
+{
+	bool sides[4];
+	int tops = 0;
+
+	emitColumnAtYaw(0.0f, sides, &tops);
+	TEST_ASSERT_TRUE(sides[0]);	/* +Z faces the camera */
+	TEST_ASSERT_FALSE(sides[1]);	/* +X edge-on (dot 0): culled */
+	TEST_ASSERT_FALSE(sides[2]);
+	TEST_ASSERT_FALSE(sides[3]);	/* -X edge-on (dot 0): culled */
+
+	emitColumnAtYaw(90.0f, sides, &tops);
+	TEST_ASSERT_TRUE(sides[1]);
+	TEST_ASSERT_FALSE(sides[0]);	/* +Z edge-on at yaw 90: culled */
+	TEST_ASSERT_FALSE(sides[2]);
+	TEST_ASSERT_FALSE(sides[3]);
 }
 
 /* A side is emitted only when the neighbour is lower; a same-height +Z
@@ -417,7 +579,10 @@ void run_test_voxmap(void)
 	RUN_TEST(test_parse_memory_void_and_zero);
 	RUN_TEST(test_parse_memory_rejects_bad_input);
 	RUN_TEST(test_faces_single_column_yaw_zero);
-	RUN_TEST(test_faces_non_axis_yaw_emits_all_sides);
+	RUN_TEST(test_faces_cull_set_at_rest_yaws);
+	RUN_TEST(test_faces_yaw45_emits_two_sides);
+	RUN_TEST(test_faces_cull_mid_tween_yaw);
+	RUN_TEST(test_faces_edge_on_side_culled);
 	RUN_TEST(test_faces_cull_hidden_side);
 	RUN_TEST(test_faces_void_cell_and_null_list);
 	RUN_TEST(test_faces_overflow_drops_and_reports_once);

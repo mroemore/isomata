@@ -5,7 +5,7 @@
  * commands from the InputFrame.
  *
  * Task 10 event wiring:
- * - Every successful camera quarter turn publishes EV_GAMEPLAY_CAMERA_TURNED
+ * - Every successful camera rotation step publishes EV_GAMEPLAY_CAMERA_TURNED
  *   (topic EV_TOPIC_GAMEPLAY) and an EV_AUDIO_PLAY request for the rotate
  *   sound.
  * - The scene subscribes to EV_TOPIC_ACHIEVEMENT; an EV_ACHIEVEMENT_UNLOCKED
@@ -53,7 +53,7 @@ typedef struct LevelState {
 	size_t spriteCount;
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
-	int quarterTurns;	/* running count of applied quarter turns */
+	int rotationSteps;	/* running count of applied 45-degree steps */
 	Element *root;		/* UI root (a transparent container for the toast) */
 	Element *toast;
 } LevelState;
@@ -161,9 +161,9 @@ static void levelPublishTurn(LevelState *st, int direction)
 	GameplayCameraTurn turn;
 	AudioPlayRequest play = { SOUND_ROTATE };
 
-	st->quarterTurns++;
+	st->rotationSteps++;
 	turn.direction = direction;
-	turn.quarter = st->quarterTurns;
+	turn.step = st->rotationSteps;
 	/* NULL bus is tolerated by publishEvent (returns false). */
 	publishEvent(st->bus, EV_TOPIC_GAMEPLAY, EV_GAMEPLAY_CAMERA_TURNED,
 		     &turn, sizeof(turn));
@@ -175,11 +175,11 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 {
 	switch (cmd) {
 	case CMD_ROTATE_CW:
-		cameraRotateQuarterTurn(&st->camera, 1);
+		cameraRotateStep(&st->camera, 1);
 		levelPublishTurn(st, 1);
 		break;
 	case CMD_ROTATE_CCW:
-		cameraRotateQuarterTurn(&st->camera, -1);
+		cameraRotateStep(&st->camera, -1);
 		levelPublishTurn(st, -1);
 		break;
 	case CMD_ZOOM_IN:

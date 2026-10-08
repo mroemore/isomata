@@ -28,9 +28,13 @@
  *
  * Face generation: for each non-void column, the top face at y = height plus
  * the exposed side faces (a side is exposed when the neighbour's height is
- * lower; a void or out-of-bounds neighbour counts as height 0). At an
- * axis-aligned camera yaw (0/90/180/270) only the one side facing the camera
- * is emitted; during a tween (any other yaw) all exposed sides are emitted.
+ * lower; a void or out-of-bounds neighbour counts as height 0). A side with
+ * outward normal n is CULLED when dot(n, toCameraGround) <= CAMERA_CULL_EPS,
+ * where toCameraGround is the unit ground-plane direction from the target
+ * toward the camera (the negative of the camera's ground forward). The test
+ * is continuous: at an axis-aligned yaw exactly one side emits (the two
+ * edge-on sides have dot 0 and are culled), at 45 degrees two sides emit,
+ * and a tween moves smoothly between them. Top faces always emit.
  */
 
 #include "render/camera3d.h"
@@ -40,6 +44,9 @@
 #include <stdint.h>
 
 #define VOXMAP_MAX_DIM 256
+/* A side at dot <= this faces away from the camera. Non-zero so float noise
+ * at an exactly edge-on (dot 0) side still culls it. */
+#define CAMERA_CULL_EPS 1e-4f
 
 typedef struct Voxmap Voxmap;
 

@@ -39,17 +39,25 @@ void initCamera3D(Camera3D *camera)
 	camera->targetZ = 0.0f;
 }
 
-void cameraRotateQuarterTurn(Camera3D *camera, int direction)
+void cameraRotateStep(Camera3D *camera, int direction)
 {
 	if (camera == NULL || direction == 0)
 		return;
 	/* Accumulate onto the pending target so a second call mid-tween
 	 * composes, then re-anchor the interpolation from where the yaw
 	 * currently is. */
-	camera->yawTargetDeg += direction > 0 ? 90.0f : -90.0f;
+	camera->yawTargetDeg +=
+		direction > 0 ? CAMERA_STEP_DEG : -CAMERA_STEP_DEG;
 	camera->yawFromDeg = camera->yawDeg;
 	camera->tweenElapsed = 0.0f;
 	camera->tweenDuration = CAMERA_TURN_SECONDS;
+}
+
+void cameraReset(Camera3D *camera)
+{
+	/* The startup state is exactly initCamera3D's contract, and a reset
+	 * must be instant: re-initializing clears any pending tween. */
+	initCamera3D(camera);
 }
 
 void updateCamera3D(Camera3D *camera, float dt)

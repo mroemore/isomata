@@ -10,8 +10,8 @@
  * level publishes through the app's event bus.
  *
  * Event vocabulary (topic EV_TOPIC_GAMEPLAY, per-topic types start at 0):
- * the level owns the camera-turn event it emits on every successful quarter
- * turn. The bus copies the GameplayCameraTurn payload at publish time.
+ * the level owns the camera-turn event it emits on every successful rotation
+ * step. The bus copies the GameplayCameraTurn payload at publish time.
  */
 
 #include "scene.h"
@@ -22,12 +22,12 @@ enum {
 };
 
 /* Payload for EV_GAMEPLAY_CAMERA_TURNED. `direction` is +1 clockwise, -1
- * counter-clockwise (never 0: only a successful turn is published);
- * `quarter` is the 1-based running count of quarter turns the level has
- * applied (monotonic). */
+ * counter-clockwise (never 0: only a successful step is published); `step`
+ * is the 1-based running count of 45-degree steps the level has applied
+ * (monotonic). */
 typedef struct GameplayCameraTurn {
 	int direction;
-	int quarter;
+	int step;
 } GameplayCameraTurn;
 
 Scene *levelSceneCreate(void);
