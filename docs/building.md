@@ -113,7 +113,7 @@ its vendored FreeType, without harfbuzz/plutosvg.
 ### What *is* verified for ARM
 
 - **The pure engine test suite cross-compiles and runs on aarch64 and armhf**
-  under QEMU (208 tests, 0 failures). Built static and run with
+  under QEMU (210 tests, 0 failures). Built static and run with
   `qemu-aarch64-static` / `qemu-arm`.
 - **Every SDL-tier translation unit compiles clean for aarch64 and armhf**
   (`-Wall -Wextra -Werror`).

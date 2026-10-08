@@ -66,14 +66,16 @@ meson setup build-aarch64 --cross-file cross/aarch64.ini
 meson setup build-armhf  --cross-file cross/armhf.ini
 ```
 
-On this box the Meson cross *configure* stops at `dependency('sdl3')`: there
-is no target-side SDL3 pkg-config/sysroot, so the full ARM app cannot link.
-The code itself is verified for ARM instead: the headless pure test suite
-cross-compiles to a static aarch64/armhf binary and runs under
-`qemu-aarch64-static` / `qemu-arm` (208 tests, 0 failures), and every
-SDL-tier translation unit compiles clean for both targets. See
-[docs/building.md](docs/building.md#arm-linux-cross-builds) for the exact
-commands and the remaining prerequisites for a full app cross-build.
+SDL3 is not packaged for the targets, so a full app cross-build needs a
+target sysroot first. For **aarch64 this is verified end-to-end**:
+`cross/build-sdl3-aarch64.sh` builds the SDL3/SDL3_ttf sysroot, the app
+links, and the headless smoke runs under `qemu-aarch64-static` (exit 0).
+For **armhf**, the code is verified by the headless pure test suite: it
+cross-compiles to a static binary and runs under `qemu-arm` (210 tests,
+0 failures), and every SDL-tier translation unit compiles clean; a full
+armhf app link needs the equivalent sysroot (mirror the aarch64 script).
+See [docs/building.md](docs/building.md#arm-linux-cross-builds) for the
+exact commands and prerequisites.
 
 ### Android
 
