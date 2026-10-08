@@ -243,10 +243,25 @@ Verified on the `pwnky_test` AVD (android-34, x86_64, SwiftShader Vulkan):
 - **Android Back** works: it pops the settings overlay and, from the level,
   opens the pause overlay.
 - The slice navigates menu → settings → level → pause without crashing.
+- The **level renders the voxel terrain** (the demo heightmap: plateau,
+  trench, stepped elevations) plus the billboard sprites — screenshot taken.
 
-Known gap (see below): the **level terrain does not load on Android** because
-the pure `voxmap.c` reads the map with C stdio `fopen`, which cannot read APK
-assets. The level still runs and draws its billboard sprites.
+### Asset loading (Android)
+
+Every asset load goes through SDL's asset-aware I/O, which resolves APK assets
+by relative name (plain C stdio `fopen` cannot see them):
+
+| Asset | Reader | Android-safe |
+|-------|--------|--------------|
+| shaders (`world.*.spv`) | `SDL_LoadFile` (`gpu_backend.c`) | yes |
+| texture (`placeholder.png`) | `SDL_LoadPNG` (`gpu_backend.c`) | yes |
+| font (`KiwiSoda.ttf`) | `TTF_OpenFont` → `SDL_IOFromFile` (`ui_font.c`/`ui_gpu.c`) | yes |
+| audio (`*.wav`) | `SDL_LoadWAV` (`audio.c`) | yes |
+| map (`demo.txt`) | `SDL_LoadFile` + `parseVoxmapText` (`level_scene.c`) | yes |
+
+`voxmap.c` keeps its pure `loadVoxmap(path)` (stdio) for desktop/tests, but the
+SDL tier loads the map with `SDL_LoadFile` and parses it with the pure,
+length-bounded `parseVoxmapText()` — so no Android path uses `fopen`.
 
 ---
 
@@ -257,16 +272,11 @@ assets. The level still runs and draws its billboard sprites.
   `gpu_backend: ... No supported SDL_GPU backend found` and (outside smoke
   mode) exits. The emulator's `swiftshader_indirect` GPU provides Vulkan and is
   what the runtime check above used.
-- **Android map asset (stdio) gap.** `src/render/voxmap.c` is a pure module
-  and loads the demo map with `fopen`, so on Android the APK asset
-  `maps/demo.txt` is not found (`level_scene: demo map unavailable`; the level
-  then renders without terrain). The shaders, texture, font, and audio load
-  correctly because their readers go through SDL I/O
-  (`SDL_LoadFile`/`SDL_LoadPNG`/`TTF_OpenFont`/`SDL_LoadWAV`), which resolves
-  APK assets. Fixing the map requires routing pure-module file reads through an
-  SDL-IO-capable seam (e.g. a platform read-file function, or a
-  `loadVoxmapFromMemory` that the SDL tier feeds from `SDL_LoadFile`), which
-  also needs new pure-suite coverage.
+- **Asset I/O convention.** Asset readers must use SDL I/O
+  (`SDL_LoadFile`/`SDL_LoadPNG`/`SDL_LoadWAV`/`TTF_OpenFont`), not C stdio
+  `fopen`, because APK assets are not filesystem files. The pure modules keep
+  stdio readers for desktop/tests (`voxmap.c`'s `loadVoxmap`); the SDL tier
+  feeds them from `SDL_LoadFile` (map) — see the Asset loading table above.
 - **AARs are untracked.** `android/app/libs/*.aar` is gitignored; a fresh
   checkout must fetch them (see above). The APK build fails with the exact
   missing-dependency message until they are present.

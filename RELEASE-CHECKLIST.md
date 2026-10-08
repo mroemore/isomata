@@ -37,10 +37,10 @@ check; this proves the feature is right.
 - [ ] **Android**: fetch the SDL3 + SDL3_ttf AARs into `android/app/libs/`,
       `./gradlew :app:assembleDebug`, and confirm the APK contains both ABIs'
       `libmain.so` + assets (`unzip -l`). Install on an emulator/device and
-      walk menu → settings → level → pause; Android Back and touch are the
-      two platform-specific inputs to check. Known gap: the level terrain does
-      not load on Android (pure `voxmap.c` uses stdio `fopen`, which cannot
-      read APK assets) — see `docs/building.md`.
+      walk menu → settings → level → pause; confirm the level shows the voxel
+      terrain. Android Back and touch are the two platform-specific inputs to
+      check. Asset reads must go through SDL I/O, not stdio `fopen`
+      (APK assets are not files) — see `docs/building.md`.
 - [ ] **ARM Linux**: the pure suite cross-runs under `qemu-aarch64-static` /
       `qemu-arm` and all sources compile for aarch64/armhf; a full app build
       additionally needs a target SDL3 sysroot (`docs/building.md`).

@@ -110,8 +110,18 @@ static bool level_init(void *self, App *app)
 	initDrawList(&st->list, LEVEL_DRAWLIST_CAPACITY);
 	levelBuildSprites(st);
 
-	if (platformAssetPath("maps/demo.txt", mapPath, sizeof(mapPath)) != NULL)
-		st->map = loadVoxmap(mapPath);
+	/* Load the map through SDL I/O so Android APK assets resolve (the pure
+	 * parser's file reader cannot see them); parseVoxmapText copies the
+	 * cells it needs, so the SDL_LoadFile buffer is freed immediately. */
+	if (platformAssetPath("maps/demo.txt", mapPath, sizeof(mapPath)) != NULL) {
+		size_t mapSize = 0;
+		void *mapText = SDL_LoadFile(mapPath, &mapSize);
+
+		if (mapText != NULL) {
+			st->map = parseVoxmapText(mapText, mapSize);
+			SDL_free(mapText);
+		}
+	}
 	if (st->map == NULL)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");

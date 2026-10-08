@@ -16,6 +16,11 @@
  * error. VOXMAP_MAX_DIM bounds both dimensions so a bad file cannot force a
  * huge allocation.
  *
+ * Two entry points share the parser: parseVoxmapText() takes an in-memory
+ * buffer (used by the SDL tier for Android APK assets, which are not
+ * filesystem files) and loadVoxmap() reads a file. The parser is
+ * length-bounded and never assumes NUL termination.
+ *
  * Height query semantics (pinned by test_voxmap):
  *   voxmapHeightAt returns the column height 0..9 for an in-bounds cell, and
  *   -1 for a void cell, an out-of-bounds cell, or a NULL map.
@@ -41,6 +46,12 @@ typedef struct Voxmap Voxmap;
 /* Load a map from a file. Returns NULL with a clear stderr diagnostic on a
  * missing file, a malformed cell, an empty map, or a ragged/over-large map. */
 Voxmap *loadVoxmap(const char *path);
+
+/* Parse a map from `length` bytes of in-memory text. The buffer need NOT be
+ * NUL-terminated and is never read past text + length, so a slice of a larger
+ * buffer is safe. Same format/validation and NULL-on-error contract as
+ * loadVoxmap (diagnostics are labelled "<memory>"). */
+Voxmap *parseVoxmapText(const char *text, size_t length);
 
 /* Release a map. NULL is a no-op. */
 void destroyVoxmap(Voxmap *map);

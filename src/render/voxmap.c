@@ -3,10 +3,16 @@
  * a small malloc, no SDL. Diagnostics go to stderr (a pure module cannot use
  * SDL_Log).
  *
- * Parsing is two passes over the whole file: the first validates every row and
- * pins width/depth, the second fills the cell grid. Rows are split on '\n';
- * a trailing '\r' and trailing spaces/tabs are stripped, and blank lines are
- * skipped, so CRLF files and trailing newlines are fine.
+ * Two entry points share one parser: parseVoxmapText() parses an in-memory
+ * buffer (the SDL tier uses it for APK assets, which are not filesystem
+ * files), and loadVoxmap() is the desktop/test convenience that reads a file
+ * and parses it. The parser never assumes NUL termination — every scan is
+ * bounded by the caller's length — so a slice of a larger buffer is safe.
+ *
+ * Parsing is two passes over the whole buffer: the first validates every row
+ * and pins width/depth, the second fills the cell grid. Rows are split on
+ * '\n'; a trailing '\r' and trailing spaces/tabs are stripped, and blank
+ * lines are skipped, so CRLF files and trailing newlines are fine.
  */
 
 #include "render/voxmap.h"
@@ -68,82 +74,81 @@ static size_t trimmedLength(const char *data, size_t start, size_t end)
 	return end - start;
 }
 
-Voxmap *loadVoxmap(const char *path)
+/* Parse `length` bytes of heightmap text. The buffer need not be
+ * NUL-terminated: every scan is bounded by `length`, so a slice of a larger
+ * buffer parses exactly its own bytes and never reads past text + length.
+ * `label` names the source in stderr diagnostics. Returns NULL on any
+ * malformed input (bad cell, ragged/over-large/empty map, allocation
+ * failure) or a NULL text pointer. */
+static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 {
-	size_t size = 0;
-	char *data;
 	Voxmap *map;
 	int width = -1;
 	int depth = 0;
 	size_t pos = 0;
 
-	if (path == NULL)
+	if (text == NULL)
 		return NULL;
-	data = readWholeFile(path, &size);
-	if (data == NULL) {
-		fprintf(stderr, "voxmap: cannot read '%s'\n", path);
-		return NULL;
-	}
 
 	/* Pass 1: validate rows, pin width, count depth. */
-	while (pos < size) {
+	while (pos < length) {
 		size_t start = pos;
 		size_t end;
 		size_t rowLen;
 		size_t i;
 
-		while (pos < size && data[pos] != '\n')
+		while (pos < length && text[pos] != '\n')
 			pos++;
 		end = pos;
-		if (pos < size)
+		if (pos < length)
 			pos++;			/* skip '\n' */
-		rowLen = trimmedLength(data, start, end);
+		rowLen = trimmedLength(text, start, end);
 		if (rowLen == 0)
 			continue;		/* blank line */
 		if (width < 0) {
 			if (rowLen > VOXMAP_MAX_DIM) {
 				fprintf(stderr,
 					"voxmap: '%s' row too wide (%zu > %d)\n",
-					path, rowLen, VOXMAP_MAX_DIM);
-				goto fail;
+					label, rowLen, VOXMAP_MAX_DIM);
+				return NULL;
 			}
 			width = (int)rowLen;
 		} else if ((int)rowLen != width) {
 			fprintf(stderr,
 				"voxmap: '%s' ragged row %d (%zu chars, expected %d)\n",
-				path, depth + 1, rowLen, width);
-			goto fail;
+				label, depth + 1, rowLen, width);
+			return NULL;
 		}
 		for (i = start; i < start + rowLen; i++) {
-			char c = data[i];
+			char c = text[i];
 
 			if (c != '.' && (c < '0' || c > '9')) {
 				fprintf(stderr,
 					"voxmap: '%s' invalid cell '%c' at row %d\n",
-					path, (c >= 32 && c < 127) ? c : '?',
+					label, (c >= 32 && c < 127) ? c : '?',
 					depth + 1);
-				goto fail;
+				return NULL;
 			}
 		}
 		depth++;
 		if (depth > VOXMAP_MAX_DIM) {
 			fprintf(stderr, "voxmap: '%s' too many rows (> %d)\n",
-				path, VOXMAP_MAX_DIM);
-			goto fail;
+				label, VOXMAP_MAX_DIM);
+			return NULL;
 		}
 	}
 	if (width <= 0 || depth <= 0) {
-		fprintf(stderr, "voxmap: '%s' is empty\n", path);
-		goto fail;
+		fprintf(stderr, "voxmap: '%s' is empty\n", label);
+		return NULL;
 	}
 
 	map = calloc(1, sizeof(*map));
 	if (map == NULL)
-		goto fail;
+		return NULL;
 	map->cells = malloc((size_t)width * (size_t)depth);
 	if (map->cells == NULL) {
 		free(map);
-		goto fail;
+		return NULL;
 	}
 	map->width = width;
 	map->depth = depth;
@@ -153,20 +158,20 @@ Voxmap *loadVoxmap(const char *path)
 		int row = 0;
 
 		pos = 0;
-		while (pos < size && row < depth) {
+		while (pos < length && row < depth) {
 			size_t start = pos;
 			size_t end;
 			int col;
 
-			while (pos < size && data[pos] != '\n')
+			while (pos < length && text[pos] != '\n')
 				pos++;
 			end = pos;
-			if (pos < size)
+			if (pos < length)
 				pos++;
-			if (trimmedLength(data, start, end) == 0)
+			if (trimmedLength(text, start, end) == 0)
 				continue;
 			for (col = 0; col < width; col++) {
-				char c = data[start + (size_t)col];
+				char c = text[start + (size_t)col];
 
 				map->cells[(size_t)row * width + col] =
 					(c == '.') ? -1 : (int8_t)(c - '0');
@@ -175,12 +180,30 @@ Voxmap *loadVoxmap(const char *path)
 		}
 	}
 
+	return map;
+}
+
+Voxmap *parseVoxmapText(const char *text, size_t length)
+{
+	return parseVoxmap(text, length, "<memory>");
+}
+
+Voxmap *loadVoxmap(const char *path)
+{
+	size_t size = 0;
+	char *data;
+	Voxmap *map;
+
+	if (path == NULL)
+		return NULL;
+	data = readWholeFile(path, &size);
+	if (data == NULL) {
+		fprintf(stderr, "voxmap: cannot read '%s'\n", path);
+		return NULL;
+	}
+	map = parseVoxmap(data, size, path);
 	free(data);
 	return map;
-
-fail:
-	free(data);
-	return NULL;
 }
 
 void destroyVoxmap(Voxmap *map)

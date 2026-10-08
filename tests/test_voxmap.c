@@ -311,6 +311,73 @@ static void test_faces_void_cell_and_null_list(void)
 	destroyVoxmap(map);
 }
 
+/* parseVoxmapText: the in-memory entry point parses the same format. */
+static void test_parse_memory_basic(void)
+{
+	const char *text = "12\n34\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text));
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(1, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(2, voxmapHeightAt(map, 1, 0));
+	TEST_ASSERT_EQUAL_INT(4, voxmapHeightAt(map, 1, 1));
+	destroyVoxmap(map);
+}
+
+/* parseVoxmapText is length-bounded and must not assume NUL termination: a
+ * buffer with no NUL anywhere, and a slice that stops mid-line, both parse
+ * exactly `length` bytes. A strlen-based reader would fail both (the trailing
+ * garbage would be a ragged/invalid row). */
+static void test_parse_memory_length_bounded(void)
+{
+	char buf[8];
+	Voxmap *map;
+
+	memset(buf, 'X', sizeof(buf));	/* no NUL in the whole buffer */
+	buf[0] = '4';
+	buf[1] = '4';
+	buf[2] = '\n';
+	map = parseVoxmapText(buf, 3);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(1, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(4, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(4, voxmapHeightAt(map, 1, 0));
+	destroyVoxmap(map);
+
+	map = parseVoxmapText("12\n34\n", 2);	/* slice stops mid-line */
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(1, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapHeightAt(map, 1, 0));
+	destroyVoxmap(map);
+}
+
+/* Void cells and height-0 cells through the memory path. */
+static void test_parse_memory_void_and_zero(void)
+{
+	const char *text = "0.\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text));
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_FALSE(voxmapIsVoid(map, 0, 0));
+	TEST_ASSERT_TRUE(voxmapIsVoid(map, 1, 0));
+	destroyVoxmap(map);
+}
+
+/* Malformed / NULL / empty memory input returns NULL. */
+static void test_parse_memory_rejects_bad_input(void)
+{
+	TEST_ASSERT_NULL(parseVoxmapText(NULL, 0));
+	TEST_ASSERT_NULL(parseVoxmapText("", 0));
+	TEST_ASSERT_NULL(parseVoxmapText("\n\n", 2));
+	TEST_ASSERT_NULL(parseVoxmapText("1x\n", 3));
+	TEST_ASSERT_NULL(parseVoxmapText("12\n3\n", 5));
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -324,6 +391,10 @@ void run_test_voxmap(void)
 	RUN_TEST(test_no_trailing_newline_and_middle_blank);
 	RUN_TEST(test_nonprintable_cell_fails);
 	RUN_TEST(test_over_large_map_fails);
+	RUN_TEST(test_parse_memory_basic);
+	RUN_TEST(test_parse_memory_length_bounded);
+	RUN_TEST(test_parse_memory_void_and_zero);
+	RUN_TEST(test_parse_memory_rejects_bad_input);
 	RUN_TEST(test_faces_single_column_yaw_zero);
 	RUN_TEST(test_faces_non_axis_yaw_emits_all_sides);
 	RUN_TEST(test_faces_cull_hidden_side);
