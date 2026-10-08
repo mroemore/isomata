@@ -96,6 +96,9 @@ static bool inputKeyFromSdlKeycode(SDL_Keycode key, InputKey *out)
 	case SDLK_AC_BACK:
 		*out = INPUT_KEY_BACK;
 		return true;
+	case SDLK_R:
+		*out = INPUT_KEY_R;
+		return true;
 	default:
 		return false;
 	}

@@ -31,6 +31,7 @@
  *     ESCAPE, BACKSPACE, BACK         -> CMD_BACK   (BACK is Android's
  *                                        SDLK_AC_BACK; the glue feeds it)
  *     Q, E                            -> CMD_ROTATE_CCW, CMD_ROTATE_CW
+ *     R                               -> CMD_RESET
  *     PLUS, EQUALS, PAGE_UP           -> CMD_ZOOM_IN
  *     MINUS, PAGE_DOWN                -> CMD_ZOOM_OUT
  *   A key outside [0, INPUT_KEY_COUNT) is ignored.
@@ -98,6 +99,7 @@ typedef enum {
 	CMD_ROTATE_CCW,
 	CMD_ZOOM_IN,
 	CMD_ZOOM_OUT,
+	CMD_RESET,
 	CMD_COUNT
 } Command;
 
@@ -122,6 +124,7 @@ typedef enum {
 	INPUT_KEY_PAGE_UP,
 	INPUT_KEY_PAGE_DOWN,
 	INPUT_KEY_BACK,		/* Android SDLK_AC_BACK */
+	INPUT_KEY_R,
 	INPUT_KEY_COUNT
 } InputKey;
 

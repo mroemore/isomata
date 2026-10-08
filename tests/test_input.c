@@ -3,7 +3,7 @@
  *
  * Covers the pure command layer only (input.c): the full keyboard mapping
  * table (arrows + hjkl nav, enter/space select, escape/backspace/back back,
- * q/e rotate, +/-/page zoom), the bounded command queue, per-frame reset
+ * q/e rotate, r reset, +/-/page zoom), the bounded command queue, per-frame reset
  * semantics, tap vs drag at the 8px virtual slop (including coordinate
  * conversion at 1x/2x/1.5x and the negative clamp), pan accumulation
  * (only once past slop, full delta from the down point), wheel ->
@@ -94,6 +94,7 @@ static void test_keyboard_mapping_full_table(void)
 		{ INPUT_KEY_BACK, CMD_BACK },
 		{ INPUT_KEY_Q, CMD_ROTATE_CCW },
 		{ INPUT_KEY_E, CMD_ROTATE_CW },
+		{ INPUT_KEY_R, CMD_RESET },
 		{ INPUT_KEY_PLUS, CMD_ZOOM_IN },
 		{ INPUT_KEY_EQUALS, CMD_ZOOM_IN },
 		{ INPUT_KEY_PAGE_UP, CMD_ZOOM_IN },
@@ -127,6 +128,31 @@ static void test_key_out_of_range_ignored(void)
 	inputEndFrame(in, &f);
 	TEST_ASSERT_EQUAL_INT(0, f.commandCount);
 	destroyInput(in);
+}
+
+/* CMD_RESET is produced by exactly one key (R); every other key maps to
+ * something else. */
+static void test_only_r_maps_to_reset(void)
+{
+	int key;
+	int resetKeys = 0;
+	InputKey resetKey = INPUT_KEY_COUNT;
+
+	for (key = 0; key < INPUT_KEY_COUNT; key++) {
+		Input *in = createInput();
+		InputFrame f;
+
+		inputBeginFrame(in, 1.0f);
+		inputKeyDown(in, (InputKey)key);
+		inputEndFrame(in, &f);
+		if (f.commandCount == 1 && f.commands[0] == CMD_RESET) {
+			resetKeys++;
+			resetKey = (InputKey)key;
+		}
+		destroyInput(in);
+	}
+	TEST_ASSERT_EQUAL_INT(1, resetKeys);
+	TEST_ASSERT_EQUAL_INT(INPUT_KEY_R, resetKey);
 }
 
 /* The command queue is bounded at INPUT_MAX_COMMANDS; overflow drops. */
@@ -429,6 +455,7 @@ void run_test_input(void)
 	RUN_TEST(test_null_input_tolerance);
 	RUN_TEST(test_keyboard_mapping_full_table);
 	RUN_TEST(test_key_out_of_range_ignored);
+	RUN_TEST(test_only_r_maps_to_reset);
 	RUN_TEST(test_command_queue_bound);
 	RUN_TEST(test_frame_reset_semantics);
 	RUN_TEST(test_pointer_without_down_ignored);

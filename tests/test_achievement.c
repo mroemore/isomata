@@ -1,7 +1,7 @@
 /*
  * Achievement system tests (CTOL rung 1: unit + boundary).
  *
- * Covers: the four-turn threshold (no unlock at 3), the unlock payload
+ * Covers: the eight-step threshold (no unlock at 7), the unlock payload
  * (id/title), exactly-once idempotence on further turns, the deferred
  * (snapshot) delivery of the unlock event, ignoring other/malformed events,
  * NULL safety, and unsubscribe-on-destroy.
@@ -50,9 +50,9 @@ static void onUnlock(void *ctx, const Event *event)
 	}
 }
 
-static void publish_turn(EventBus *bus, int direction, int quarter)
+static void publish_turn(EventBus *bus, int direction, int step)
 {
-	GameplayCameraTurn turn = { direction, quarter };
+	GameplayCameraTurn turn = { direction, step };
 
 	TEST_ASSERT_TRUE(publishEvent(bus, EV_TOPIC_GAMEPLAY,
 				      EV_GAMEPLAY_CAMERA_TURNED, &turn,
@@ -61,9 +61,9 @@ static void publish_turn(EventBus *bus, int direction, int quarter)
 
 /* --- tests ------------------------------------------------------------ */
 
-/* The threshold fires on the 4th turn, never before; the unlock event is
+/* The threshold fires on the 8th step, never before; the unlock event is
  * queued (snapshot) and delivered on the next dispatch. */
-static void test_threshold_fires_on_fourth_turn(void)
+static void test_threshold_fires_on_eighth_step(void)
 {
 	EventBus *bus = createEventBus(16);
 	AchievementSystem *sys;
@@ -76,12 +76,12 @@ static void test_threshold_fires_on_fourth_turn(void)
 					NULL));
 	reset_recorder();
 
-	for (i = 1; i <= 4; i++) {
+	for (i = 1; i <= 8; i++) {
 		publish_turn(bus, 1, i);
 		dispatchEvents(bus);
 	}
 
-	/* Unlocked, but the unlock event was published from inside the 4th
+	/* Unlocked, but the unlock event was published from inside the 8th
 	 * dispatch, so it lands on the next one. */
 	TEST_ASSERT_TRUE(achievementUnlocked(sys, ACHIEVEMENT_ORIENTEER_ID));
 	TEST_ASSERT_EQUAL_INT(0, g_unlocks);
@@ -95,8 +95,8 @@ static void test_threshold_fires_on_fourth_turn(void)
 	destroyEventBus(bus);
 }
 
-/* Three turns do not unlock. */
-static void test_no_unlock_before_four(void)
+/* Seven steps do not unlock. */
+static void test_no_unlock_before_eight(void)
 {
 	EventBus *bus = createEventBus(16);
 	AchievementSystem *sys;
@@ -109,7 +109,7 @@ static void test_no_unlock_before_four(void)
 					NULL));
 	reset_recorder();
 
-	for (i = 1; i <= 3; i++) {
+	for (i = 1; i <= 7; i++) {
 		publish_turn(bus, -1, i);
 		dispatchEvents(bus);
 	}
@@ -122,7 +122,7 @@ static void test_no_unlock_before_four(void)
 	destroyEventBus(bus);
 }
 
-/* Once unlocked, further turns never re-publish. */
+/* Once unlocked, further steps never re-publish. */
 static void test_unlock_is_exactly_once(void)
 {
 	EventBus *bus = createEventBus(16);
@@ -136,14 +136,14 @@ static void test_unlock_is_exactly_once(void)
 					NULL));
 	reset_recorder();
 
-	for (i = 1; i <= 4; i++) {
+	for (i = 1; i <= 8; i++) {
 		publish_turn(bus, 1, i);
 		dispatchEvents(bus);
 	}
 	dispatchEvents(bus);
 	TEST_ASSERT_EQUAL_INT(1, g_unlocks);
 
-	for (i = 5; i <= 9; i++) {
+	for (i = 9; i <= 13; i++) {
 		publish_turn(bus, 1, i);
 		dispatchEvents(bus);
 	}
@@ -252,7 +252,7 @@ static void test_destroy_unsubscribes(void)
 					NULL));
 	reset_recorder();
 
-	for (i = 1; i <= 4; i++) {
+	for (i = 1; i <= 8; i++) {
 		publish_turn(bus, 1, i);
 		dispatchEvents(bus);
 	}
@@ -268,8 +268,8 @@ void run_test_achievement(void);
 
 void run_test_achievement(void)
 {
-	RUN_TEST(test_threshold_fires_on_fourth_turn);
-	RUN_TEST(test_no_unlock_before_four);
+	RUN_TEST(test_threshold_fires_on_eighth_step);
+	RUN_TEST(test_no_unlock_before_eight);
 	RUN_TEST(test_unlock_is_exactly_once);
 	RUN_TEST(test_ignores_other_and_malformed_events);
 	RUN_TEST(test_unlock_query);

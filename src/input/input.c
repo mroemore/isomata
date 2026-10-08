@@ -43,6 +43,7 @@ static const Command inputKeyMap[INPUT_KEY_COUNT] = {
 	[INPUT_KEY_PAGE_UP] = CMD_ZOOM_IN,
 	[INPUT_KEY_PAGE_DOWN] = CMD_ZOOM_OUT,
 	[INPUT_KEY_BACK] = CMD_BACK,
+	[INPUT_KEY_R] = CMD_RESET,
 };
 
 /*

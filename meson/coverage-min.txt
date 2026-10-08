@@ -130,3 +130,12 @@ src/scenes/settings_scene.c	0
 src/scenes/level_scene.c	0
 src/scenes/pause_scene.c	0
 
+
+# Tweaks Phase 1: 45-degree camera steps, generalised side culling, camera
+# reset and the on-screen level controls. Measured on the Phase 1 tree
+# (build-cov, gate green):
+#   camera3d.c 100.0, voxmap.c 93.5, input.c 97.9, achievement.c 96.2,
+#   input_sdl.c 22.6 (the new SDLK_R case is untaken by the dummy smoke, so
+#   the measured value eased from 23.0 to 22.6 — still above its 22 floor).
+# No floor number moves: the ratchet only goes up, and no measured value
+# supports an integer increase.

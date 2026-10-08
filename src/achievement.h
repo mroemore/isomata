@@ -35,8 +35,9 @@
 
 #include <stdbool.h>
 
-/* The achievement unlocked on the 4th counted camera quarter turn. */
-#define ACHIEVEMENT_TURN_THRESHOLD 4
+/* The achievement unlocked on the 8th counted rotation step (a full circle
+ * at 45-degree steps). */
+#define ACHIEVEMENT_TURN_THRESHOLD 8
 #define ACHIEVEMENT_ORIENTEER_ID "orienteer"
 #define ACHIEVEMENT_ORIENTEER_TITLE "ORIENTEER"
 

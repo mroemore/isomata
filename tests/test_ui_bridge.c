@@ -126,8 +126,9 @@ static void test_unmapped_commands_ignored(void)
 {
 	BridgeRec *rec;
 	Element *root = makeRec(&rec, true, false);
-	Command cmds[3] = { CMD_ROTATE_CW, CMD_ROTATE_CCW, CMD_ZOOM_IN };
-	InputFrame frame = frameWith(cmds, 3);
+	Command cmds[4] = { CMD_ROTATE_CW, CMD_ROTATE_CCW, CMD_ZOOM_IN,
+			    CMD_RESET };
+	InputFrame frame = frameWith(cmds, 4);
 
 	TEST_ASSERT_FALSE(uiBridgeDispatch(root, &frame));
 	TEST_ASSERT_EQUAL_INT(0, rec->intentCount);

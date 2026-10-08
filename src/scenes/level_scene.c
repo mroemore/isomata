@@ -1,16 +1,20 @@
 /*
  * Level scene (see level_scene.h). SDL-tier: loads the demo map, owns a
- * Camera3D + DrawList + billboards and the achievement toast (a small UI
- * root), and per frame builds/draws the world list, then handles the world
- * commands from the InputFrame.
+ * Camera3D + DrawList + billboards and a small UI root (the achievement
+ * toast plus the ROT L / ROT R / RESET controls), and per frame builds/draws
+ * the world list, then handles the world commands from the InputFrame.
  *
- * Task 10 event wiring:
+ * Event wiring:
  * - Every successful camera rotation step publishes EV_GAMEPLAY_CAMERA_TURNED
  *   (topic EV_TOPIC_GAMEPLAY) and an EV_AUDIO_PLAY request for the rotate
  *   sound.
  * - The scene subscribes to EV_TOPIC_ACHIEVEMENT; an EV_ACHIEVEMENT_UNLOCKED
  *   payload shows the toast with the achievement title. The subscription is
  *   removed in unload.
+ *
+ * The on-screen controls are children of the UI root; a tap routes through
+ * uiBridgeDispatch to a button callback, which calls the same helpers as the
+ * keyboard command handler (no duplicated rotate/reset logic).
  */
 
 #include "scenes/level_scene.h"
@@ -31,6 +35,7 @@
 #include "scenes/pause_scene.h"
 #include "scenes/ui_bridge.h"
 #include "ui/element.h"
+#include "ui/element_button.h"
 #include "ui/layout.h"
 #include "ui/toast.h"
 #include "ui/ui_font.h"
@@ -45,6 +50,11 @@
 #define LEVEL_TOAST_H 48
 #define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
 
+#define LEVEL_BUTTON_W 96
+#define LEVEL_BUTTON_H 48		/* >= 44 virtual px, touch-friendly */
+#define LEVEL_BUTTON_MARGIN 16		/* inset from the safe-area edges */
+#define LEVEL_BUTTON_GAP 8		/* between the ROT L / ROT R pair */
+
 typedef struct LevelState {
 	Voxmap *map;
 	Camera3D camera;
@@ -54,8 +64,11 @@ typedef struct LevelState {
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
 	int rotationSteps;	/* running count of applied 45-degree steps */
-	Element *root;		/* UI root (a transparent container for the toast) */
-	Element *toast;
+	Element *root;		/* UI root (a transparent container) */
+	Element *toast;		/* achievement toast */
+	Element *rotL;		/* rotate counter-clockwise */
+	Element *rotR;		/* rotate clockwise */
+	Element *reset;		/* camera reset */
 } LevelState;
 
 /* The demo's three billboards (Task 8): two on the plateau, one on the
@@ -98,15 +111,61 @@ static void levelOnAchievement(void *ctx, const Event *event)
 	toastShow(st->toast, unlock->title);
 }
 
+static void levelPublishTurn(LevelState *st, int direction)
+{
+	GameplayCameraTurn turn;
+	AudioPlayRequest play = { SOUND_ROTATE };
+
+	st->rotationSteps++;
+	turn.direction = direction;
+	turn.step = st->rotationSteps;
+	/* NULL bus is tolerated by publishEvent (returns false). */
+	publishEvent(st->bus, EV_TOPIC_GAMEPLAY, EV_GAMEPLAY_CAMERA_TURNED,
+		     &turn, sizeof(turn));
+	publishEvent(st->bus, EV_TOPIC_AUDIO, EV_AUDIO_PLAY, &play,
+		     sizeof(play));
+}
+
+/* Restore the exact startup camera state. Shared by level_init and the
+ * CMD_RESET handler (and the RESET button). */
+static void levelResetCamera(LevelState *st)
+{
+	initCamera3D(&st->camera);
+	/* Centre the 16x16 map: at yaw 0, pan x moves +X and pan y moves -Z. */
+	cameraPan(&st->camera, 8.0f, -8.0f);
+}
+
+/* Apply one 45-degree rotate step and publish it. The single path shared by
+ * the command handler and the on-screen ROT buttons. */
+static void levelRotate(LevelState *st, int direction)
+{
+	cameraRotateStep(&st->camera, direction);
+	levelPublishTurn(st, direction);
+}
+
+/* Button callbacks: no logic of their own, just the shared helpers. */
+static void levelOnRotateCcw(void *ctx)
+{
+	levelRotate(ctx, -1);
+}
+
+static void levelOnRotateCw(void *ctx)
+{
+	levelRotate(ctx, 1);
+}
+
+static void levelOnReset(void *ctx)
+{
+	levelResetCamera(ctx);
+}
+
 static bool level_init(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
 	TextStyle style = levelStyle(app);
 	char mapPath[512];
 
-	initCamera3D(&st->camera);
-	/* Centre the 16x16 map: at yaw 0, pan x moves +X and pan y moves -Z. */
-	cameraPan(&st->camera, 8.0f, -8.0f);
+	levelResetCamera(st);
 	initDrawList(&st->list, LEVEL_DRAWLIST_CAPACITY);
 	levelBuildSprites(st);
 
@@ -126,20 +185,35 @@ static bool level_init(void *self, App *app)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");
 
-	/* Toast UI. ui/ has no non-drawing container, so a zero-padding pane
-	 * is the layout root the toast hangs off; only the toast is drawn
-	 * (see levelDrawUi), so the pane's opaque fill never backs the fade. */
+	/* UI root: a zero-padding pane is the layout root the toast and the
+	 * controls hang off. The pane itself is never drawn (its draw() paints
+	 * an opaque fill); each child is drawn individually (see levelDrawUi). */
 	st->root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
 	st->toast = uiCreateToast(&style);
-	if (st->root == NULL || st->toast == NULL) {
+	st->rotL = uiCreateButton("ROT L", &style, levelOnRotateCcw, st);
+	st->rotR = uiCreateButton("ROT R", &style, levelOnRotateCw, st);
+	st->reset = uiCreateButton("RESET", &style, levelOnReset, st);
+	if (st->root == NULL || st->toast == NULL || st->rotL == NULL ||
+	    st->rotR == NULL || st->reset == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "level_scene: toast UI allocation failed");
+			     "level_scene: level UI allocation failed");
+		/* Nothing has been appended yet, so each element is freed once
+		 * (uiDestroyElement is NULL-safe). */
 		uiDestroyElement(st->toast);
+		uiDestroyElement(st->rotL);
+		uiDestroyElement(st->rotR);
+		uiDestroyElement(st->reset);
 		uiDestroyElement(st->root);
 		st->root = NULL;
 		st->toast = NULL;
+		st->rotL = NULL;
+		st->rotR = NULL;
+		st->reset = NULL;
 	} else {
 		uiAppendChild(st->root, st->toast);
+		uiAppendChild(st->root, st->rotL);
+		uiAppendChild(st->root, st->rotR);
+		uiAppendChild(st->root, st->reset);
 	}
 
 	/* Subscribe to achievement unlocks (self-unsubscribes in unload). */
@@ -156,37 +230,23 @@ static bool level_init(void *self, App *app)
 	return true;
 }
 
-static void levelPublishTurn(LevelState *st, int direction)
-{
-	GameplayCameraTurn turn;
-	AudioPlayRequest play = { SOUND_ROTATE };
-
-	st->rotationSteps++;
-	turn.direction = direction;
-	turn.step = st->rotationSteps;
-	/* NULL bus is tolerated by publishEvent (returns false). */
-	publishEvent(st->bus, EV_TOPIC_GAMEPLAY, EV_GAMEPLAY_CAMERA_TURNED,
-		     &turn, sizeof(turn));
-	publishEvent(st->bus, EV_TOPIC_AUDIO, EV_AUDIO_PLAY, &play,
-		     sizeof(play));
-}
-
 static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 {
 	switch (cmd) {
 	case CMD_ROTATE_CW:
-		cameraRotateStep(&st->camera, 1);
-		levelPublishTurn(st, 1);
+		levelRotate(st, 1);
 		break;
 	case CMD_ROTATE_CCW:
-		cameraRotateStep(&st->camera, -1);
-		levelPublishTurn(st, -1);
+		levelRotate(st, -1);
 		break;
 	case CMD_ZOOM_IN:
 		cameraZoom(&st->camera, 1.0f);
 		break;
 	case CMD_ZOOM_OUT:
 		cameraZoom(&st->camera, -1.0f);
+		break;
+	case CMD_RESET:
+		levelResetCamera(st);
 		break;
 	case CMD_BACK:
 		{
@@ -224,12 +284,14 @@ static void level_update(void *self, App *app, float dt)
 	toastUpdate(st->toast, dt);
 }
 
-/* Draw the toast UI on top of the world, centred near the top edge. The pane
- * root is a layout container only and is NOT drawn: its draw() paints a
- * constant opaque UI_COLOR_BACKGROUND fill, which would sit behind the
- * toast's alpha-scaled fill and make the box snap from full opacity to gone
- * at HIDDEN instead of fading. Drawing the toast alone lets its fill and text
- * fade together. Nothing is drawn while the toast is hidden. */
+/* Draw the toast and the three controls on top of the world. The pane root
+ * is a layout container only and is NOT drawn: its draw() paints a constant
+ * opaque UI_COLOR_BACKGROUND fill, which would sit behind the toast's
+ * alpha-scaled fill and make the box snap from full opacity to gone at
+ * HIDDEN instead of fading. Each child is drawn individually, so the toast
+ * still self-hides via its alpha while the buttons always draw. Child rects
+ * are assigned directly (no uiLayout): the pane's single-axis layout would
+ * stack all four children instead of placing the corner controls. */
 static void levelDrawUi(LevelState *st, App *app)
 {
 	UiDrawCtx *ctx = appUiDrawCtx(app);
@@ -237,19 +299,29 @@ static void levelDrawUi(LevelState *st, App *app)
 	int sy;
 	int sw;
 	int sh;
-	int x;
-	int y;
+	int rowY;
 
-	if (st->root == NULL || !toastVisible(st->toast))
+	if (st->root == NULL)
 		return;
-	/* Keep the toast inside the window's safe area so it clears notches /
+	/* Keep the UI inside the window's safe area so it clears notches /
 	 * status bars (on a desktop display the safe area is the full window). */
 	appSafeArea(app, &sx, &sy, &sw, &sh);
-	x = sx + (sw - LEVEL_TOAST_W) / 2;
-	y = sy + LEVEL_TOAST_TOP;
-	uiSetRect(st->root, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
-	uiSetRect(st->toast, x, y, LEVEL_TOAST_W, LEVEL_TOAST_H);
-	uiLayout(st->root);
+
+	uiSetRect(st->toast, sx + (sw - LEVEL_TOAST_W) / 2, sy + LEVEL_TOAST_TOP,
+		  LEVEL_TOAST_W, LEVEL_TOAST_H);
+
+	rowY = sy + sh - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_H;
+	uiSetRect(st->rotL, sx + LEVEL_BUTTON_MARGIN, rowY, LEVEL_BUTTON_W,
+		  LEVEL_BUTTON_H);
+	uiSetRect(st->rotR,
+		  sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W + LEVEL_BUTTON_GAP,
+		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
+	uiSetRect(st->reset, sx + sw - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_W,
+		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
+
+	uiDraw(st->rotL, ctx);
+	uiDraw(st->rotR, ctx);
+	uiDraw(st->reset, ctx);
 	uiDraw(st->toast, ctx);
 }
 
@@ -281,9 +353,14 @@ static void level_unload(void *self, App *app)
 	if (st->bus != NULL)
 		unsubscribeEvent(st->bus, EV_TOPIC_ACHIEVEMENT,
 				 levelOnAchievement, st);
+	/* uiDestroyElement frees the whole subtree, so the buttons are freed
+	 * here exactly once (never separately); the pointers are just cleared. */
 	uiDestroyElement(st->root);
 	st->root = NULL;
 	st->toast = NULL;
+	st->rotL = NULL;
+	st->rotR = NULL;
+	st->reset = NULL;
 	destroyDrawList(&st->list);
 	destroyVoxmap(st->map);
 	st->map = NULL;
