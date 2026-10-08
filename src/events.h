@@ -30,7 +30,14 @@
  *   a subscriber removed after the dispatch began is not called for that
  *   dispatch, whether or not it already ran; a subscriber added after the
  *   dispatch began is first called on the NEXT dispatch. Subscriber
- *   callbacks run in subscription order.
+ *   callbacks run in subscription order, across unsubscribes as well
+ *   (unsubscribes never reorder the live records).
+ * - destroyEventBus must NOT be called from inside a callback: it frees the
+ *   bus its dispatch loop is still walking. Destroy the bus from the owner
+ *   thread's frame, once dispatchEvents has returned.
+ * - Duplicate subscriptions of the same (topic, callback, ctx) are allowed;
+ *   each delivery calls every instance. unsubscribeEvent removes exactly one
+ *   matching instance per call.
  * - Within one callback, event->payload is valid to read (and event fields
  *   to copy); the pointer must not be freed or stored beyond the callback —
  *   retain via copy if needed.

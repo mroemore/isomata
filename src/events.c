@@ -82,31 +82,29 @@ bool subscribeEvent(EventBus *bus, uint32_t topic,
 		    EventCallback callback, void *ctx)
 {
 	Subscriber *slot;
-	size_t i;
+	size_t cap;
+	Subscriber *grown;
 
 	if (bus == NULL || callback == NULL)
 		return false;
 
-	slot = NULL;
-	for (i = 0; i < bus->subCount; i++) {
-		if (bus->subs[i].dead) {
-			slot = &bus->subs[i];
-			break;
-		}
+	/* Append-only: subscriber callbacks run in subscription order, a
+	 * documented invariant. Dead records are never reused as insert
+	 * slots — even a slot freed by the running dispatch must not be
+	 * fed to a new subscriber, or the newcomer would deliver ahead of
+	 * older live records on the next dispatch. Space for dead records
+	 * is recovered by the compaction at every dispatch entry, and the
+	 * record array grows only when live records have exhausted it;
+	 * no capacity limit is intended here. */
+	if (bus->subCount == bus->subCap) {
+		cap = bus->subCap == 0 ? 4 : bus->subCap * 2;
+		grown = realloc(bus->subs, cap * sizeof(*grown));
+		if (grown == NULL)
+			return false;
+		bus->subs = grown;
+		bus->subCap = cap;
 	}
-	if (slot == NULL) {
-		if (bus->subCount == bus->subCap) {
-			size_t cap = bus->subCap == 0 ? 4 : bus->subCap * 2;
-			Subscriber *grown = realloc(bus->subs,
-						    cap * sizeof(*grown));
-
-			if (grown == NULL)
-				return false;
-			bus->subs = grown;
-			bus->subCap = cap;
-		}
-		slot = &bus->subs[bus->subCount++];
-	}
+	slot = &bus->subs[bus->subCount++];
 	slot->topic = topic;
 	slot->callback = callback;
 	slot->ctx = ctx;

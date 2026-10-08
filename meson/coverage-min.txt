@@ -13,11 +13,12 @@
 #
 # Task 3: events.c gets a floor at its measured value; the untaken branches
 # are allocation-failure arms (calloc/malloc/realloc), expected to close
-# under the fault-injection rung, not the unit suite.
+# under the fault-injection rung, not the unit suite. Raised to 87 (Task 3
+# fix: append-only subscribeEvent removed the dead-slot reuse lookup).
 #
 # Run `meson/coverage.sh --html` to find each module's current branch %, then
 # add or raise a line.
 src/app.c			55
 src/main.c			50
 src/platform/platform.c		0
-src/events.c			85
+src/events.c			87

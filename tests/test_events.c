@@ -128,7 +128,7 @@ static void cb_subscribes_peer(void *ctx, const Event *event)
 }
 
 /* Callback that publishes a follow-up event and then dispatches again
- * (reentrancy must be a no-op). */
+ * (reentrancy must be a no-op) */
 static void cb_reenters(void *ctx, const Event *event)
 {
 	(void)ctx;
@@ -137,6 +137,20 @@ static void cb_reenters(void *ctx, const Event *event)
 	TEST_ASSERT_TRUE(publishEvent(g_self_bus, EV_TOPIC_ENGINE, 9u, NULL, 0));
 	/* Running dispatch in flight: this nested call must return at once. */
 	dispatchEvents(g_self_bus);
+}
+
+/* Callback that unsubscribes itself and then subscribes another subscriber
+ * mid-dispatch: with append-only subscription the peer lands BEHIND the
+ * already-live records even though a dead slot just opened up next to them. */
+static void cb_unsubscribes_self_then_adds(void *ctx, const Event *event)
+{
+	const struct AddPeer *p = ctx;
+
+	(void)event;
+	unsubscribeEvent(g_self_bus, EV_TOPIC_GAMEPLAY,
+			 cb_unsubscribes_self_then_adds, ctx);
+	TEST_ASSERT_TRUE(subscribeEvent(p->bus, p->topic, p->callback,
+					p->peerCtx));
 }
 
 static void reset_globals(void)
@@ -420,9 +434,71 @@ static void test_null_and_edge_arguments(void)
 	destroyEventBus(bus);
 }
 
+/* Subscription order survives an unsubscribe: B stays ahead of C, which
+ * subscribed only after A was removed. */
+static void test_subscription_order_preserved_after_unsubscribe(void)
+{
+	EventBus *bus = createEventBus(8);
+
+	TEST_ASSERT_NOT_NULL(bus);
+	reset_globals();
+
+	TEST_ASSERT_TRUE(subscribeEvent(bus, EV_TOPIC_GAMEPLAY, cb_order, &id_a));
+	TEST_ASSERT_TRUE(subscribeEvent(bus, EV_TOPIC_GAMEPLAY, cb_order, &id_b));
+	TEST_ASSERT_TRUE(unsubscribeEvent(bus, EV_TOPIC_GAMEPLAY, cb_order, &id_a));
+	TEST_ASSERT_TRUE(subscribeEvent(bus, EV_TOPIC_GAMEPLAY, cb_order, &id_c));
+
+	TEST_ASSERT_TRUE(publishEvent(bus, EV_TOPIC_GAMEPLAY, 1u, NULL, 0));
+	dispatchEvents(bus);
+	TEST_ASSERT_EQUAL_INT(2, g_order_n);
+	TEST_ASSERT_EQUAL_INT(0x0B, g_order[0]);
+	TEST_ASSERT_EQUAL_INT(0x0C, g_order[1]);
+
+	destroyEventBus(bus);
+}
+
+/* The dead slot left by a mid-dispatch unsubscribe must not be handed to a
+ * subscriber added during that same dispatch: on the next dispatch the new
+ * subscriber delivers AFTER the live records, not in the freed slot ahead
+ * of them. */
+static void test_subscribe_cannot_take_a_dead_slot_ahead_of_live_records(void)
+{
+	EventBus *bus = createEventBus(8);
+	struct AddPeer peer;
+
+	TEST_ASSERT_NOT_NULL(bus);
+	reset_globals();
+	g_self_bus = bus;
+	peer.bus = bus;
+	peer.topic = EV_TOPIC_GAMEPLAY;
+	peer.callback = cb_order;
+	peer.peerCtx = &id_c;
+
+	TEST_ASSERT_TRUE(subscribeEvent(bus, EV_TOPIC_GAMEPLAY,
+					cb_unsubscribes_self_then_adds, &peer));
+	TEST_ASSERT_TRUE(subscribeEvent(bus, EV_TOPIC_GAMEPLAY, cb_order, &id_b));
+
+	TEST_ASSERT_TRUE(publishEvent(bus, EV_TOPIC_GAMEPLAY, 1u, NULL, 0));
+	dispatchEvents(bus);
+
+	/* Dispatch 1: the self-unsubscribing record ran (no record), its
+	 * addition waits for the next dispatch; B ran. */
+	TEST_ASSERT_EQUAL_INT(1, g_order_n);
+	TEST_ASSERT_EQUAL_INT(0x0B, g_order[0]);
+
+	/* Dispatch 2: B must precede C despite C reusing the freed region. */
+	reset_globals();
+	TEST_ASSERT_TRUE(publishEvent(bus, EV_TOPIC_GAMEPLAY, 1u, NULL, 0));
+	dispatchEvents(bus);
+	TEST_ASSERT_EQUAL_INT(2, g_order_n);
+	TEST_ASSERT_EQUAL_INT(0x0B, g_order[0]);
+	TEST_ASSERT_EQUAL_INT(0x0C, g_order[1]);
+
+	destroyEventBus(bus);
+}
+
 /* Destroy frees undelivered payloads (leak-checked under the sanitizer run:
- * two queued payload copies must not outlive the bus). */
-static void test_destroy_frees_undelivered_payloads(void)
+ * two queued payload copies must not outlive the bus). */static void test_destroy_frees_undelivered_payloads(void)
 {
 	EventBus *bus = createEventBus(8);
 	char buf[8];
@@ -458,6 +534,8 @@ void run_test_events(void)
 	RUN_TEST(test_queue_overflow_rejects_and_delivers_prefix);
 	RUN_TEST(test_subscribe_during_callback_waits_for_next_dispatch);
 	RUN_TEST(test_reentrant_dispatch_is_noop);
+	RUN_TEST(test_subscription_order_preserved_after_unsubscribe);
+	RUN_TEST(test_subscribe_cannot_take_a_dead_slot_ahead_of_live_records);
 	RUN_TEST(test_null_and_edge_arguments);
 	RUN_TEST(test_destroy_frees_undelivered_payloads);
 }
