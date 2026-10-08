@@ -53,6 +53,7 @@ static void test_math_links_libm(void)
  *   2. declare + call it here — test_main.c owns main() for the suite. */
 void run_test_events(void);
 void run_test_scene(void);
+void run_test_input(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
 void run_test_layout(void);
@@ -70,6 +71,7 @@ int main(void)
 	RUN_TEST(test_math_links_libm);
 	run_test_events();
 	run_test_scene();
+	run_test_input();
 	run_test_ui_scale();
 	run_test_element();
 	run_test_layout();

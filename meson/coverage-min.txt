@@ -49,3 +49,13 @@ src/ui/toast.c			88
 # SDL tier: covered by the ISO_SMOKE_MS app smoke (success path only); the
 # uncovered arms are bad-argument / TTF failure guards.
 src/ui/ui_font.c		45
+
+# Task 6: the cross-device command input. input.c's floor is its measured
+# branch % under the headless suite (the untaken arms are the calloc-failure
+# path and the non-finite pinch guard). input_sdl.c is the SDL glue compiled
+# into the app target only; it has no headless suite and the app smoke does
+# not yet drive it, so its floor starts at 0 (tracked, like platform.c) and
+# rises when Task 9 wires the input loop.
+src/input/input.c		97
+src/input/input_sdl.c		0
+
