@@ -1,0 +1,12 @@
+# Valgrind suppressions for the CTOL matrix (`meson/matrix.sh`, config: valgrind).
+#
+# Scope every suppression to a third-party or system library. A suppression
+# that can match first-party code hides the exact defects the gate exists to
+# catch (the gate is only as honest as its suppressions).
+#
+# Example (uncomment and adapt to your vendored/system libraries):
+# {
+#    mylib_cond
+#    Memcheck:Cond
+#    obj:*/libmylib.so*
+# }

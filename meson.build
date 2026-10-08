@@ -10,6 +10,14 @@ project('isomata', 'c',
 
 cc = meson.get_compiler('c')
 
+# Coverage builds define the CTOL test config: src/verify.h keys off
+# ISOMATA_COVERAGE_TEST to compile contract macros away and enable testcase()
+# (see TESTING.md), and NDEBUG keeps assert() from adding uncoverable edges.
+# Declared before the first build target (meson requirement).
+if get_option('b_coverage')
+	add_project_arguments('-DISOMATA_COVERAGE_TEST=1', '-DNDEBUG', language: 'c')
+endif
+
 # SDL3 floor is 3.4.0: SDL_gpu and pinch-gesture events are required by later tasks.
 sdl3_dep = dependency('sdl3', version : '>= 3.4.0')
 
@@ -44,5 +52,15 @@ isomata_exe = executable('isomata',
 install_subdir('assets',
 	install_dir : '',
 )
+
+# --- CTOL pure-test wiring ------------------------------------------------
+# Pure engine modules under test. Later tasks (events, scene, ...) append
+# their sources here; every file must compile and link without SDL (the
+# headless suite must never create a GPU device or window) and must rely only
+# on the deps in ctol_deps. Until the first pure module lands the list is
+# empty and no static_library is created (see tests/meson.build).
+ctol_sources = []
+ctol_inc = include_directories('src')
+ctol_deps = [math_dep]
 
 subdir('tests')

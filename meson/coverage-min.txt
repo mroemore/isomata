@@ -1,0 +1,18 @@
+# Branch-coverage floors enforced by meson/coverage-gate.sh.
+# Format: <path relative to repo root> <minimum branch %>
+#
+# This is a ratchet: floors only ever go up. List a module when you first add a
+# suite for it, at its current branch %; raise it (ultimately to 100) as the
+# suite closes every branch. An entry here is a regression guard, not a target.
+#
+# Initial floors (Task 2): measured by `meson/coverage.sh` with the app smoke
+# test (SDL dummy driver) as the only suite exercising these files. Pure
+# engine modules (events, scene, ...) get their floors when their Unity
+# suites land in later tasks. platform.c sits at 0% today — listed so its
+# floor is tracked and can only rise.
+#
+# Run `meson/coverage.sh --html` to find each module's current branch %, then
+# add or raise a line.
+src/app.c			55
+src/main.c			50
+src/platform/platform.c		0

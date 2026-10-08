@@ -1,0 +1,14 @@
+# CTOL convention: the LLVM preset with this project's documented deviations.
+# This file is the source of truth for mechanical style; the project's C
+# conventions explain the intent. Do not restate these values elsewhere — they drift.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 150
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+SpaceAfterCStyleCast: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+SortIncludes: false
+Standard: c11
