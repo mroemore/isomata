@@ -15,6 +15,7 @@
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/sprites.h"
 
 #include <string.h>
 
@@ -271,6 +272,103 @@ static void test_sort_null_safe(void)
 	destroyDrawList(&list);
 }
 
+/* The sprite depth bias keeps a billboard in front of a coplanar tile face.
+ * A face whose centre is 0.01 world units CLOSER than the sprite's anchor
+ * would otherwise draw after the sprite (its view depth is larger); the
+ * 0.02 bias puts the sprite back in front. This is the flicker regression:
+ * without the bias the face is closer and draws last. */
+static void test_sort_sprite_biased_over_coplanar_face(void)
+{
+	DrawList list;
+	Camera3D camera = cameraAtYaw(0.0f);
+	Mat4 view = cameraView(&camera);
+	SpriteEntity sprite = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
+				DRAW_TINT(255, 255, 255, 255) };
+	/* Offset the face centre along the camera-backward axis (row 2 of the
+	 * view, unit length) so its view depth is ~0.01 nearer than the
+	 * origin the sprite stands on. */
+	DrawItem face = makeItem(0.01f * view.m[2], 0.01f * view.m[6],
+				 0.01f * view.m[10], DRAW_KIND_VOXEL, 77);
+
+	initDrawList(&list, 4);
+	TEST_ASSERT_TRUE(appendDrawItem(&list, &face));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	sortDrawList(&list, &camera);
+
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 1)->kind);
+	destroyDrawList(&list);
+}
+
+/* No overreach: a face genuinely 0.5 units in front of the sprite (far
+ * beyond the 0.02 bias) still draws after the sprite. */
+static void test_sort_bias_does_not_hide_a_nearer_face(void)
+{
+	DrawList list;
+	Camera3D camera = cameraAtYaw(0.0f);
+	Mat4 view = cameraView(&camera);
+	SpriteEntity sprite = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
+				DRAW_TINT(255, 255, 255, 255) };
+	DrawItem face = makeItem(0.5f * view.m[2], 0.5f * view.m[6],
+				 0.5f * view.m[10], DRAW_KIND_VOXEL, 77);
+
+	initDrawList(&list, 4);
+	TEST_ASSERT_TRUE(appendDrawItem(&list, &face));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	sortDrawList(&list, &camera);
+
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 0)->kind);
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 1)->kind);
+	destroyDrawList(&list);
+}
+
+/* Real geometry: a billboard standing on a tile centre (its anchor is the
+ * tile top's centre) must draw after that tile's top face for every camera
+ * configuration — yaws, zooms and targets. */
+static void test_sort_sprite_over_tile_top_sweep(void)
+{
+	static const float yaws[] = { 0.0f, 45.0f, 90.0f, 135.0f, 180.0f,
+				      225.0f, 270.0f, 315.0f };
+	static const float zoomAmounts[] = { -100.0f, 0.0f, 100.0f };
+	static const float panX[] = { 0.0f, 2.5f, -3.0f };
+	static const float panY[] = { 0.0f, 2.5f, 7.0f };
+	const float tileTop[4][3] = {
+		{ 2.0f, 1.0f, 2.0f }, { 3.0f, 1.0f, 2.0f },
+		{ 3.0f, 1.0f, 3.0f }, { 2.0f, 1.0f, 3.0f },
+	};
+	SpriteEntity sprite = { 2.5f, 1.0f, 2.5f, 1.2f, 1.8f,
+				DRAW_TINT(255, 255, 255, 255) };
+	size_t i;
+	size_t j;
+	size_t k;
+
+	for (i = 0; i < sizeof(yaws) / sizeof(yaws[0]); i++) {
+		for (j = 0; j < sizeof(zoomAmounts) / sizeof(zoomAmounts[0]); j++) {
+			for (k = 0; k < sizeof(panX) / sizeof(panX[0]); k++) {
+				DrawList list;
+				Camera3D camera = cameraAtYaw(yaws[i]);
+
+				cameraZoom(&camera, zoomAmounts[j]);
+				cameraPan(&camera, panX[k], panY[k]);
+				initDrawList(&list, 4);
+				TEST_ASSERT_TRUE(appendVoxelFace(
+					&list, tileTop, DRAW_FACE_TOP,
+					DRAW_TINT(10, 20, 30, 40)));
+				TEST_ASSERT_TRUE(
+					appendSprite(&list, &sprite, &camera));
+				sortDrawList(&list, &camera);
+				TEST_ASSERT_EQUAL_INT(
+					DRAW_KIND_VOXEL,
+					drawListItem(&list, 0)->kind);
+				TEST_ASSERT_EQUAL_INT(
+					DRAW_KIND_SPRITE,
+					drawListItem(&list, 1)->kind);
+				destroyDrawList(&list);
+			}
+		}
+	}
+}
+
 void run_test_drawlist(void);
 
 void run_test_drawlist(void)
@@ -285,4 +383,7 @@ void run_test_drawlist(void)
 	RUN_TEST(test_sort_yaw_flip);
 	RUN_TEST(test_sort_position_tiebreak_by_x);
 	RUN_TEST(test_sort_null_safe);
+	RUN_TEST(test_sort_sprite_biased_over_coplanar_face);
+	RUN_TEST(test_sort_bias_does_not_hide_a_nearer_face);
+	RUN_TEST(test_sort_sprite_over_tile_top_sweep);
 }

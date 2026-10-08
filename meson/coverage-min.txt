@@ -110,7 +110,13 @@ src/render/gpu_backend.c	0
 # the ISO_CAMERA_TURNS / key-control verification hooks add branches only a
 # real GPU run takes (the dummy smoke never draws).
 src/render/voxmap.c		93
-src/render/drawlist.c		97
+# Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
+# beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
+# unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS
+# nearer than a coplanar face, so `a->kind != b->kind` at equal depth (line
+# 144) can no longer be taken. The y-position tie-break was already untaken.
+# 46/48 branches = 95.8%; the floor eases 97 -> 95, honestly.
+src/render/drawlist.c		95
 src/render/sprites.c		100
 
 # Task 9: per-frame draw-list construction extracted from app.c (ruling #1).

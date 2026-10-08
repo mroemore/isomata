@@ -19,6 +19,15 @@
 static const float kTopUV[4][2] = ATLAS_UV_TOP;
 static const float kSideUV[4][2] = ATLAS_UV_SIDE;
 
+/* How far a sprite is pulled toward the camera for the painter sort. A
+ * billboard's quad centre = base + up*h/2 and the camera up axis is
+ * perpendicular to the view direction, so the sprite's centre has EXACTLY
+ * its anchor's view depth: a sprite standing on a tile centre ties with that
+ * tile's top face and float noise decides the comparison. The bias is far
+ * above the noise (~1e-6) and far below any real occlusion separation
+ * (>= ~0.29 world units for the demo's configurations). */
+#define DRAW_SPRITE_DEPTH_BIAS 0.02f
+
 void initDrawList(DrawList *list, size_t capacity)
 {
 	if (list == NULL)
@@ -108,10 +117,17 @@ static float itemDepth(const DrawItem *item, const Mat4 *view)
 {
 	float c[3];
 	Vec4 v;
+	float depth;
 
 	itemCentre(item, c);
 	v = mat4TransformPoint(view, (Vec3){ c[0], c[1], c[2] });
-	return v.z;
+	depth = v.z;
+	/* View-space z grows toward the camera (the camera looks down -Z), so
+	 * adding the bias moves a sprite toward the camera — it draws after a
+	 * coplanar face and never flickers against it. */
+	if (item->kind == DRAW_KIND_SPRITE)
+		depth += DRAW_SPRITE_DEPTH_BIAS;
+	return depth;
 }
 
 /* True when `a` must be drawn AFTER `b` (painter order). Equal keys return

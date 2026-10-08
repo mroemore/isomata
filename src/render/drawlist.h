@@ -23,11 +23,16 @@
  *   DRAW_TINT.
  * - sortDrawList is painter's back-to-front by the camera-space depth of the
  *   quad centre (transform by cameraView; farther = more negative view z =
- *   drawn first). Ties break deterministically: depth, then kind (VOXEL
- *   before SPRITE, so a transparent billboard blends over opaque terrain at
- *   the same depth), then centre position lexicographically (x, then y, then
- *   z), then insertion order (the sort is a stable insertion sort, so equal
- *   keys keep the order they were appended in).
+ *   drawn first). Sprites are biased toward the camera (their comparison
+ *   depth is raised by DRAW_SPRITE_DEPTH_BIAS, see drawlist.c) so a sprite
+ *   standing on a tile never flickers against that tile's top face: a
+ *   billboard's centre is perpendicular to the view direction and would
+ *   otherwise tie exactly with the anchor it stands on. Ties break
+ *   deterministically: depth, then kind (VOXEL before SPRITE, so a
+ *   transparent billboard blends over opaque terrain at the same depth),
+ *   then centre position lexicographically (x, then y, then z), then
+ *   insertion order (the sort is a stable insertion sort, so equal keys keep
+ *   the order they were appended in).
  */
 
 #include "render/camera3d.h"
