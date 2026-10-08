@@ -4,8 +4,9 @@ This document covers how to build, run, and verify the Isomata vertical slice
 on its three supported targets:
 
 - **Linux x86_64** (desktop, Meson) — primary, fully verified.
-- **ARM Linux** (aarch64 / armhf, Meson cross) — code verified; full app link
-  needs a target SDL3 sysroot (see [ARM Linux cross builds](#arm-linux-cross-builds)).
+- **ARM Linux** (aarch64 / armhf, Meson cross) — aarch64 builds, links, and
+  runs the full app under QEMU; armhf is code-verified (see
+  [ARM Linux cross builds](#arm-linux-cross-builds)).
 - **Android** (`arm64-v8a` + `x86_64`, Gradle + CMake) — builds, installs, and
   runs the slice on an emulator (see [Android](#android)).
 
@@ -75,61 +76,52 @@ The cross files are `cross/aarch64.ini` and `cross/armhf.ini` (Void's
 `aarch64-linux-gnu-*` and `arm-linux-gnueabihf-*` toolchains). Toolchains,
 `qemu-aarch64`(+static), and `qemu-arm` are present on this box.
 
-### Full app cross-build: currently blocked on target SDL3
+### Full app cross-build (aarch64, verified)
+
+The full app links and runs for aarch64. SDL3 and SDL3_ttf are not packaged
+for the target, so build them into a sysroot first:
 
 ```sh
-meson setup build-aarch64 --cross-file cross/aarch64.ini
-# ERROR: Dependency lookup for sdl3 ... Pkg-config for machine host machine
-#        not found. Giving up.
+cross/build-sdl3-aarch64.sh          # SDL3 3.4.14 + SDL3_ttf 3.2.2 (vendored
+                                     # FreeType) into .tmp_files/arm-sdl/sysroot
+PKG_CONFIG_LIBDIR="$PWD/.tmp_files/arm-sdl/sysroot/lib/pkgconfig" \
+    meson setup build-aarch64 --cross-file cross/aarch64.ini
+ninja -C build-aarch64
 ```
 
-Two prerequisites are missing, and neither is installable here (no sudo, no
-aarch64 packages):
+`build-aarch64/isomata` is then an aarch64 ELF. Run the headless smoke under
+QEMU (the host has no aarch64 glibc at `/lib`, so `-L` points QEMU at the
+toolchain sysroot's loader and libc):
 
-1. A target-side `pkg-config` wrapper. The cross file names
-   `aarch64-linux-gnu-pkg-config`, which Void's cross package does not ship.
-2. An **aarch64 SDL3** (and SDL3_ttf) development sysroot — headers, `.pc`
-   file, and target libraries. The host `/usr/include/SDL3` headers are
-   architecture-independent, but there is no aarch64 `libSDL3.so` to link.
+```sh
+qemu-aarch64-static -L /usr/aarch64-linux-gnu \
+    -E SDL_VIDEODRIVER=dummy -E SDL_AUDIODRIVER=dummy -E ISO_SMOKE_MS=300 \
+    build-aarch64/isomata
+# isomata smoke: font measure "Isomata" = 100x32 (height 32, rc 0)
+# isomata smoke: safe area 0,0 1280x720
+# ERROR: gpu_backend: ... No supported SDL_GPU backend found!   (tolerated)
+# audio: ready (8 voices, device 21, 44100 Hz 2 ch)
+# exit 0
+```
 
-To finish a full ARM app build you would cross-build SDL3 (and SDL3_ttf) for
-the target, or install target sysroot packages, then point the cross file's
-`pkg-config`/`[properties]` at them. SDL3 can be configured with X11/Wayland/
-Vulkan disabled for a headless (`SDL_VIDEODRIVER=dummy`) target build.
+The sysroot SDL3 is configured `-DSDL_UNIX_CONSOLE_BUILD=ON` with
+X11/Wayland/KMSDRM and every audio backend off and `-DSDL_VULKAN=OFF`; the
+dummy video/audio drivers are built in, so the smoke path runs and the GPU
+backend is absent by design (the smoke tolerates it). SDL3_ttf is built with
+its vendored FreeType, without harfbuzz/plutosvg.
 
-### What *is* verified for ARM (honest minimum)
+### What *is* verified for ARM
 
-- **The pure engine test suite cross-compiles and runs on ARM.** Built static
-  for aarch64 and armhf and executed under QEMU:
-
-  ```sh
-  aarch64-linux-gnu-gcc -std=c11 -Wall -Wextra -Werror -I src -I tests \
-      -c <each pure + test source> ...
-  aarch64-linux-gnu-gcc -static <objects> -lm -o test_pure-aarch64
-  qemu-aarch64-static ./test_pure-aarch64        # 208 Tests 0 Failures 0 Ignored -> OK
-  ```
-
-  armhf is identical with `arm-linux-gnueabihf-gcc` / `qemu-arm`.
-
+- **The pure engine test suite cross-compiles and runs on aarch64 and armhf**
+  under QEMU (208 tests, 0 failures). Built static and run with
+  `qemu-aarch64-static` / `qemu-arm`.
 - **Every SDL-tier translation unit compiles clean for aarch64 and armhf**
-  (`-Wall -Wextra -Werror`), using the host SDL3 headers and the SDL3_ttf wrap
-  headers via a scratch include dir:
-
-  ```sh
-  # SDL3 headers are arch-independent; expose them without shadowing the
-  # target libc (a cross compiler does not search the host /usr/include):
-  mkdir -p .tmp_files/arm-cross/inc
-  ln -sfn /usr/include/SDL3 .tmp_files/arm-cross/inc/SDL3
-  ln -sfn "$PWD/subprojects/SDL3_ttf-3.2.2/include/SDL3_ttf" \
-          .tmp_files/arm-cross/inc/SDL3_ttf
-
-  aarch64-linux-gnu-gcc -std=c11 -Wall -Wextra -Werror -I src \
-      -I .tmp_files/arm-cross/inc -c src/app.c -o app.o
-  # ... 12 engine objects per target, all clean
-  ```
-
-A helper script that reproduces both checks lives at
-`.tmp_files/arm-cross.sh` (scratch, not committed).
+  (`-Wall -Wextra -Werror`).
+- **The full aarch64 app links and runs** — `build-aarch64/isomata` under
+  `qemu-aarch64-static` with the dummy drivers, exit 0 (above).
+- armhf is code-verified only: a full 32-bit app link needs the same
+  SDL3/SDL3_ttf sysroot for `arm-linux-gnueabihf` (mirror
+  `cross/build-sdl3-aarch64.sh` with an armhf toolchain file).
 
 ---
 
@@ -285,4 +277,7 @@ length-bounded `parseVoxmapText()` — so no Android path uses `fopen`.
   `b_sanitize=none` (see `meson.build`) so the vendored cmake subproject links;
   first-party code is instrumented. Valgrind remains the leak/UAF rung. All of
   `./meson/check.sh --full` is green.
-- **ARM full app build** needs a target SDL3 sysroot (above).
+- **ARM full app build**: aarch64 is verified end-to-end
+  (`cross/build-sdl3-aarch64.sh` builds the SDL3/SDL3_ttf sysroot; the app
+  links and runs under QEMU — see [ARM Linux cross builds](#arm-linux-cross-builds)).
+  armhf still needs the equivalent armhf sysroot.
