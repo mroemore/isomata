@@ -28,6 +28,11 @@
 #define GPU_SCREENSHOT_PATH_MAX 512
 #define GPU_UI_QUAD_VERTICES 6
 #define GPU_UI_DRAW_INITIAL 32
+#define GPU_GRID_VERTICES 6
+/* Grid line colour, carried as the grid quad's vertex tint (the grid fragment
+ * shader uses vColor.rgb for the lines). A cool grey that reads on the dark
+ * clear colour without competing with the map. */
+#define GPU_GRID_TINT DRAW_TINT(150, 160, 182, 255)
 
 typedef struct GpuVertex {
 	float x;
@@ -61,6 +66,11 @@ struct GpuBackend {
 	SDL_GPUSampler *sampler;
 	SDL_GPUTextureFormat colorFormat;
 
+	/* Infinite ground grid (tolerant: pipeline/buffers NULL if init failed). */
+	SDL_GPUGraphicsPipeline *gridPipeline;
+	SDL_GPUBuffer *gridVertexBuffer;
+	SDL_GPUTransferBuffer *gridVertexTransfer;
+
 	/* Optional screenshot capture (verification hook). */
 	char screenshotPath[GPU_SCREENSHOT_PATH_MAX];
 	bool screenshotPending;
@@ -79,6 +89,14 @@ struct GpuBackend {
 	Mat4 worldViewProj;
 	bool worldPending;
 	size_t worldVertexCount;
+
+	/* Grid frame state (staged by gpuBackendDrawGrid). */
+	Mat4 gridViewProj;
+	float gridCenterX;
+	float gridCenterZ;
+	float gridFadeStart;
+	float gridFadeEnd;
+	bool gridPending;
 
 	/* UI batch: screen-space vertices staged on the CPU, plus the texture
 	 * runs recorded while scenes draw. */
@@ -164,26 +182,20 @@ static SDL_GPUShader *createShader(SDL_GPUDevice *device, const char *path,
 
 /* --- pipeline / geometry / texture ------------------------------------ */
 
-static bool createPipeline(GpuBackend *gpu, const char *shaderDir,
-			   SDL_GPUTextureFormat colorFormat)
+/* Build a quad graphics pipeline from an already-created vertex/fragment
+ * shader pair: world-space position + uv + vertex color, alpha blending, no
+ * depth, no culling (painter-sorted). Shared by the world and grid pipelines
+ * so they cannot drift apart. Returns NULL on failure (caller logs). */
+static SDL_GPUGraphicsPipeline *createQuadPipeline(SDL_GPUDevice *device,
+						   SDL_GPUShader *vs,
+						   SDL_GPUShader *fs,
+						   SDL_GPUTextureFormat colorFormat)
 {
-	char path[GPU_SCREENSHOT_PATH_MAX];
-	SDL_GPUShader *vs;
-	SDL_GPUShader *fs;
 	SDL_GPUVertexBufferDescription bufferDesc = { 0 };
 	SDL_GPUVertexAttribute attributes[3] = { { 0 } };
 	SDL_GPUVertexInputState vertexInput = { 0 };
 	SDL_GPUColorTargetDescription colorTarget = { 0 };
 	SDL_GPUGraphicsPipelineCreateInfo info = { 0 };
-
-	if (joinPath(path, sizeof(path), shaderDir, "world.vert.spv") == NULL ||
-	    (vs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_VERTEX, 1, 0)) == NULL)
-		return false;
-	if (joinPath(path, sizeof(path), shaderDir, "world.frag.spv") == NULL ||
-	    (fs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1)) == NULL) {
-		SDL_ReleaseGPUShader(gpu->device, vs);
-		return false;
-	}
 
 	bufferDesc.slot = 0;
 	bufferDesc.pitch = sizeof(GpuVertex);
@@ -235,13 +247,97 @@ static bool createPipeline(GpuBackend *gpu, const char *shaderDir,
 	info.target_info.num_color_targets = 1;
 	info.target_info.has_depth_stencil_target = false;
 
-	gpu->pipeline = SDL_CreateGPUGraphicsPipeline(gpu->device, &info);
+	return SDL_CreateGPUGraphicsPipeline(device, &info);
+}
+
+/* Build the world pipeline (world.vert.spv + world.frag.spv). A failure here
+ * is fatal to the backend (createPipeline returns false). */
+static bool createPipeline(GpuBackend *gpu, const char *shaderDir,
+			   SDL_GPUTextureFormat colorFormat)
+{
+	char path[GPU_SCREENSHOT_PATH_MAX];
+	SDL_GPUShader *vs;
+	SDL_GPUShader *fs;
+
+	if (joinPath(path, sizeof(path), shaderDir, "world.vert.spv") == NULL ||
+	    (vs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_VERTEX, 1, 0)) == NULL)
+		return false;
+	if (joinPath(path, sizeof(path), shaderDir, "world.frag.spv") == NULL ||
+	    (fs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 1)) == NULL) {
+		SDL_ReleaseGPUShader(gpu->device, vs);
+		return false;
+	}
+
+	gpu->pipeline = createQuadPipeline(gpu->device, vs, fs, colorFormat);
 	SDL_ReleaseGPUShader(gpu->device, vs);
 	SDL_ReleaseGPUShader(gpu->device, fs);
 	if (gpu->pipeline == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "gpu_backend: SDL_CreateGPUGraphicsPipeline failed: %s",
 			     SDL_GetError());
+		return false;
+	}
+	return true;
+}
+
+/* Build the grid pipeline (world.vert.spv reused verbatim + grid.frag.spv,
+ * whose fragment UBO is at set 3). A failure is tolerated by the caller: the
+ * grid is disabled and the app keeps running. */
+static bool createGridPipeline(GpuBackend *gpu, const char *shaderDir,
+			       SDL_GPUTextureFormat colorFormat)
+{
+	char path[GPU_SCREENSHOT_PATH_MAX];
+	SDL_GPUShader *vs;
+	SDL_GPUShader *fs;
+
+	if (joinPath(path, sizeof(path), shaderDir, "world.vert.spv") == NULL ||
+	    (vs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_VERTEX, 1, 0)) == NULL)
+		return false;
+	if (joinPath(path, sizeof(path), shaderDir, "grid.frag.spv") == NULL ||
+	    (fs = createShader(gpu->device, path, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0)) == NULL) {
+		SDL_ReleaseGPUShader(gpu->device, vs);
+		return false;
+	}
+
+	gpu->gridPipeline = createQuadPipeline(gpu->device, vs, fs, colorFormat);
+	SDL_ReleaseGPUShader(gpu->device, vs);
+	SDL_ReleaseGPUShader(gpu->device, fs);
+	if (gpu->gridPipeline == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: grid pipeline creation failed: %s",
+			     SDL_GetError());
+		return false;
+	}
+	return true;
+}
+
+/* Create the grid's 6-vertex buffer and its staging transfer buffer. */
+static bool createGridBuffers(GpuBackend *gpu)
+{
+	size_t bytes = GPU_GRID_VERTICES * sizeof(GpuVertex);
+
+	gpu->gridVertexTransfer = SDL_CreateGPUTransferBuffer(gpu->device,
+		&(SDL_GPUTransferBufferCreateInfo){
+			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+			.size = (Uint32)bytes,
+		});
+	if (gpu->gridVertexTransfer == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: grid vertex transfer buffer failed: %s",
+			     SDL_GetError());
+		return false;
+	}
+	gpu->gridVertexBuffer = SDL_CreateGPUBuffer(gpu->device,
+		&(SDL_GPUBufferCreateInfo){
+			.usage = SDL_GPU_BUFFERUSAGE_VERTEX,
+			.size = (Uint32)bytes,
+		});
+	if (gpu->gridVertexBuffer == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: grid vertex buffer failed: %s",
+			     SDL_GetError());
+		SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->gridVertexTransfer);
+		gpu->gridVertexTransfer = NULL;
 		return false;
 	}
 	return true;
@@ -538,6 +634,12 @@ GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
 		gpuBackendDestroy(gpu);
 		return NULL;
 	}
+	/* The grid is optional: a failed grid pipeline or buffer leaves it
+	 * disabled (gpuBackendDrawGrid draws nothing) but the app runs. */
+	if (!createGridPipeline(gpu, shaderDir, colorFormat) ||
+	    !createGridBuffers(gpu))
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: grid disabled (init failed); continuing");
 	SDL_Log("gpu_backend: ready (driver %s)", SDL_GetGPUDeviceDriver(gpu->device));
 	return gpu;
 }
@@ -563,8 +665,14 @@ void gpuBackendDestroy(GpuBackend *gpu)
 			SDL_ReleaseGPUBuffer(gpu->device, gpu->vertexBuffer);
 		if (gpu->vertexTransfer != NULL)
 			SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->vertexTransfer);
+		if (gpu->gridVertexBuffer != NULL)
+			SDL_ReleaseGPUBuffer(gpu->device, gpu->gridVertexBuffer);
+		if (gpu->gridVertexTransfer != NULL)
+			SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->gridVertexTransfer);
 		if (gpu->pipeline != NULL)
 			SDL_ReleaseGPUGraphicsPipeline(gpu->device, gpu->pipeline);
+		if (gpu->gridPipeline != NULL)
+			SDL_ReleaseGPUGraphicsPipeline(gpu->device, gpu->gridPipeline);
 		if (gpu->claimed)
 			SDL_ReleaseWindowFromGPUDevice(gpu->device, gpu->window);
 		SDL_DestroyGPUDevice(gpu->device);
@@ -669,6 +777,37 @@ static void drawBatch(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
 	SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
 }
 
+/* Bind the grid pipeline, push its vertex view-projection and fragment fade
+ * block, and issue the one grid draw. No sampler: the grid fragment samples
+ * nothing (its uniforms live at set 3, pushed with the fragment-uniform
+ * call). */
+static void drawGrid(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
+		     SDL_GPURenderPass *pass, Uint32 width, Uint32 height)
+{
+	SDL_GPUViewport viewport = {
+		.x = 0.0f, .y = 0.0f,
+		.w = (float)width, .h = (float)height,
+		.min_depth = 0.0f, .max_depth = 1.0f,
+	};
+	SDL_GPUBufferBinding binding = { .buffer = gpu->gridVertexBuffer,
+					 .offset = 0 };
+	float ubo[4];
+
+	if (gpu->gridPipeline == NULL || gpu->gridVertexBuffer == NULL)
+		return;
+	SDL_BindGPUGraphicsPipeline(pass, gpu->gridPipeline);
+	SDL_SetGPUViewport(pass, &viewport);
+	SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+	SDL_PushGPUVertexUniformData(cmd, 0, gpu->gridViewProj.m,
+				     sizeof(gpu->gridViewProj.m));
+	ubo[0] = gpu->gridCenterX;
+	ubo[1] = gpu->gridCenterZ;
+	ubo[2] = gpu->gridFadeStart;
+	ubo[3] = gpu->gridFadeEnd;
+	SDL_PushGPUFragmentUniformData(cmd, 0, ubo, sizeof(ubo));
+	SDL_DrawGPUPrimitives(pass, GPU_GRID_VERTICES, 1, 0, 0);
+}
+
 /* Replay the frame's world draw then every UI quad into `target` (a render
  * pass with the given clear colour). */
 static void recordScene(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
@@ -686,6 +825,9 @@ static void recordScene(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
 	pass = SDL_BeginGPURenderPass(cmd, &info, 1, NULL);
 	if (pass == NULL)
 		return;
+
+	if (gpu->gridPending)
+		drawGrid(gpu, cmd, pass, width, height);
 
 	if (gpu->worldPending && gpu->worldVertexCount > 0)
 		drawBatch(gpu, cmd, pass, gpu->vertexBuffer, gpu->texture,
@@ -814,6 +956,7 @@ bool gpuBackendBeginFrame(GpuBackend *gpu)
 
 	gpu->worldPending = false;
 	gpu->worldVertexCount = 0;
+	gpu->gridPending = false;
 	gpu->uiVertCount = 0;
 	gpu->uiDrawCount = 0;
 	gpu->swapchain = NULL;
@@ -863,6 +1006,56 @@ bool gpuBackendDrawList(GpuBackend *gpu, const Mat4 *viewProj,
 	}
 	gpu->worldViewProj = *viewProj;
 	gpu->worldPending = true;
+	return true;
+}
+
+bool gpuBackendDrawGrid(GpuBackend *gpu, const Mat4 *viewProj,
+			const GridQuad *quad)
+{
+	static const int corner[GPU_GRID_VERTICES] = { 0, 1, 2, 0, 2, 3 };
+	GpuVertex *mapped;
+	float r = (float)((GPU_GRID_TINT >> 24) & 0xffu) / 255.0f;
+	float g = (float)((GPU_GRID_TINT >> 16) & 0xffu) / 255.0f;
+	float b = (float)((GPU_GRID_TINT >> 8) & 0xffu) / 255.0f;
+	float a = (float)(GPU_GRID_TINT & 0xffu) / 255.0f;
+	int k;
+
+	if (gpu == NULL || !gpu->frameActive || viewProj == NULL || quad == NULL)
+		return false;
+	/* Tolerant: a backend whose grid init failed draws nothing. */
+	if (gpu->gridPipeline == NULL || gpu->gridVertexBuffer == NULL)
+		return true;
+
+	mapped = SDL_MapGPUTransferBuffer(gpu->device, gpu->gridVertexTransfer,
+					  false);
+	if (mapped == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: grid vertex staging map failed: %s",
+			     SDL_GetError());
+		return false;
+	}
+	for (k = 0; k < GPU_GRID_VERTICES; k++) {
+		int c = corner[k];
+		GpuVertex *v = &mapped[k];
+
+		v->x = quad->corners[c][0];
+		v->y = quad->corners[c][1];
+		v->z = quad->corners[c][2];
+		v->u = quad->uv[c][0];
+		v->v = quad->uv[c][1];
+		v->r = r;
+		v->g = g;
+		v->b = b;
+		v->a = a;
+	}
+	SDL_UnmapGPUTransferBuffer(gpu->device, gpu->gridVertexTransfer);
+
+	gpu->gridViewProj = *viewProj;
+	gpu->gridCenterX = quad->centerX;
+	gpu->gridCenterZ = quad->centerZ;
+	gpu->gridFadeStart = quad->fadeStart;
+	gpu->gridFadeEnd = quad->fadeEnd;
+	gpu->gridPending = true;
 	return true;
 }
 
@@ -947,6 +1140,15 @@ bool gpuBackendEndFrame(GpuBackend *gpu)
 	    !uploadBuffer(cmd, gpu->vertexBuffer,
 			  gpu->vertexTransfer,
 			  gpu->worldVertexCount * sizeof(GpuVertex))) {
+		SDL_CancelGPUCommandBuffer(cmd);
+		gpu->frameActive = false;
+		gpu->cmd = NULL;
+		return false;
+	}
+
+	if (gpu->gridPending &&
+	    !uploadBuffer(cmd, gpu->gridVertexBuffer, gpu->gridVertexTransfer,
+			  GPU_GRID_VERTICES * sizeof(GpuVertex))) {
 		SDL_CancelGPUCommandBuffer(cmd);
 		gpu->frameActive = false;
 		gpu->cmd = NULL;

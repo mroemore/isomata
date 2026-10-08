@@ -29,6 +29,7 @@
 #include "render/drawlist.h"
 #include "render/frame.h"
 #include "render/gpu_backend.h"
+#include "render/grid.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
 #include "render/voxmap.h"
@@ -340,6 +341,13 @@ static void level_draw(void *self, App *app)
 		Mat4 projection = cameraProjection(&st->camera, aspect);
 		Mat4 view = cameraView(&st->camera);
 		Mat4 viewProj = mat4Multiply(&projection, &view);
+		GridQuad grid;
+
+		/* Infinite ground grid beneath the map: drawn first so the
+		 * voxel faces (painter-ordered after it) occlude it, and it
+		 * shows only on void tiles and beyond the map. */
+		buildGridQuad(&st->camera, aspect, &grid);
+		gpuBackendDrawGrid(gpu, &viewProj, &grid);
 
 		buildFrameDrawList(st->map, st->sprites, st->spriteCount,
 				   &st->camera, &st->list);

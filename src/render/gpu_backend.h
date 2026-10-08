@@ -39,6 +39,7 @@
  */
 
 #include "render/drawlist.h"
+#include "render/grid.h"
 #include "render/math3d.h"
 
 #include <SDL3/SDL.h>
@@ -86,6 +87,16 @@ bool gpuBackendEndFrame(GpuBackend *gpu);
  * be sorted. Returns false when no frame is open or on staging failure. */
 bool gpuBackendDrawList(GpuBackend *gpu, const Mat4 *viewProj,
 			const DrawList *list);
+
+/* Stage the infinite ground-grid quad for this frame, transformed by viewProj.
+ * It is drawn BEFORE the world list (painter's order), so map faces occlude
+ * it and it shows only on empty/void tiles and beyond the map. The fragment
+ * fade block (quad centre XZ + fadeStart/fadeEnd) is pushed to the grid
+ * pipeline's set 3 binding 0. A backend built without a grid pipeline (a
+ * tolerant init failure) accepts the call and draws nothing. Returns false
+ * when no frame is open or on staging failure. */
+bool gpuBackendDrawGrid(GpuBackend *gpu, const Mat4 *viewProj,
+			const GridQuad *quad);
 
 /* Stage one screen-space textured quad (PHYSICAL pixels, top-left origin)
  * into this frame. `uv` is the 4-corner UV in canonical order (top-left,

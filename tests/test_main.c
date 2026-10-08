@@ -58,6 +58,7 @@ void run_test_input(void);
 void run_test_math3d(void);
 void run_test_camera(void);
 void run_test_voxmap(void);
+void run_test_grid(void);
 void run_test_drawlist(void);
 void run_test_sprites(void);
 void run_test_frame(void);
@@ -84,6 +85,7 @@ int main(void)
 	run_test_math3d();
 	run_test_camera();
 	run_test_voxmap();
+	run_test_grid();
 	run_test_drawlist();
 	run_test_sprites();
 	run_test_frame();

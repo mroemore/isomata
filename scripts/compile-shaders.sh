@@ -26,9 +26,12 @@ fi
 OUT_DIR="$ROOT/assets/shaders"
 mkdir -p "$OUT_DIR"
 
-for stage in vert frag; do
-	src="$ROOT/shaders/world.$stage.glsl"
-	out="$OUT_DIR/world.$stage.spv"
+# Each entry is a shader basename under shaders/ and assets/shaders/. The grid
+# reuses world.vert verbatim (it already outputs vUV/vColor), so only grid.frag
+# is new.
+for shader in world.vert world.frag grid.frag; do
+	src="$ROOT/shaders/$shader.glsl"
+	out="$OUT_DIR/$shader.spv"
 	[ -f "$src" ] || { echo "compile-shaders: missing $src" >&2; exit 1; }
 	# -V: Vulkan SPIR-V; --target-env vulkan1.0 matches SDL_gpu's Vulkan floor.
 	"$GLSLANG" -V --target-env vulkan1.0 "$src" -o "$out"

@@ -67,7 +67,8 @@ engine_deps = [
 ctol_sources = files('src/events.c', 'src/achievement.c', 'src/scene.c',
 		     'src/input/input.c',
 		     'src/render/math3d.c', 'src/render/camera3d.c',
-		     'src/render/voxmap.c', 'src/render/drawlist.c',
+		     'src/render/voxmap.c', 'src/render/grid.c',
+		     'src/render/drawlist.c',
 		     'src/render/sprites.c', 'src/render/frame.c',
 		     'src/scenes/ui_bridge.c',
 		     'src/ui/ui_scale.c', 'src/ui/element.c', 'src/ui/layout.c',
@@ -137,6 +138,8 @@ run_command('cp', files('assets/shaders/world.vert.spv'),
 	    _stage_shader_dir / 'world.vert.spv', check : true)
 run_command('cp', files('assets/shaders/world.frag.spv'),
 	    _stage_shader_dir / 'world.frag.spv', check : true)
+run_command('cp', files('assets/shaders/grid.frag.spv'),
+	    _stage_shader_dir / 'grid.frag.spv', check : true)
 run_command('cp', files('assets/textures/placeholder.png'),
 	    _stage_texture_dir / 'placeholder.png', check : true)
 run_command('cp', files('assets/maps/demo.txt'),
