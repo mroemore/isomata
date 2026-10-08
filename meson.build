@@ -54,13 +54,28 @@ install_subdir('assets',
 )
 
 # --- CTOL pure-test wiring ------------------------------------------------
-# Pure engine modules under test. Later tasks (events, scene, ...) append
-# their sources here; every file must compile and link without SDL (the
-# headless suite must never create a GPU device or window) and must rely only
-# on the deps in ctol_deps. Until the first pure module lands the list is
-# empty and no static_library is created (see tests/meson.build).
-ctol_sources = []
+# Pure engine modules under test. Later tasks (scene, ...) append file entries
+# here (ctol_sources = files('src/x.c', ...); the tests/meson.build suite
+# pairs each src/<module>.c with a tests/test_<module>.c twin and fails the
+# build if the twin is missing). Every file must compile and link without SDL
+# (the headless suite must never create a GPU device or window) and must rely
+# only on the deps in ctol_deps.
+#
+# The static library is defined HERE, not in tests/meson.build: meson
+# cross-tree source paths into object names with a '.._' prefix
+# when the target lives in a subdirectory ('tests/libisomata_pure.a.p/
+# .._src_events.c.o'), which geninfo (lcov 1.x) silently drops from coverage
+# ('GCOV did not produce any data'). A root-level target flattens to
+# 'isomata_pure.p/src_events.c.o' and captures cleanly, exactly like the
+# isomata exe target. Scripts under meson/ discover the target merely by
+# name, so the move is transparent to coverage-gate.sh and friends.
+ctol_sources = files('src/events.c')
 ctol_inc = include_directories('src')
 ctol_deps = [math_dep]
+
+isomata_pure = static_library('isomata_pure', ctol_sources,
+	include_directories : ctol_inc,
+	dependencies : ctol_deps,
+)
 
 subdir('tests')

@@ -6,24 +6,25 @@
 #     device or window, and only exercises modules from ctol_sources.
 #   - app-level smoke below: runs the whole SDL app under the dummy driver.
 
-# The objects under test. Later tasks append pure module sources to
-# ctol_sources in the top-level meson.build; nothing is built until then.
-# Scripts under meson/ (coverage-gate.sh floors, matrix.sh, mutate.sh)
-# discover targets by name in this build directory, not by library variable.
-ctol_lib = []
-if ctol_sources.length() > 0
-	ctol_lib = static_library('isomata_pure', ctol_sources,
-		include_directories : ctol_inc,
-		dependencies : ctol_deps,
-	)
-endif
+# The objects under test: libisomata_pure is defined in the top-level
+# meson.build (root-level target: object names stay flat and thus coverage
+# capture works — see the wiring note there).
+ctol_lib = isomata_pure
 
-# Headless Unity suite: test_main.c handles the empty engine-module case
-# (it runs its own sanity tests and exits 0), so an empty ctol_sources is a
-# valid state. Later tasks: add 'test_events.c' &c. to the sources list.
+# Headless Unity suite: engine-module test files pair 1:1 with ctol_sources
+# in the top-level meson.build — every src/<module>.c there pulls its twin
+# tests/test_<module>.c from this directory. A missing twin fails the build
+# at configure time instead of silently dropping its tests. While
+# ctol_sources is empty the suite is test_main.c alone (a valid state).
+fs = import('fs')
+test_module_src = []
+foreach src : ctol_sources
+	test_module_src += ['test_' + fs.name(src).split('.')[0] + '.c']
+endforeach
 test_pure_exe = executable('test_pure',
 	'test_main.c',
 	'unity.c',
+	test_module_src,
 	include_directories : ctol_inc,
 	dependencies : ctol_deps,
 	link_with : ctol_lib,

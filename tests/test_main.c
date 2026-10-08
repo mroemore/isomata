@@ -46,10 +46,18 @@ static void test_math_links_libm(void)
 	TEST_ASSERT_EQUAL_INT(3, 1 + 2);
 }
 
+/* Engine modules, alphabetical order: one declaration + one call each.
+ * Conventions when a module lands:
+ *   1. add files('src/<module>.c') to ctol_sources (../meson.build) and
+ *      create tests/test_<module>.c exposing run_test_<module>(void),
+ *   2. declare + call it here — test_main.c owns main() for the suite. */
+void run_test_events(void);
+
 int main(void)
 {
 	UNITY_BEGIN();
 	RUN_TEST(test_unity_assertions_pass);
 	RUN_TEST(test_math_links_libm);
+	run_test_events();
 	return UNITY_END();
 }
