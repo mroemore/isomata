@@ -33,21 +33,25 @@
 # the measured branch % rises to 45.8 (120 branches). The tolerance arms
 # (NULL bus / NULL audio / failed sub-create) need a device-less box and are
 # taken by the X11-less smoke only when audio host init fails.
-src/app.c			45
+# Final fix wave: the fault-injection target (tests/test_faultinject.c) closes
+# the allocation-failure arms these modules previously excused; the input_sdl
+# smoke mouse probe and the voxmap overflow test close glue/overflow arms.
+# Measured values below; the ratchet moves up.
+src/app.c			50
 src/main.c			50
 src/platform/platform.c		0
-src/events.c			87
+src/events.c			96
 # Task 10: the pure achievement system. Floor at its measured branch %; the
 # untaken arms are the allocation-failure / subscribe-failure returns (close
 # them under the fault-injection rung, then raise toward 100).
-src/achievement.c		88
+src/achievement.c		96
 # Task 4: scene.c floor at its measured value (includes the applied-top
 # activeScene, immediate destroy at apply, and aliasing-rejection guards).
 # The untaken arms are again allocation-failure paths (calloc in
 # createScene/createSceneStack) plus defensive branches (NULL-vt
 # entry-point arms, the pop-underflow guard, simOp's push-overflow guard)
 # — close them under the fault-injection rung, then raise the floor.
-src/scene.c			80
+src/scene.c			84
 
 # Task 5: the scalable UI tree. Each module's floor is its measured branch
 # % under the headless suite (the untaken arms are the usual calloc-failure
@@ -77,9 +81,10 @@ src/ui/ui_font.c		45
 # rises when Task 9 wires the input loop.
 src/input/input.c		97
 # Task 9: the app loop now drives the SDL glue (inputHandleSdlEvent), so the
-# smoke run takes its entry guards/default arm; floor starts at the measured
-# 5.
-src/input/input_sdl.c		5
+# smoke run takes its entry guards/default arm. Final fix wave: the smoke run
+# also pushes a synthetic mouse press/motion/release (smokeProbeInput), taking
+# the mouse branches and the window->pixel conversion, so the floor rises.
+src/input/input_sdl.c		22
 # Task 10 SDL tier: audio.c init/destroy is exercised by the dummy-driver
 # smoke run (a dummy playback device opens and 8 voices bind); no plays run
 # because the smoke feeds no input. Floor at the measured branch %.
@@ -104,17 +109,18 @@ src/render/gpu_backend.c	0
 # moves 50 -> 42: the demo-map load, sprite build, drawlist fill/sort/draw and
 # the ISO_CAMERA_TURNS / key-control verification hooks add branches only a
 # real GPU run takes (the dummy smoke never draws).
-src/render/voxmap.c		92
-src/render/drawlist.c		95
+src/render/voxmap.c		93
+src/render/drawlist.c		97
 src/render/sprites.c		100
 
 # Task 9: per-frame draw-list construction extracted from app.c (ruling #1).
 # Fully covered by its twin suite.
 src/render/frame.c		100
-# Task 9: the pure Command -> UiIntent bridge. The untaken arm is the
-# commandToIntent default (rotate/zoom/unknown), reached only through the
-# public dispatch (which filters) — the twin suite covers the rest.
-src/scenes/ui_bridge.c		95
+# Task 9: the pure Command -> UiIntent bridge. The commandToIntent default
+# (rotate/zoom/unknown) is reached by the unmapped-command test; the
+# command-consumed + same-frame-tap case is pinned by the final fix wave, so
+# every branch is taken.
+src/scenes/ui_bridge.c		100
 # Task 9 SDL tier (app target only): ui_gpu + the four scenes are exercised
 # by the X11 integration run, not by the headless/dummy suites, so they are
 # tracked at 0 like gpu_backend.c / input_sdl.c.
