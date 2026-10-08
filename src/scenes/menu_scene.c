@@ -24,6 +24,7 @@
 
 #define MENU_ROW_HEIGHT 34
 #define MENU_ITEM_COUNT 3
+#define MENU_HINT_FONT_PIXELS 24	/* hint text runs smaller (see menu_init) */
 
 typedef struct MenuState {
 	Element *root;
@@ -93,22 +94,25 @@ static bool menu_init(void *self, App *app)
 {
 	MenuState *st = scenePayload(self);
 	TextStyle style = menuStyle(app);
+	TextStyle hintStyle = style;
 	Element *title;
 	Element *menu;
 	Element *hint1;
 	Element *hint2;
 
+	/* The hint runs at a smaller size than the title/items so the full
+	 * wording fits the narrowest supported virtual viewport: at 24px
+	 * "Up/Down select" is ~152 virtual px, and the pane's 80px inset
+	 * leaves >= 166 px even at the 320x640 / uiScale 1.30 default config
+	 * (246 virtual px). */
+	hintStyle.pixelSize = MENU_HINT_FONT_PIXELS;
 	st->root = uiCreatePane(UI_AXIS_VERTICAL, 80, 18);
 	if (st->root == NULL)
 		return false;
 	title = uiCreateLabel("ISOMATA", &style);
 	menu = uiCreateMenu(&style);
-	/* The hint is split into two short labels so each fits the narrowest
-	 * virtual viewport. The pane insets its children by 80 virtual px, so
-	 * at the 320x640 / uiScale 1.30 default config only ~166 virtual px
-	 * are usable: labels must stay under ~11 characters. */
-	hint1 = uiCreateLabel("Up/Down", &style);
-	hint2 = uiCreateLabel("Enter", &style);
+	hint1 = uiCreateLabel("Up/Down select", &hintStyle);
+	hint2 = uiCreateLabel("Enter choose", &hintStyle);
 	if (title == NULL || menu == NULL || hint1 == NULL || hint2 == NULL ||
 	    uiMenuAddItem(menu, "Start", menuOnStart, app) == NULL ||
 	    uiMenuAddItem(menu, "Settings", menuOnSettings, app) == NULL ||
