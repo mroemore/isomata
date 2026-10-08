@@ -693,6 +693,32 @@ static void test_checker_odd_even_side(void)
 	destroyVoxmap(map);
 }
 
+/* A saturating tint exercises the per-channel clamp: an odd tile's boosted
+ * channel exceeds 255 and must clamp, alpha preserved. */
+static void test_checker_clamps_saturating_tint(void)
+{
+	Voxmap *map = loadTemp("vm_checker_clamp.txt", "22\n");
+	DrawList list;
+	Camera3D camera;
+	int evenR;
+	int oddR;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&camera);
+	voxmapEmitFaces(map, &list, &camera, DRAW_TINT(255, 255, 255, 42));
+
+	evenR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
+	oddR = (int)((topTintAt(&list, 1) >> 24) & 0xffu);
+
+	TEST_ASSERT_EQUAL_INT(255, evenR);	/* 255 * 1.0 at the clamp */
+	TEST_ASSERT_EQUAL_INT(255, oddR);	/* 255 * 1.06 clamps */
+	TEST_ASSERT_EQUAL_INT(42, (int)(topTintAt(&list, 1) & 0xffu));
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 /* At a 45-degree yaw the two visible sides carry their distinct shade
  * constants: +Z bright, +X mid, and the two differ. */
 static void test_sides_distinct_at_45(void)
@@ -774,6 +800,7 @@ void run_test_voxmap(void)
 	RUN_TEST(test_shade_constants);
 	RUN_TEST(test_checker_odd_even_top);
 	RUN_TEST(test_checker_odd_even_side);
+	RUN_TEST(test_checker_clamps_saturating_tint);
 	RUN_TEST(test_sides_distinct_at_45);
 	RUN_TEST(test_top_brightest);
 }
