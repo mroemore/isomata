@@ -41,10 +41,12 @@ engine_deps = [
 engine_sources = [
 	'src/app.c',
 	'src/platform/platform.c',
+	'src/ui/ui_font.c',
 ]
 
 isomata_exe = executable('isomata',
 	engine_sources + ['src/main.c'],
+	include_directories : include_directories('src'),
 	dependencies : engine_deps,
 	install : true,
 )
@@ -52,6 +54,16 @@ isomata_exe = executable('isomata',
 install_subdir('assets',
 	install_dir : '',
 )
+
+# Stage the font into the build tree so the app-smoke run (which resolves
+# assets relative to the executable via SDL_GetBasePath) can load it
+# without a full install. The installed tree gets it via install_subdir.
+# (configure_file/custom_target reject path segments in `output` here, so
+# this is a configure-time copy.)
+_stage_font_dir = meson.current_build_dir() / 'assets' / 'fonts'
+run_command('mkdir', '-p', _stage_font_dir, check : true)
+run_command('cp', files('assets/fonts/KiwiSoda.ttf'),
+	    _stage_font_dir / 'KiwiSoda.ttf', check : true)
 
 # --- CTOL pure-test wiring ------------------------------------------------
 # Pure engine modules under test. Later tasks (scene, ...) append file entries
@@ -69,7 +81,11 @@ install_subdir('assets',
 # 'isomata_pure.p/src_events.c.o' and captures cleanly, exactly like the
 # isomata exe target. Scripts under meson/ discover the target merely by
 # name, so the move is transparent to coverage-gate.sh and friends.
-ctol_sources = files('src/events.c', 'src/scene.c')
+ctol_sources = files('src/events.c', 'src/scene.c',
+		     'src/ui/ui_scale.c', 'src/ui/element.c', 'src/ui/layout.c',
+		     'src/ui/element_label.c', 'src/ui/element_button.c',
+		     'src/ui/element_menu.c', 'src/ui/element_overlay.c',
+		     'src/ui/toast.c')
 ctol_inc = include_directories('src')
 ctol_deps = [math_dep]
 

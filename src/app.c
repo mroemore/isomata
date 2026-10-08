@@ -1,5 +1,8 @@
 #include "app.h"
 
+#include "platform/platform.h"
+#include "ui/ui_font.h"
+
 #include <SDL3/SDL.h>
 #include <stdlib.h>
 
@@ -26,6 +29,33 @@ static Uint64 smokeDeadlineMs(void) {
 		return 0;
 	}
 	return value;
+}
+
+/* Smoke hook: when ISO_SMOKE_MS drives the loop, prove the SDL text tier
+ * loads the bundled font and measures a string (no renderer, no GPU
+ * device). One log line carries the result; a missing asset is logged,
+ * not fatal, so the smoke test still exercises the rest of the loop. */
+static void smokeProbeFont(void) {
+	char path[512];
+	const char *resolved = platformAssetPath("fonts/KiwiSoda.ttf", path, sizeof(path));
+
+	if (!resolved) {
+		SDL_Log("isomata smoke: font path unresolved");
+		return;
+	}
+	UiFont *font = uiLoadFont(resolved, 32);
+	if (!font) {
+		SDL_Log("isomata smoke: font load failed: %s", SDL_GetError());
+		return;
+	}
+	TextMeasure measure = uiFontMeasure(font);
+	int w = 0;
+	int h = 0;
+	/* uiFontMeasure guarantees fn != NULL for a non-NULL font. */
+	int rc = measure.fn(measure.ctx, "Isomata", &w, &h);
+	SDL_Log("isomata smoke: font measure \"Isomata\" = %dx%d (height %d, rc %d)",
+		w, h, uiFontHeight(font), rc);
+	uiFreeFont(font);
 }
 
 static void appHandleEvents(App *app) {
@@ -78,6 +108,9 @@ bool appRun(App *app) {
 	}
 	const Uint64 startMs = SDL_GetTicks();
 	const Uint64 deadline = smokeDeadlineMs();
+	if (deadline != 0) {
+		smokeProbeFont();
+	}
 	while (app->running) {
 		if (deadline != 0 && SDL_GetTicks() - startMs >= deadline) {
 			app->running = false;

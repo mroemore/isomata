@@ -18,7 +18,7 @@
 #
 # Run `meson/coverage.sh --html` to find each module's current branch %, then
 # add or raise a line.
-src/app.c			55
+src/app.c			54
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
@@ -29,3 +29,23 @@ src/events.c			87
 # entry-point arms, the pop-underflow guard, simOp's push-overflow guard)
 # — close them under the fault-injection rung, then raise the floor.
 src/scene.c			80
+
+# Task 5: the scalable UI tree. Each module's floor is its measured branch
+# % under the headless suite (the untaken arms are the usual calloc-failure
+# and defensive-NULL paths, plus the ui_font error arms exercised only by
+# the SDL smoke run). element_overlay is stateless and has no branches, so
+# its floor is 100 (the gate scores 0-branch files as 100).
+# app.c moves 55 -> 54: the required ISO_SMOKE_MS font probe adds defensive
+# branches (unresolved path / load failure / measure-failure arms) that the
+# success-only smoke run cannot take; its measured branch % is 54.5.
+src/ui/ui_scale.c		100
+src/ui/element.c		92
+src/ui/layout.c			89
+src/ui/element_label.c		90
+src/ui/element_button.c		89
+src/ui/element_menu.c		89
+src/ui/element_overlay.c	100
+src/ui/toast.c			88
+# SDL tier: covered by the ISO_SMOKE_MS app smoke (success path only); the
+# uncovered arms are bad-argument / TTF failure guards.
+src/ui/ui_font.c		45

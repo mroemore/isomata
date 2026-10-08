@@ -26,7 +26,7 @@ awk -v root="${ROOT}/" -v minfile="$MIN" '
     }
     nf = 0; fail = 0
   }
-  /^SF:/ { file = substr($0, 4); sub(root, "", file) }
+  /^SF:/ { file = substr($0, 4); sub(root, "", file); tot = 0; hit = 0 }
   /^BRF:/ { tot = substr($0, 5) + 0 }
   /^BRH:/ { hit = substr($0, 5) + 0 }
   /^end_of_record/ {
