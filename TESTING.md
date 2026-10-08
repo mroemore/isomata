@@ -118,12 +118,36 @@ Link the support file plus `-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,
 the linked objects route through the shims; libc-internal calls are untouched.
 The pattern is **loop-until-clean**.
 
+Wired by `tests/test_faultinject.c`: built with that wrap recipe in
+`tests/meson.build` and compiled with `-DISOMATA_HARNESS_FAULTINJECT` (the
+`tests/harness.h` opt-in), it sweeps the failure index across every allocation
+of a module and asserts a clean NULL with no leak. Modules covered: `events.c`
+(create/publish/subscribe), `input.c` (create), `scene.c`
+(createScene/createSceneStack), `drawlist.c` (init), `achievement.c` (create).
+
 ## Fuzzing (`fuzz/`)
 
 One `fuzz/fuzz_<target>.c` per target; list the sources it links in
 `fuzz/<target>.srcs`. Reach file loaders through an anonymous memfd
 (`/proc/self/fd/N`) so nothing touches disk. Seeds and crashers live in
 `fuzz/corpus/<target>/`.
+
+The in-tree target is `fuzz/fuzz_parsevoxmap.c` (`parseVoxmapText`, the
+length-bounded parser that consumes untrusted map bytes); its linked sources
+are in `fuzz/parsevoxmap.srcs` and its seeds in `fuzz/corpus/parsevoxmap/`.
+`meson/fuzz.sh` exits non-zero when it finds no target — no-target is a
+configuration error, never a PASS.
+
+## Mutation (`tests/test_mutate_*`)
+
+Input-byte mutation (`tests/support/mutate.*`): each target is a standalone
+executable that flips bits of the input a parser consumes and checks the code
+under test against an independent oracle, reporting a `killed=/survived=`
+count. `meson/mutate.sh` discovers `tests/test_mutate_*.c`, builds them with
+`-DISOMATA_MUTATE`, and fails on a survivor or a missing target — no-target is
+a configuration error, never a PASS. The in-tree target is
+`tests/test_mutate_parsevoxmap.c`; it is registered as a normal pure test too,
+so the same oracle guards `parseVoxmapText` on every build.
 
 ## Dynamic-analysis matrix (P6)
 

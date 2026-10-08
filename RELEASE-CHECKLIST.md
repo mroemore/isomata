@@ -17,7 +17,12 @@ check; this proves the feature is right.
       subproject links. Leak/UAF coverage comes from the `valgrind` rung.
 - [ ] `meson/coverage-min.txt` floors were raised for any module that closed
       branches this cycle (the ratchet only goes up).
-- [ ] No new mutation survivors on gated targets.
+- [ ] No new mutation survivors on gated targets
+      (`tests/test_mutate_parsevoxmap.c` reports `survived=0`).
+- [ ] The fuzz target (`fuzz/fuzz_parsevoxmap.c`) and the mutation target
+      (`tests/test_mutate_parsevoxmap.c`) both actually run under
+      `--full`; neither `meson/fuzz.sh` nor `meson/mutate.sh` treats "no
+      targets" as a PASS.
 - [ ] Every fuzz crasher found this cycle is fixed and kept as a permanent
       `regress*` regression input.
 

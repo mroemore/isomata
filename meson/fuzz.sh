@@ -34,8 +34,10 @@ if [ "${#TARGETS[@]}" -eq 0 ]; then
   done < <(find "$ROOT/fuzz" -maxdepth 1 -name 'fuzz_*.c' 2>/dev/null | sort)
 fi
 if [ "${#TARGETS[@]}" -eq 0 ]; then
-  echo "fuzz.sh: no targets (add fuzz/fuzz_<target>.c); skipping"
-  exit 0
+  # A gate that cannot fail is documentation, not a gate (TESTING.md
+  # anti-patterns). No targets is a configuration error, never a PASS.
+  echo "fuzz.sh: no targets (add fuzz/fuzz_<target>.c)" >&2
+  exit 2
 fi
 
 have_fuzzer() {
@@ -81,6 +83,18 @@ for t in "${TARGETS[@]}"; do
   corpus="$ROOT/fuzz/corpus/$t"
   mkdir -p "$corpus"
   echo ">> fuzz $t for ${TIME}s"
-  ASAN_SYMBOLIZER_PATH="$("$CC" --print-prog-name=llvm-symbolizer 2>/dev/null)" \
-    "$OUT/fuzz_$t" -max_total_time="$TIME" -artifact_prefix="$OUT/" "$corpus"
+  # The code under test may log per-rejected-input diagnostics (voxmap does);
+  # capture each target's output to a log so the flood does not swamp the
+  # gate output, then surface libFuzzer's executed-units line. A non-zero exit
+  # (crash / leak / sanitizer abort) is a gate failure: show the tail.
+  log="$OUT/fuzz_$t.log"
+  if ASAN_SYMBOLIZER_PATH="$("$CC" --print-prog-name=llvm-symbolizer 2>/dev/null)" \
+    "$OUT/fuzz_$t" -max_total_time="$TIME" -artifact_prefix="$OUT/" "$corpus" \
+    >"$log" 2>&1; then
+    grep -aE "Done [0-9]+ runs|stat::number_of_executed_units" "$log" | tail -n 2 || true
+  else
+    echo "fuzz.sh: $t FAILED; last output:" >&2
+    tail -n 40 "$log" >&2
+    exit 1
+  fi
 done

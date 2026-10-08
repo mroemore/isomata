@@ -42,6 +42,46 @@ test('pure', test_pure_exe,
 	timeout : 60,
 )
 
+# Mutation target: meson/mutate.sh discovers tests/test_mutate_*.c and runs
+# <builddir>/tests/<name>. Built here as a normal pure test too, so the same
+# executable guards parseVoxmapText on every build. Links the dependency-free
+# input-mutation support file (tests/support/mutate.*).
+test_mutate_parsevoxmap_exe = executable('test_mutate_parsevoxmap',
+	'test_mutate_parsevoxmap.c',
+	'support/mutate.c',
+	include_directories : ctol_inc,
+	dependencies : ctol_deps,
+	link_with : ctol_lib,
+)
+
+test('mutation parsevoxmap', test_mutate_parsevoxmap_exe,
+	protocol : 'exitcode',
+	timeout : 120,
+)
+
+# Fault-injection target (CTOL rung 4): the --wrap recipe and
+# -DISOMATA_HARNESS_FAULTINJECT are exactly what tests/support/faultinject.h
+# documents. Every allocation-failure arm of the linked pure modules is swept
+# and checked for a clean failure with no leak.
+test_faultinject_exe = executable('test_faultinject',
+	'test_faultinject.c',
+	'support/faultinject.c',
+	include_directories : ctol_inc,
+	dependencies : ctol_deps,
+	link_with : ctol_lib,
+	c_args : ['-DISOMATA_HARNESS_FAULTINJECT'],
+	link_args : [
+		'-Wl,--wrap=malloc', '-Wl,--wrap=calloc', '-Wl,--wrap=realloc',
+		'-Wl,--wrap=free', '-Wl,--wrap=fopen', '-Wl,--wrap=fread',
+		'-Wl,--wrap=fclose', '-Wl,--wrap=fopen64',
+	],
+)
+
+test('fault injection', test_faultinject_exe,
+	protocol : 'exitcode',
+	timeout : 120,
+)
+
 # Smoke test: the app must initialize SDL3 (dummy driver), run its loop, and
 # exit cleanly inside ISO_SMOKE_MS milliseconds. Native-only until a device
 # runner exists for cross builds.

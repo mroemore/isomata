@@ -48,7 +48,7 @@ run "coverage + gate" "$ROOT/meson/coverage.sh" --gate
 if [ "$FULL" = 1 ]; then
   run "dynamic-analysis matrix" "$ROOT/meson/matrix.sh"
   run "fuzz smoke (20s/target)" "$ROOT/meson/fuzz.sh" --time 20
-  run "mutation (scaffold)" "$ROOT/meson/mutate.sh"
+  run "mutation" "$ROOT/meson/mutate.sh"
 fi
 
 echo

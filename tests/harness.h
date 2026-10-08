@@ -107,7 +107,7 @@
  * and link tests/support/faultinject.c, then ASSERT_NO_LEAKS() checks that
  * every allocation the code under test made was also freed. */
 #if defined(ISOMATA_HARNESS_FAULTINJECT)
-#include "faultinject.h"
+#include "support/faultinject.h"
 #define ASSERT_NO_LEAKS() ASSERT_EQ_INT(fi_live(), 0)
 #define ASSERT_ALLOC_FAILED(n) do { \
         fi_reset(); \

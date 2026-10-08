@@ -33,11 +33,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ "${#TARGETS[@]}" -eq 0 ]; then
-  # Discover mutation harnesses by naming convention: tests/test_mutate_*.
+  # Discover mutation harnesses by naming convention: tests/test_mutate_*.c.
+  # No target is a configuration error, never a PASS (TESTING.md: a step that
+  # skips by exiting 0 is not a gate). The old fallback to a nonexistent
+  # test_mutate_input made the script a silent no-op.
   while IFS= read -r f; do
-    TARGETS+=("$(basename "$f")")
-  done < <(find "$ROOT/tests" -maxdepth 2 -type f -name 'test_mutate_*' 2>/dev/null | sort)
-  [ "${#TARGETS[@]}" -eq 0 ] && TARGETS=(test_mutate_input)
+    TARGETS+=("$(basename "$f" .c)")
+  done < <(find "$ROOT/tests" -maxdepth 2 -type f -name 'test_mutate_*.c' 2>/dev/null | sort)
+  if [ "${#TARGETS[@]}" -eq 0 ]; then
+    echo "mutate.sh: no targets (add tests/test_mutate_<name>.c)" >&2
+    exit 2
+  fi
 fi
 
 echo ">> configuring $DIR (-DISOMATA_MUTATE)"
@@ -79,4 +85,4 @@ echo "passed:  $passed   failed: $failed"
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "missing: ${missing[*]}"
 fi
-[ "$failed" -eq 0 ]
+[ "$failed" -eq 0 ] && [ "${#missing[@]}" -eq 0 ]
