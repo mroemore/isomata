@@ -195,6 +195,100 @@ static void test_centre_follows_target(void)
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 5.0f, q.centerZ);
 }
 
+/* gridProjection has the same x/y mapping as cameraProjection but a depth
+ * range that encloses the whole grid quad, so the near ground is never
+ * clipped at any zoom. */
+static void test_grid_projection_encloses_quad(void)
+{
+	static const float zooms[] = { CAMERA_ZOOM_MIN, 0.5f, 0.744f, 0.8f, 1.0f,
+				       2.0f, CAMERA_ZOOM_MAX };
+	static const float aspects[] = { 1.0f, 16.0f / 9.0f, 4.0f };
+	size_t zi;
+	size_t ai;
+
+	for (zi = 0; zi < sizeof(zooms) / sizeof(zooms[0]); zi++) {
+		for (ai = 0; ai < sizeof(aspects) / sizeof(aspects[0]); ai++) {
+			Camera3D c;
+			GridQuad q;
+			Mat4 proj;
+			Mat4 ref;
+			Mat4 vp;
+			int i;
+
+			configureCamera(&c, 0.0f, zooms[zi], 8.0f, 8.0f);
+			buildGridQuad(&c, aspects[ai], &q);
+			proj = gridProjection(&c, aspects[ai]);
+			ref = cameraProjection(&c, aspects[ai]);
+
+			/* Same x/y mapping as the normal projection. */
+			TEST_ASSERT_FLOAT_WITHIN(EPS, ref.m[0], proj.m[0]);
+			TEST_ASSERT_FLOAT_WITHIN(EPS, ref.m[5], proj.m[5]);
+			TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, proj.m[12]);
+			TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, proj.m[13]);
+
+			/* Every quad corner is inside the clip depth range. */
+			{
+				Mat4 view = cameraView(&c);
+
+				vp = mat4Multiply(&proj, &view);
+			}
+			for (i = 0; i < 4; i++) {
+				Vec4 clip = mat4TransformPoint(&vp,
+					(Vec3){ q.corners[i][0], q.corners[i][1],
+						q.corners[i][2] });
+
+				TEST_ASSERT_TRUE(clip.z >= -1e-4f);
+				TEST_ASSERT_TRUE(clip.z <= 1.0f + 1e-4f);
+			}
+		}
+	}
+}
+
+/* The fix is discriminating: the near-most visible ground point is clipped by
+ * the normal camera projection at low zoom but kept by gridProjection. */
+static void test_grid_projection_avoids_near_clip(void)
+{
+	Camera3D c;
+	GridQuad q;
+	Mat4 normalVp;
+	Mat4 gridVp;
+	Vec3 nearPoint;
+	Vec4 a;
+	Vec4 b;
+	float sp;
+
+	configureCamera(&c, 0.0f, CAMERA_ZOOM_MIN, 8.0f, 8.0f);
+	buildGridQuad(&c, 1.0f, &q);
+	/* Near edge of the visible footprint: target + (H/sin pitch) toward the
+	 * camera (yaw 0 -> +Z). */
+	sp = sinf(CAMERA_DEFAULT_PITCH_DEG * (PI_F / 180.0f));
+	nearPoint = (Vec3){ q.centerX, 0.0f,
+			    q.centerZ + (CAMERA_BASE_HALF_HEIGHT / CAMERA_ZOOM_MIN) / sp };
+
+	{
+		Mat4 normalProj = cameraProjection(&c, 1.0f);
+		Mat4 gridProj = gridProjection(&c, 1.0f);
+		Mat4 view = cameraView(&c);
+
+		normalVp = mat4Multiply(&normalProj, &view);
+		gridVp = mat4Multiply(&gridProj, &view);
+	}
+	a = mat4TransformPoint(&normalVp, nearPoint);
+	b = mat4TransformPoint(&gridVp, nearPoint);
+
+	TEST_ASSERT_TRUE(a.z < 0.0f);			/* near plane cuts it */
+	TEST_ASSERT_TRUE(b.z >= 0.0f && b.z <= 1.0f);	/* grid keeps it */
+}
+
+/* gridProjection(NULL) is the identity, like cameraProjection(NULL). */
+static void test_grid_projection_null(void)
+{
+	Mat4 id = mat4Identity();
+	Mat4 p = gridProjection(NULL, 1.0f);
+
+	TEST_ASSERT_EQUAL_MEMORY(&id, &p, sizeof(Mat4));
+}
+
 /* NULL camera, NULL out and bad aspects are all safe. */
 static void test_null_and_bad_aspect_safe(void)
 {
@@ -233,5 +327,8 @@ void run_test_grid(void)
 	RUN_TEST(test_corners_centred_and_uv_is_world_xz);
 	RUN_TEST(test_uv_is_camera_independent_no_slide);
 	RUN_TEST(test_centre_follows_target);
+	RUN_TEST(test_grid_projection_encloses_quad);
+	RUN_TEST(test_grid_projection_avoids_near_clip);
+	RUN_TEST(test_grid_projection_null);
 	RUN_TEST(test_null_and_bad_aspect_safe);
 }

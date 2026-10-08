@@ -62,4 +62,15 @@ typedef struct GridQuad {
  * header note for the sizing and anchoring contract. */
 void buildGridQuad(const Camera3D *camera, float aspect, GridQuad *out);
 
+/* The orthographic projection to draw the grid quad with: the same x/y
+ * mapping as cameraProjection(camera, aspect), but a symmetric depth range
+ * that encloses the whole ground quad. At low zoom the camera's near plane
+ * (CAMERA_NEAR) otherwise cuts a hard horizontal edge across the near ground
+ * (the ground quad reaches toward the camera past it), which breaks the
+ * "infinite grid" read; the grid pipeline has no depth test, so the wider
+ * range is free. Multiply this by cameraView(camera) for the grid's
+ * view-projection. A NULL camera returns the identity (as cameraProjection
+ * does). */
+Mat4 gridProjection(const Camera3D *camera, float aspect);
+
 #endif /* ISOMATA_RENDER_GRID_H */

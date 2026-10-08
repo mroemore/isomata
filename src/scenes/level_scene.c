@@ -368,15 +368,20 @@ static void level_draw(void *self, App *app)
 		int ph = appPixelHeight(app);
 		float aspect = ph > 0 ? (float)pw / (float)ph : 1.0f;
 		Mat4 projection = cameraProjection(&st->camera, aspect);
+		Mat4 gridProj = gridProjection(&st->camera, aspect);
 		Mat4 view = cameraView(&st->camera);
 		Mat4 viewProj = mat4Multiply(&projection, &view);
+		Mat4 gridViewProj = mat4Multiply(&gridProj, &view);
 		GridQuad grid;
 
 		/* Infinite ground grid beneath the map: drawn first so the
 		 * voxel faces (painter-ordered after it) occlude it, and it
-		 * shows only on void tiles and beyond the map. */
+		 * shows only on void tiles and beyond the map. It uses a
+		 * depth range that encloses the whole quad so the camera's
+		 * near plane never cuts a visible edge across the near ground
+		 * at low zoom. */
 		buildGridQuad(&st->camera, aspect, &grid);
-		gpuBackendDrawGrid(gpu, &viewProj, &grid);
+		gpuBackendDrawGrid(gpu, &gridViewProj, &grid);
 
 		buildFrameDrawList(st->map, st->sprites, st->spriteCount,
 				   &st->camera, &st->list);
