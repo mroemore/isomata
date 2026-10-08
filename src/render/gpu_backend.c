@@ -7,10 +7,10 @@
  * offscreen capture path (screenshot verification) owns a color-target
  * texture and a download transfer buffer, released with the backend.
  *
- * The static quad is the Task 7 milestone: a 2x2 world-space square on the
- * ground plane (y = 0), textured and tinted white. Task 8 replaces it with
- * drawlist rendering; the pipeline, bindings and push-uniform plumbing
- * carry over unchanged.
+ * The draw path is the Task 8 milestone: a sorted DrawList is expanded into
+ * vertices, staged and uploaded, then drawn in one call. The pipeline,
+ * bindings and push-uniform plumbing are unchanged from Task 7's static quad,
+ * which they replace.
  */
 
 #include "render/gpu_backend.h"
@@ -23,7 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GPU_QUAD_VERTEX_COUNT 6
+#define GPU_VERTICES_PER_ITEM 6
 #define GPU_CAPTURE_WIDTH 640
 #define GPU_CAPTURE_HEIGHT 480
 #define GPU_SCREENSHOT_PATH_MAX 512
@@ -40,17 +40,6 @@ typedef struct GpuVertex {
 	float a;
 } GpuVertex;
 
-/* Two triangles, counter-clockwise seen from +Y. uv (0,1) at z=-1, so the
- * texture's top row sits on the far edge. */
-static const GpuVertex QUAD_VERTICES[GPU_QUAD_VERTEX_COUNT] = {
-	{ -1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-	{ 1.0f, 0.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-	{ 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-	{ -1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-	{ 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-	{ -1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-};
-
 struct GpuBackend {
 	SDL_GPUDevice *device;
 	SDL_Window *window;
@@ -58,6 +47,8 @@ struct GpuBackend {
 
 	SDL_GPUGraphicsPipeline *pipeline;
 	SDL_GPUBuffer *vertexBuffer;
+	SDL_GPUTransferBuffer *vertexTransfer;	/* staging for the per-frame list */
+	size_t vertexItemCapacity;		/* items the buffers hold */
 	SDL_GPUTexture *texture;
 	SDL_GPUSampler *sampler;
 	SDL_GPUTextureFormat colorFormat;
@@ -240,73 +231,56 @@ static bool createPipeline(GpuBackend *gpu, const char *shaderDir,
 	return true;
 }
 
-static bool createVertexBuffer(GpuBackend *gpu)
+/* Create the vertex buffer and its staging transfer buffer, sized to hold
+ * `itemCapacity` draw items (6 vertices each). Called at create with a small
+ * default and again by ensureVertexCapacity when a larger list arrives. */
+static bool createVertexBuffers(GpuBackend *gpu, size_t itemCapacity)
 {
-	SDL_GPUTransferBuffer *transfer;
-	SDL_GPUCommandBuffer *cmd;
-	SDL_GPUCopyPass *copy;
-	void *mapped;
+	size_t bytes = itemCapacity * GPU_VERTICES_PER_ITEM * sizeof(GpuVertex);
 
-	transfer = SDL_CreateGPUTransferBuffer(gpu->device,
+	gpu->vertexTransfer = SDL_CreateGPUTransferBuffer(gpu->device,
 		&(SDL_GPUTransferBufferCreateInfo){
 			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-			.size = sizeof(QUAD_VERTICES),
+			.size = (Uint32)bytes,
 		});
-	if (transfer == NULL) {
+	if (gpu->vertexTransfer == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "gpu_backend: vertex transfer buffer failed: %s",
 			     SDL_GetError());
 		return false;
 	}
-	mapped = SDL_MapGPUTransferBuffer(gpu->device, transfer, false);
-	if (mapped == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: vertex transfer map failed: %s",
-			     SDL_GetError());
-		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
-		return false;
-	}
-	memcpy(mapped, QUAD_VERTICES, sizeof(QUAD_VERTICES));
-	SDL_UnmapGPUTransferBuffer(gpu->device, transfer);
-
 	gpu->vertexBuffer = SDL_CreateGPUBuffer(gpu->device,
 		&(SDL_GPUBufferCreateInfo){
 			.usage = SDL_GPU_BUFFERUSAGE_VERTEX,
-			.size = sizeof(QUAD_VERTICES),
+			.size = (Uint32)bytes,
 		});
 	if (gpu->vertexBuffer == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "gpu_backend: vertex buffer failed: %s", SDL_GetError());
-		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
+		SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->vertexTransfer);
+		gpu->vertexTransfer = NULL;
 		return false;
 	}
-
-	cmd = SDL_AcquireGPUCommandBuffer(gpu->device);
-	if (cmd == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: vertex upload command buffer failed: %s",
-			     SDL_GetError());
-		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
-		return false;
-	}
-	copy = SDL_BeginGPUCopyPass(cmd);
-	if (copy == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: vertex upload copy pass failed: %s",
-			     SDL_GetError());
-		SDL_CancelGPUCommandBuffer(cmd);
-		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
-		return false;
-	}
-	SDL_UploadToGPUBuffer(copy,
-		&(SDL_GPUTransferBufferLocation){ .transfer_buffer = transfer, .offset = 0 },
-		&(SDL_GPUBufferRegion){ .buffer = gpu->vertexBuffer, .offset = 0,
-					.size = sizeof(QUAD_VERTICES) },
-		false);
-	SDL_EndGPUCopyPass(copy);
-	SDL_SubmitGPUCommandBuffer(cmd);
-	SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
+	gpu->vertexItemCapacity = itemCapacity;
 	return true;
+}
+
+/* Grow the vertex buffers to hold `itemCapacity` items. A no-op when the
+ * current buffers already fit. */
+static bool ensureVertexCapacity(GpuBackend *gpu, size_t itemCapacity)
+{
+	if (itemCapacity <= gpu->vertexItemCapacity)
+		return true;
+	if (gpu->vertexBuffer != NULL) {
+		SDL_ReleaseGPUBuffer(gpu->device, gpu->vertexBuffer);
+		gpu->vertexBuffer = NULL;
+	}
+	if (gpu->vertexTransfer != NULL) {
+		SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->vertexTransfer);
+		gpu->vertexTransfer = NULL;
+	}
+	gpu->vertexItemCapacity = 0;
+	return createVertexBuffers(gpu, itemCapacity);
 }
 
 static bool createTexture(GpuBackend *gpu, const char *texturePath)
@@ -481,7 +455,7 @@ GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
 	SDL_Log("gpu_backend: swapchain format enum %d", (int)colorFormat);
 
 	if (!createPipeline(gpu, shaderDir, colorFormat) ||
-	    !createVertexBuffer(gpu) ||
+	    !createVertexBuffers(gpu, 64) ||
 	    !createTexture(gpu, texturePath) ||
 	    !createSampler(gpu)) {
 		gpuBackendDestroy(gpu);
@@ -506,6 +480,8 @@ void gpuBackendDestroy(GpuBackend *gpu)
 			SDL_ReleaseGPUTexture(gpu->device, gpu->texture);
 		if (gpu->vertexBuffer != NULL)
 			SDL_ReleaseGPUBuffer(gpu->device, gpu->vertexBuffer);
+		if (gpu->vertexTransfer != NULL)
+			SDL_ReleaseGPUTransferBuffer(gpu->device, gpu->vertexTransfer);
 		if (gpu->pipeline != NULL)
 			SDL_ReleaseGPUGraphicsPipeline(gpu->device, gpu->pipeline);
 		if (gpu->claimed)
@@ -515,12 +491,48 @@ void gpuBackendDestroy(GpuBackend *gpu)
 	free(gpu);
 }
 
+/* Expand one draw item into two triangles (corners 0-1-2 and 0-2-3), copying
+ * world position, atlas UV and unpacked RGBA tint. Returns the new vertex
+ * count. `out` must have room for 6 * list->count vertices. */
+static Uint32 buildVertices(const DrawList *list, GpuVertex *out)
+{
+	static const int corner[GPU_VERTICES_PER_ITEM] = { 0, 1, 2, 0, 2, 3 };
+	Uint32 n = 0;
+	size_t i;
+	int k;
+
+	for (i = 0; i < list->count; i++) {
+		const DrawItem *item = &list->items[i];
+		float r = (float)((item->tint >> 24) & 0xffu) / 255.0f;
+		float g = (float)((item->tint >> 16) & 0xffu) / 255.0f;
+		float b = (float)((item->tint >> 8) & 0xffu) / 255.0f;
+		float a = (float)(item->tint & 0xffu) / 255.0f;
+
+		for (k = 0; k < GPU_VERTICES_PER_ITEM; k++) {
+			int c = corner[k];
+			GpuVertex *v = &out[n++];
+
+			v->x = item->worldQuad[c][0];
+			v->y = item->worldQuad[c][1];
+			v->z = item->worldQuad[c][2];
+			v->u = item->uv[c][0];
+			v->v = item->uv[c][1];
+			v->r = r;
+			v->g = g;
+			v->b = b;
+			v->a = a;
+		}
+	}
+	return n;
+}
+
 /* Bind pipeline, viewport, vertex buffer and sampler, push the frame's
- * view-projection, then draw the quad into an already-begun render pass.
- * The uniform push happens inside the pass, before the draw (the canonical
- * SDL_gpu ordering). */
-static void drawQuad(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
-		     SDL_GPURenderPass *pass, Uint32 width, Uint32 height)
+ * view-projection, then draw the uploaded vertices into an already-begun
+ * render pass. The uniform push happens inside the pass, before the draw (the
+ * canonical SDL_gpu ordering). */
+static void drawVertices(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
+			 SDL_GPURenderPass *pass, Uint32 width, Uint32 height,
+			 Uint32 vertexCount)
 {
 	SDL_GPUViewport viewport = {
 		.x = 0.0f, .y = 0.0f,
@@ -531,17 +543,20 @@ static void drawQuad(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
 	SDL_GPUTextureSamplerBinding sampler = { .texture = gpu->texture,
 						 .sampler = gpu->sampler };
 
+	if (vertexCount == 0 || gpu->vertexBuffer == NULL)
+		return;
 	SDL_BindGPUGraphicsPipeline(pass, gpu->pipeline);
 	SDL_SetGPUViewport(pass, &viewport);
 	SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
 	SDL_BindGPUFragmentSamplers(pass, 0, &sampler, 1);
 	SDL_PushGPUVertexUniformData(cmd, 0, gpu->frameViewProj.m,
 				     sizeof(gpu->frameViewProj.m));
-	SDL_DrawGPUPrimitives(pass, GPU_QUAD_VERTEX_COUNT, 1, 0, 0);
+	SDL_DrawGPUPrimitives(pass, vertexCount, 1, 0, 0);
 }
 
 /* Encode the offscreen capture render + download into cmd. */
-static bool recordCapture(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd)
+static bool recordCapture(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd,
+			  Uint32 vertexCount)
 {
 	SDL_GPUColorTargetInfo target = { 0 };
 	SDL_GPURenderPass *pass;
@@ -575,7 +590,8 @@ static bool recordCapture(GpuBackend *gpu, SDL_GPUCommandBuffer *cmd)
 	pass = SDL_BeginGPURenderPass(cmd, &target, 1, NULL);
 	if (pass == NULL)
 		return false;
-	drawQuad(gpu, cmd, pass, GPU_CAPTURE_WIDTH, GPU_CAPTURE_HEIGHT);
+	drawVertices(gpu, cmd, pass, GPU_CAPTURE_WIDTH, GPU_CAPTURE_HEIGHT,
+		     vertexCount);
 	SDL_EndGPURenderPass(pass);
 
 	copy = SDL_BeginGPUCopyPass(cmd);
@@ -628,16 +644,35 @@ static void finishCapture(GpuBackend *gpu)
 	SDL_UnmapGPUTransferBuffer(gpu->device, gpu->captureTransfer);
 }
 
-bool gpuBackendDrawFrame(GpuBackend *gpu, const Mat4 *viewProj)
+bool gpuBackendDrawList(GpuBackend *gpu, const Mat4 *viewProj,
+			const DrawList *list)
 {
 	SDL_GPUCommandBuffer *cmd;
 	SDL_GPUTexture *swapchain = NULL;
 	Uint32 width = 0;
 	Uint32 height = 0;
+	Uint32 vertexCount = 0;
 	bool capturing;
 
-	if (gpu == NULL || gpu->device == NULL || viewProj == NULL)
+	if (gpu == NULL || gpu->device == NULL || viewProj == NULL ||
+	    list == NULL)
 		return false;
+	if (!ensureVertexCapacity(gpu, list->capacity))
+		return false;
+
+	if (list->count > 0) {
+		void *mapped = SDL_MapGPUTransferBuffer(gpu->device,
+							gpu->vertexTransfer, false);
+
+		if (mapped == NULL) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "gpu_backend: vertex staging map failed: %s",
+				     SDL_GetError());
+			return false;
+		}
+		vertexCount = buildVertices(list, mapped);
+		SDL_UnmapGPUTransferBuffer(gpu->device, gpu->vertexTransfer);
+	}
 
 	cmd = SDL_AcquireGPUCommandBuffer(gpu->device);
 	if (cmd == NULL) {
@@ -655,6 +690,25 @@ bool gpuBackendDrawFrame(GpuBackend *gpu, const Mat4 *viewProj)
 
 	gpu->frameViewProj = *viewProj;
 
+	if (vertexCount > 0) {
+		SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+
+		if (copy == NULL) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "gpu_backend: vertex upload copy pass failed: %s",
+				     SDL_GetError());
+			SDL_CancelGPUCommandBuffer(cmd);
+			return false;
+		}
+		SDL_UploadToGPUBuffer(copy,
+			&(SDL_GPUTransferBufferLocation){ .transfer_buffer = gpu->vertexTransfer,
+							  .offset = 0 },
+			&(SDL_GPUBufferRegion){ .buffer = gpu->vertexBuffer, .offset = 0,
+						.size = vertexCount * (Uint32)sizeof(GpuVertex) },
+			true);
+		SDL_EndGPUCopyPass(copy);
+	}
+
 	if (swapchain != NULL) {
 		SDL_GPUColorTargetInfo target = { 0 };
 		SDL_GPURenderPass *pass;
@@ -665,13 +719,13 @@ bool gpuBackendDrawFrame(GpuBackend *gpu, const Mat4 *viewProj)
 		target.clear_color = (SDL_FColor){ 0.10f, 0.10f, 0.14f, 1.0f };
 		pass = SDL_BeginGPURenderPass(cmd, &target, 1, NULL);
 		if (pass != NULL) {
-			drawQuad(gpu, cmd, pass, width, height);
+			drawVertices(gpu, cmd, pass, width, height, vertexCount);
 			SDL_EndGPURenderPass(pass);
 		}
 	}
 
 	capturing = gpu->screenshotPending;
-	if (capturing && !recordCapture(gpu, cmd))
+	if (capturing && !recordCapture(gpu, cmd, vertexCount))
 		capturing = false;
 
 	if (capturing) {

@@ -22,7 +22,7 @@
 # driver smoke run cannot take (GPU-init failure tolerance, the render-asset
 # path guards, the per-frame draw branch); they are exercised only on a real
 # GPU (X11 verification), not under SDL_VIDEODRIVER=dummy.
-src/app.c			50
+src/app.c			42
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
@@ -72,4 +72,17 @@ src/input/input_sdl.c		0
 src/render/math3d.c		100
 src/render/camera3d.c		100
 src/render/gpu_backend.c	0
+
+# Task 8: the voxmap/drawlist/sprite tier (all pure; the GPU upload path lives
+# in gpu_backend.c above). Floors are the measured branch % under the headless
+# suite. voxmap's untaken arms are the file-I/O failure returns (fseek/ftell/
+# fread, malloc) and the unreachable depth<=0 defensive arm; drawlist's are the
+# init malloc-failure arm and the y-position tie-break (which needs exactly
+# equal float depth with different y). sprites.c closes every branch. app.c
+# moves 50 -> 42: the demo-map load, sprite build, drawlist fill/sort/draw and
+# the ISO_CAMERA_TURNS / key-control verification hooks add branches only a
+# real GPU run takes (the dummy smoke never draws).
+src/render/voxmap.c		92
+src/render/drawlist.c		95
+src/render/sprites.c		100
 

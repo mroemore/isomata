@@ -60,6 +60,8 @@ engine_deps = [
 ctol_sources = files('src/events.c', 'src/scene.c',
 		     'src/input/input.c',
 		     'src/render/math3d.c', 'src/render/camera3d.c',
+		     'src/render/voxmap.c', 'src/render/drawlist.c',
+		     'src/render/sprites.c',
 		     'src/ui/ui_scale.c', 'src/ui/element.c', 'src/ui/layout.c',
 		     'src/ui/element_label.c', 'src/ui/element_button.c',
 		     'src/ui/element_menu.c', 'src/ui/element_overlay.c',
@@ -113,13 +115,17 @@ run_command('cp', files('assets/fonts/KiwiSoda.ttf'),
 # "textures/placeholder.png" relative to the executable at runtime.
 _stage_shader_dir = meson.current_build_dir() / 'assets' / 'shaders'
 _stage_texture_dir = meson.current_build_dir() / 'assets' / 'textures'
+_stage_map_dir = meson.current_build_dir() / 'assets' / 'maps'
 run_command('mkdir', '-p', _stage_shader_dir, check : true)
 run_command('mkdir', '-p', _stage_texture_dir, check : true)
+run_command('mkdir', '-p', _stage_map_dir, check : true)
 run_command('cp', files('assets/shaders/world.vert.spv'),
 	    _stage_shader_dir / 'world.vert.spv', check : true)
 run_command('cp', files('assets/shaders/world.frag.spv'),
 	    _stage_shader_dir / 'world.frag.spv', check : true)
 run_command('cp', files('assets/textures/placeholder.png'),
 	    _stage_texture_dir / 'placeholder.png', check : true)
+run_command('cp', files('assets/maps/demo.txt'),
+	    _stage_map_dir / 'demo.txt', check : true)
 
 subdir('tests')
