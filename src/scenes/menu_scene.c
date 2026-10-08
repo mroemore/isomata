@@ -1,9 +1,9 @@
 /*
  * Start menu scene (see menu_scene.h). Owns one UI tree: a vertical pane
- * holding the title label, the three-item menu and a hint label. Menu item
- * callbacks receive the App as their ctx and mutate the scene stack (all
- * mutations are deferred by the stack, so this scene survives its own
- * callback).
+ * holding the title label, the three-item menu and two hint labels (split so
+ * each fits a narrow phone viewport). Menu item callbacks receive the App as
+ * their ctx and mutate the scene stack (all mutations are deferred by the
+ * stack, so this scene survives its own callback).
  */
 
 #include "scenes/menu_scene.h"
@@ -95,31 +95,40 @@ static bool menu_init(void *self, App *app)
 	TextStyle style = menuStyle(app);
 	Element *title;
 	Element *menu;
-	Element *hint;
+	Element *hint1;
+	Element *hint2;
 
 	st->root = uiCreatePane(UI_AXIS_VERTICAL, 80, 18);
 	if (st->root == NULL)
 		return false;
 	title = uiCreateLabel("ISOMATA", &style);
 	menu = uiCreateMenu(&style);
-	hint = uiCreateLabel("Up/Down select  -  Enter choose", &style);
-	if (title == NULL || menu == NULL || hint == NULL ||
+	/* The hint is split into two short labels so each fits the narrowest
+	 * virtual viewport. The pane insets its children by 80 virtual px, so
+	 * at the 320x640 / uiScale 1.30 default config only ~166 virtual px
+	 * are usable: labels must stay under ~11 characters. */
+	hint1 = uiCreateLabel("Up/Down", &style);
+	hint2 = uiCreateLabel("Enter", &style);
+	if (title == NULL || menu == NULL || hint1 == NULL || hint2 == NULL ||
 	    uiMenuAddItem(menu, "Start", menuOnStart, app) == NULL ||
 	    uiMenuAddItem(menu, "Settings", menuOnSettings, app) == NULL ||
 	    uiMenuAddItem(menu, "Quit", menuOnQuit, app) == NULL) {
 		uiDestroyElement(title);
 		uiDestroyElement(menu);
-		uiDestroyElement(hint);
+		uiDestroyElement(hint1);
+		uiDestroyElement(hint2);
 		uiDestroyElement(st->root);
 		st->root = NULL;
 		return false;
 	}
 	uiSetRect(title, 0, 0, 0, 56);
 	uiSetRect(menu, 0, 0, 0, MENU_ROW_HEIGHT * MENU_ITEM_COUNT);
-	uiSetRect(hint, 0, 0, 0, 30);
+	uiSetRect(hint1, 0, 0, 0, 30);
+	uiSetRect(hint2, 0, 0, 0, 30);
 	uiAppendChild(st->root, title);
 	uiAppendChild(st->root, menu);
-	uiAppendChild(st->root, hint);
+	uiAppendChild(st->root, hint1);
+	uiAppendChild(st->root, hint2);
 	return true;
 }
 
