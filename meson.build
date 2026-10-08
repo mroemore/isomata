@@ -59,6 +59,7 @@ engine_deps = [
 # dependency, so linking it into the SDL app is safe.
 ctol_sources = files('src/events.c', 'src/scene.c',
 		     'src/input/input.c',
+		     'src/render/math3d.c', 'src/render/camera3d.c',
 		     'src/ui/ui_scale.c', 'src/ui/element.c', 'src/ui/layout.c',
 		     'src/ui/element_label.c', 'src/ui/element_button.c',
 		     'src/ui/element_menu.c', 'src/ui/element_overlay.c',
@@ -75,10 +76,13 @@ isomata_pure = static_library('isomata_pure', ctol_sources,
 # (platform_android.c) is compiled only by android/app/jni/CMakeLists.txt.
 # input_sdl.c is the SDL glue for the pure input core (the only input file
 # that includes SDL); it lives here, never in isomata_pure.
+# render/gpu_backend.c is the SDL_gpu tier (the only render file that
+# includes SDL); it lives here, never in isomata_pure.
 engine_sources = [
 	'src/app.c',
 	'src/platform/platform.c',
 	'src/input/input_sdl.c',
+	'src/render/gpu_backend.c',
 	'src/ui/ui_font.c',
 ]
 
@@ -103,5 +107,19 @@ _stage_font_dir = meson.current_build_dir() / 'assets' / 'fonts'
 run_command('mkdir', '-p', _stage_font_dir, check : true)
 run_command('cp', files('assets/fonts/KiwiSoda.ttf'),
 	    _stage_font_dir / 'KiwiSoda.ttf', check : true)
+
+# Stage the checked-in SPIR-V shaders and the placeholder texture the same
+# way (Task 7): the app resolves "shaders/*.spv" and
+# "textures/placeholder.png" relative to the executable at runtime.
+_stage_shader_dir = meson.current_build_dir() / 'assets' / 'shaders'
+_stage_texture_dir = meson.current_build_dir() / 'assets' / 'textures'
+run_command('mkdir', '-p', _stage_shader_dir, check : true)
+run_command('mkdir', '-p', _stage_texture_dir, check : true)
+run_command('cp', files('assets/shaders/world.vert.spv'),
+	    _stage_shader_dir / 'world.vert.spv', check : true)
+run_command('cp', files('assets/shaders/world.frag.spv'),
+	    _stage_shader_dir / 'world.frag.spv', check : true)
+run_command('cp', files('assets/textures/placeholder.png'),
+	    _stage_texture_dir / 'placeholder.png', check : true)
 
 subdir('tests')

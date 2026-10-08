@@ -18,7 +18,11 @@
 #
 # Run `meson/coverage.sh --html` to find each module's current branch %, then
 # add or raise a line.
-src/app.c			54
+# Task 7: app.c moves 54 -> 50. The GPU milestone adds branches the dummy-
+# driver smoke run cannot take (GPU-init failure tolerance, the render-asset
+# path guards, the per-frame draw branch); they are exercised only on a real
+# GPU (X11 verification), not under SDL_VIDEODRIVER=dummy.
+src/app.c			50
 src/main.c			50
 src/platform/platform.c		0
 src/events.c			87
@@ -58,4 +62,14 @@ src/ui/ui_font.c		45
 # rises when Task 9 wires the input loop.
 src/input/input.c		97
 src/input/input_sdl.c		0
+
+# Task 7: the SDL_gpu render tier. math3d.c is branch-free arithmetic pinned
+# to 100 by its suite; camera3d.c closes every branch (tween compose/clamp/
+# overshoot, zoom clamps, pan signs, NULL guards). gpu_backend.c is the SDL
+# tier (app target only): the headless suite never creates a GPU device, and
+# the dummy-driver smoke run fails device claim by design, so it is tracked
+# at 0 like platform.c until a GPU runner exists.
+src/render/math3d.c		100
+src/render/camera3d.c		100
+src/render/gpu_backend.c	0
 

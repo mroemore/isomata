@@ -54,6 +54,8 @@ static void test_math_links_libm(void)
 void run_test_events(void);
 void run_test_scene(void);
 void run_test_input(void);
+void run_test_math3d(void);
+void run_test_camera(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
 void run_test_layout(void);
@@ -72,6 +74,8 @@ int main(void)
 	run_test_events();
 	run_test_scene();
 	run_test_input();
+	run_test_math3d();
+	run_test_camera();
 	run_test_ui_scale();
 	run_test_element();
 	run_test_layout();

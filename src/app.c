@@ -1,6 +1,9 @@
 #include "app.h"
 
 #include "platform/platform.h"
+#include "render/camera3d.h"
+#include "render/gpu_backend.h"
+#include "render/math3d.h"
 #include "ui/ui_font.h"
 
 #include <SDL3/SDL.h>
@@ -108,17 +111,68 @@ bool appRun(App *app) {
 	}
 	const Uint64 startMs = SDL_GetTicks();
 	const Uint64 deadline = smokeDeadlineMs();
-	if (deadline != 0) {
+	const bool smoke = deadline != 0;
+	if (smoke) {
 		smokeProbeFont();
 	}
+
+	/* Task 7 milestone: create the SDL_gpu backend and draw one hardcoded
+	 * static quad per frame (Task 8 replaces this with drawlist
+	 * rendering). The smoke path runs under SDL_VIDEODRIVER=dummy, where
+	 * claiming a swapchain fails by design, so a GPU-init failure is
+	 * tolerated there and still exits 0; a normal run fails hard. */
+	char shaderDir[512];
+	char texturePath[512];
+	const char *screenshot = SDL_getenv("ISO_SCREENSHOT");
+	Camera3D camera;
+	GpuBackend *gpu = NULL;
+
+	initCamera3D(&camera);
+	if (platformAssetPath("shaders", shaderDir, sizeof(shaderDir)) != NULL &&
+	    platformAssetPath("textures/placeholder.png", texturePath,
+			      sizeof(texturePath)) != NULL) {
+		gpu = gpuBackendCreate(app->window, shaderDir, texturePath,
+				       screenshot);
+	} else {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: render asset paths unresolved");
+	}
+	if (gpu == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: GPU backend unavailable%s",
+			     smoke ? " (tolerated in smoke mode)" : "");
+		if (!smoke) {
+			return false;
+		}
+	} else {
+		int pixelW = 0;
+		int pixelH = 0;
+
+		SDL_GetWindowSizeInPixels(app->window, &pixelW, &pixelH);
+		SDL_Log("isomata: window %dx%d pixels (aspect %.3f)", pixelW,
+			pixelH, pixelH > 0 ? (float)pixelW / (float)pixelH : 1.0f);
+	}
+
 	while (app->running) {
 		if (deadline != 0 && SDL_GetTicks() - startMs >= deadline) {
 			app->running = false;
 			break;
 		}
 		appHandleEvents(app);
+		if (gpu != NULL) {
+			int pixelW = 0;
+			int pixelH = 0;
+			SDL_GetWindowSizeInPixels(app->window, &pixelW, &pixelH);
+			const float aspect = pixelH > 0 ? (float)pixelW / (float)pixelH : 1.0f;
+			const Mat4 projection = cameraProjection(&camera, aspect);
+			const Mat4 view = cameraView(&camera);
+			const Mat4 viewProj = mat4Multiply(&projection, &view);
+
+			gpuBackendDrawFrame(gpu, &viewProj);
+		}
 		SDL_Delay(APP_FRAME_DELAY_MS);
 	}
+	gpuBackendDestroy(gpu);
 	return true;
 }
 

@@ -19,7 +19,14 @@ ctol_lib = isomata_pure
 fs = import('fs')
 test_module_src = []
 foreach src : ctol_sources
-	test_module_src += ['test_' + fs.name(src).split('.')[0] + '.c']
+	# Twin name: test_<basename>.c. camera3d.c is the one exception — its
+	# tests live in test_camera.c (the task brief's file list), so the
+	# basename maps to "camera" here. Every other module pairs 1:1.
+	base = fs.name(src).split('.')[0]
+	if base == 'camera3d'
+		base = 'camera'
+	endif
+	test_module_src += ['test_' + base + '.c']
 endforeach
 test_pure_exe = executable('test_pure',
 	'test_main.c',
