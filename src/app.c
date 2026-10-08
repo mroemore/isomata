@@ -221,6 +221,17 @@ App *appCreate(const char *title, int width, int height) {
 	}
 	g_sdlInitialized = true;
 
+	/* ISO_LOG=debug raises the app log category to DEBUG so the opt-in
+	 * per-event detail (audio plays, pointer/tap) is emitted. SDL's
+	 * default priority is INFO, so DEBUG lines are silent without it. */
+	{
+		const char *logLevel = SDL_getenv("ISO_LOG");
+
+		if (logLevel != NULL && SDL_strcmp(logLevel, "debug") == 0)
+			SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION,
+					   SDL_LOG_PRIORITY_DEBUG);
+	}
+
 	SDL_Window *window = SDL_CreateWindow(
 		title && *title ? title : APP_TITLE,
 		width,
@@ -348,6 +359,22 @@ bool appRun(App *app) {
 		smokeProbeSafeArea(app);
 	}
 
+	/* Startup INFO line: SDL version, video driver and the window's
+	 * physical pixel size. Logged for every run, GPU or not. */
+	{
+		int sdlVersion = SDL_GetVersion();
+		const char *driver = SDL_GetCurrentVideoDriver();
+		int windowW = 0;
+		int windowH = 0;
+
+		SDL_GetWindowSizeInPixels(app->window, &windowW, &windowH);
+		SDL_Log("isomata: SDL %d.%d.%d, video driver %s, window %dx%d pixels",
+			SDL_VERSIONNUM_MAJOR(sdlVersion),
+			SDL_VERSIONNUM_MINOR(sdlVersion),
+			SDL_VERSIONNUM_MICRO(sdlVersion),
+			driver != NULL ? driver : "?", windowW, windowH);
+	}
+
 	if (!appSetupRuntime(app, smoke)) {
 		appReleaseRuntime(app);
 		return false;
@@ -382,7 +409,27 @@ bool appRun(App *app) {
 
 		appRefreshMetrics(app);
 
-		updateSceneStack(app->stack, app, dt);
+		{
+			/* Log each scene change once, with the new scene's name.
+			 * The stack applies deferred mutations at the start of
+			 * updateSceneStack, so this compares the applied top
+			 * before and after. */
+			Scene *before = activeScene(app->stack);
+
+			updateSceneStack(app->stack, app, dt);
+			{
+				Scene *after = activeScene(app->stack);
+
+				if (after != before) {
+					const char *name = after != NULL
+								   ? sceneName(after)
+								   : NULL;
+
+					SDL_Log("isomata: scene -> %s",
+						name != NULL ? name : "(none)");
+				}
+			}
+		}
 
 		/* Deliver this frame's queued events. An event published during
 		 * a scene update is delivered here (same frame); one published

@@ -88,8 +88,11 @@ Mat4 cameraView(const Camera3D *camera);
  * [0, 360); cameraZoomLevel returns the current zoom; cameraPitchDeg returns
  * the fixed CAMERA_DEFAULT_PITCH_DEG (0 for a NULL camera); cameraTarget
  * writes the ground-plane look-at point through the out pointers (NULL skips
- * one). */
+ * one). cameraYawTargetDeg is the yaw the camera is heading to (the pending
+ * tween target while one is in flight, otherwise the current yaw), also
+ * normalized to [0, 360) — 0 for a NULL camera. */
 float cameraYawDeg(const Camera3D *camera);
+float cameraYawTargetDeg(const Camera3D *camera);
 float cameraZoomLevel(const Camera3D *camera);
 float cameraPitchDeg(const Camera3D *camera);
 void cameraTarget(const Camera3D *camera, float *x, float *z);

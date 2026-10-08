@@ -195,6 +195,27 @@ static void test_reset_cancels_pending_tween(void)
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));
 }
 
+/* cameraYawTargetDeg reports the yaw a step is heading to before the tween
+ * runs, and the resting yaw once it has. */
+static void test_yaw_target_accessor(void)
+{
+	Camera3D c = freshCamera();
+
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawTargetDeg(&c));
+	cameraRotateStep(&c, 1);
+	/* Deferred: the current yaw is still 0, the target is 45. */
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawTargetDeg(&c));
+	/* A second step mid-tween composes the target to 90. */
+	updateCamera3D(&c, CAMERA_TURN_SECONDS * 0.5f);
+	cameraRotateStep(&c, 1);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawTargetDeg(&c));
+	/* Completed tween: target == current yaw. */
+	updateCamera3D(&c, CAMERA_TURN_SECONDS);
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawTargetDeg(&c));
+	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, cameraYawDeg(&c));
+}
+
 /* cameraTarget fills each out pointer independently. */
 static void test_target_getters_partial(void)
 {
@@ -349,6 +370,7 @@ static void test_null_arguments_are_safe(void)
 	cameraZoom(NULL, 1.0f);
 	cameraPan(NULL, 1.0f, 1.0f);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawDeg(NULL));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraYawTargetDeg(NULL));
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraZoomLevel(NULL));
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, cameraPitchDeg(NULL));
 	cameraTarget(NULL, NULL, NULL);
@@ -371,6 +393,7 @@ void run_test_camera(void)
 	RUN_TEST(test_step_composes_during_tween);
 	RUN_TEST(test_reset_restores_startup_state);
 	RUN_TEST(test_reset_cancels_pending_tween);
+	RUN_TEST(test_yaw_target_accessor);
 	RUN_TEST(test_target_getters_partial);
 	RUN_TEST(test_zoom_multiplicative_and_clamped);
 	RUN_TEST(test_pan_at_yaw_zero);

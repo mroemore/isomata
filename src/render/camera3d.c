@@ -157,6 +157,13 @@ float cameraYawDeg(const Camera3D *camera)
 	return normalizeYaw(camera->yawDeg);
 }
 
+float cameraYawTargetDeg(const Camera3D *camera)
+{
+	if (camera == NULL)
+		return 0.0f;
+	return normalizeYaw(camera->yawTargetDeg);
+}
+
 float cameraZoomLevel(const Camera3D *camera)
 {
 	if (camera == NULL)

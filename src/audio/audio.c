@@ -195,13 +195,15 @@ void audioPlay(Audio *a, SoundId id)
 				SDL_Log("audio: put sound %d failed: %s",
 					(int)id, SDL_GetError());
 			else
-				SDL_Log("audio: play sound %d on voice %d",
-					(int)id, i);
+				SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+					     "audio: play sound %d on voice %d",
+					     (int)id, i);
 			return;
 		}
 	}
-	SDL_Log("audio: all %d voices busy, dropped sound %d",
-		AUDIO_VOICE_COUNT, (int)id);
+	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+		     "audio: all %d voices busy, dropped sound %d",
+		     AUDIO_VOICE_COUNT, (int)id);
 }
 
 void audioSetGain(Audio *a, float gain)

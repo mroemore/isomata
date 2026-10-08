@@ -110,6 +110,8 @@ static void levelOnAchievement(void *ctx, const Event *event)
 		return;
 	unlock = event->payload;
 	toastShow(st->toast, unlock->title);
+	SDL_Log("isomata: achievement unlocked: %s",
+		unlock->title != NULL ? unlock->title : "(untitled)");
 }
 
 static void levelPublishTurn(LevelState *st, int direction)
@@ -134,6 +136,8 @@ static void levelResetCamera(LevelState *st)
 	initCamera3D(&st->camera);
 	/* Centre the 16x16 map: at yaw 0, pan x moves +X and pan y moves -Z. */
 	cameraPan(&st->camera, 8.0f, -8.0f);
+	SDL_Log("isomata: level camera reset (yaw %.1f, zoom %.2f)",
+		cameraYawDeg(&st->camera), cameraZoomLevel(&st->camera));
 }
 
 /* Apply one 45-degree rotate step and publish it. The single path shared by
@@ -141,6 +145,8 @@ static void levelResetCamera(LevelState *st)
 static void levelRotate(LevelState *st, int direction)
 {
 	cameraRotateStep(&st->camera, direction);
+	SDL_Log("isomata: level rotate %+d -> yaw %.1f", direction,
+		cameraYawTargetDeg(&st->camera));
 	levelPublishTurn(st, direction);
 }
 
@@ -242,9 +248,11 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 		break;
 	case CMD_ZOOM_IN:
 		cameraZoom(&st->camera, 1.0f);
+		SDL_Log("isomata: level zoom %.2f", cameraZoomLevel(&st->camera));
 		break;
 	case CMD_ZOOM_OUT:
 		cameraZoom(&st->camera, -1.0f);
+		SDL_Log("isomata: level zoom %.2f", cameraZoomLevel(&st->camera));
 		break;
 	case CMD_RESET:
 		levelResetCamera(st);
@@ -275,6 +283,17 @@ static void level_update(void *self, App *app, float dt)
 	 * model (Q/E/R own rotation/reset), so ACTIVATE must not fire a
 	 * button. See uiBridgeDispatchPointer. */
 	(void)uiBridgeDispatchPointer(st->root, frame);
+
+	/* Opt-in pointer/tap detail (ISO_LOG=debug). Discrete events only, so
+	 * a drag does not spam one line per frame. */
+	if (frame->tap)
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: level tap at %d,%d", frame->tapX,
+			     frame->tapY);
+	if (frame->zoomSteps != 0)
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: level pinch zoom steps %d",
+			     frame->zoomSteps);
 
 	for (i = 0; i < frame->commandCount && i < INPUT_MAX_COMMANDS; i++)
 		levelHandleCommand(st, app, frame->commands[i]);
