@@ -287,6 +287,90 @@ static void test_pan_at_yaw_ninety(void)
 	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, z);
 }
 
+/* cameraPanByDrag: the camera follows the drag, the INVERSE of the raw
+ * cameraPan sign. At yaw 0 dragging right (dx > 0) moves the view right
+ * (target +X) and dragging down (dy > 0) moves the view toward the viewer
+ * (target +Z). The raw cameraPan(x, y) moves the target (+x, -y) at yaw 0,
+ * so the helper composes the drag sign on top:
+ * cameraPanByDrag(dx, dy) == cameraPan(dx * K, -dy * K). */
+static void test_pan_by_drag_follows_pointer_at_yaw_zero(void)
+{
+	Camera3D c = freshCamera();
+	float x = 0.0f;
+	float z = 0.0f;
+
+	/* The mapping constant is pinned (reduced from the old 0.05). */
+	TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.04f, CAMERA_PAN_PER_PIXEL);
+
+	cameraPanByDrag(&c, 1, 0);	/* drag right -> view right (+X) */
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, CAMERA_PAN_PER_PIXEL, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
+
+	cameraPanByDrag(&c, -1, 0);	/* drag left: undoes it */
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
+
+	cameraPanByDrag(&c, 0, 1);	/* drag down -> toward viewer (+Z) */
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, CAMERA_PAN_PER_PIXEL, z);
+
+	cameraPanByDrag(&c, 0, -1);	/* drag up: undoes it */
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
+}
+
+/* Magnitude: the target delta is exactly the virtual delta times the pinned
+ * per-pixel constant (no rounding, no clamp). */
+static void test_pan_by_drag_magnitude(void)
+{
+	Camera3D c = freshCamera();
+	float x = 0.0f;
+	float z = 0.0f;
+
+	cameraPanByDrag(&c, 10, 5);
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 10.0f * CAMERA_PAN_PER_PIXEL, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 5.0f * CAMERA_PAN_PER_PIXEL, z);
+}
+
+/* The helper is exactly the raw pan with the drag sign composed on top
+ * (pins the yaw-0 axis convention the level's centring comment relies on). */
+static void test_pan_by_drag_composes_raw_pan(void)
+{
+	Camera3D drag = freshCamera();
+	Camera3D raw = freshCamera();
+	float dx = 0.0f;
+	float dz = 0.0f;
+	float rx = 0.0f;
+	float rz = 0.0f;
+
+	cameraPanByDrag(&drag, 7, -3);
+	cameraPan(&raw, 7.0f * CAMERA_PAN_PER_PIXEL,
+		  -(-3.0f) * CAMERA_PAN_PER_PIXEL);
+	cameraTarget(&drag, &dx, &dz);
+	cameraTarget(&raw, &rx, &rz);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, rx, dx);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, rz, dz);
+}
+
+/* NULL camera and zero deltas are no-ops. */
+static void test_pan_by_drag_noop_cases(void)
+{
+	Camera3D c = freshCamera();
+	float x = 9.0f;
+	float z = 9.0f;
+
+	cameraPanByDrag(NULL, 5, 5);
+	cameraPanByDrag(&c, 0, 0);
+	cameraTarget(&c, &x, &z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
+}
+
 /* Projection is orthographic with half-height BASE/zoom and half-width
  * scaled by aspect: at zoom 1, aspect 2 -> ortho(-20,20,-10,10,1,100). */
 static void test_projection_ortho_entries(void)
@@ -398,6 +482,10 @@ void run_test_camera(void)
 	RUN_TEST(test_zoom_multiplicative_and_clamped);
 	RUN_TEST(test_pan_at_yaw_zero);
 	RUN_TEST(test_pan_at_yaw_ninety);
+	RUN_TEST(test_pan_by_drag_follows_pointer_at_yaw_zero);
+	RUN_TEST(test_pan_by_drag_magnitude);
+	RUN_TEST(test_pan_by_drag_composes_raw_pan);
+	RUN_TEST(test_pan_by_drag_noop_cases);
 	RUN_TEST(test_projection_ortho_entries);
 	RUN_TEST(test_projection_zoom_and_aspect_guard);
 	RUN_TEST(test_view_places_target_on_negative_z_axis);

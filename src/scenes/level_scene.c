@@ -45,7 +45,6 @@
 
 #define LEVEL_DRAWLIST_CAPACITY 4096
 #define LEVEL_SPRITE_COUNT 3
-#define LEVEL_PAN_PER_PIXEL 0.05f	/* world units per virtual drag pixel */
 
 #define LEVEL_TOAST_W 300
 #define LEVEL_TOAST_H 48
@@ -298,10 +297,10 @@ static void level_update(void *self, App *app, float dt)
 	for (i = 0; i < frame->commandCount && i < INPUT_MAX_COMMANDS; i++)
 		levelHandleCommand(st, app, frame->commands[i]);
 
-	/* Content follows the pointer: drag right/down moves the view with it. */
+	/* The camera follows the drag: dragging right moves the view right and
+	 * dragging down moves the view toward the viewer (cameraPanByDrag). */
 	if (frame->panDx != 0 || frame->panDy != 0)
-		cameraPan(&st->camera, -(float)frame->panDx * LEVEL_PAN_PER_PIXEL,
-			  -(float)frame->panDy * LEVEL_PAN_PER_PIXEL);
+		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
 	toastUpdate(st->toast, dt);

@@ -23,6 +23,13 @@
  *   forward axis (the ground projection of the view direction, i.e. into
  *   the screen). At yaw 0 right is +X and forward is -Z; at yaw 90 right
  *   is -Z and forward is -X (both pinned by tests).
+ * - cameraPanByDrag maps a pointer drag (virtual pixels) so the camera
+ *   FOLLOWS the drag: dragging right moves the view right and dragging down
+ *   moves the view toward the viewer. That is the INVERSE of the raw
+ *   cameraPan sign, so it composes the drag sign on top of cameraPan:
+ *   cameraPanByDrag(dx, dy) == cameraPan(dx * CAMERA_PAN_PER_PIXEL,
+ *   -dy * CAMERA_PAN_PER_PIXEL) — the same yaw-0 convention the level's
+ *   centring comment relies on (pan x = +X, pan y = -Z).
  *
  * Struct fields are private to camera3d.c; callers use initCamera3D and
  * the accessors. The struct is defined here only so callers can hold one
@@ -42,6 +49,7 @@
 #define CAMERA_BASE_HALF_HEIGHT 10.0f		/* world half-height at zoom 1 */
 #define CAMERA_NEAR 1.0f
 #define CAMERA_FAR 100.0f
+#define CAMERA_PAN_PER_PIXEL 0.04f		/* world units per virtual drag pixel */
 
 typedef struct Camera3D {
 	/* Private state. */
@@ -78,6 +86,12 @@ void cameraZoom(Camera3D *camera, float amount);
 /* Move the look-at target by screen-relative ground deltas (see the model
  * note above). */
 void cameraPan(Camera3D *camera, float x, float y);
+
+/* Ground-plane pan for a drag gesture, in VIRTUAL pixels: the camera follows
+ * the drag (see the model note above). Dragging right (dxVirtual > 0) moves
+ * the view right; dragging down (dyVirtual > 0) moves the view toward the
+ * viewer. A NULL camera and zero deltas are no-ops. */
+void cameraPanByDrag(Camera3D *camera, int dxVirtual, int dyVirtual);
 
 /* Orthographic view-projection source matrices. A NULL camera yields the
  * identity (so a degenerate camera never produces NaNs). */
