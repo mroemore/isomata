@@ -29,8 +29,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Opaque white: the placeholder atlas region supplies the actual colour. */
-#define FRAME_VOXEL_TINT DRAW_TINT(255, 255, 255, 255)
+/* Voxel face tint. Slightly below white so voxmap's per-face shade and the
+ * 1.06 checkerboard boost have headroom to brighten without clamping (with a
+ * white tint, 255 * 1.06 clamps to 255 and the checkerboard is invisible on
+ * the flat ground tops). The atlas texel still carries the base colour. */
+#define FRAME_VOXEL_TINT DRAW_TINT(240, 240, 240, 255)
 
 bool buildFrameDrawList(const Voxmap *map, const SpriteEntity *sprites,
 			size_t count, const Camera3D *camera, DrawList *list);

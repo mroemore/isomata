@@ -164,9 +164,8 @@ static void test_map_and_sprites_sorted_and_composed(void)
 	destroyVoxmap(map);
 }
 
-/* The top face of an even tile carries the pinned opaque-white tint (face
- * shade 1.0, no checker boost); sprites keep their own. Side faces and odd
- * tiles are shaded by voxmap (see test_voxmap). */
+/* Voxel faces carry the pinned frame tint (below white so the voxmap shade
+ * and checker boost have headroom); sprites keep their own. */
 static void test_voxel_tint_pinned(void)
 {
 	Voxmap *map = loadTemp("frame_tint.txt", "1\n");
