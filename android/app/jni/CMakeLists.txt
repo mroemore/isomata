@@ -43,6 +43,7 @@ set(ISOMATA_SRC
 	../../../src/render/drawlist.c
 	../../../src/render/sprites.c
 	../../../src/render/frame.c
+	../../../src/render/grid.c
 	../../../src/scenes/ui_bridge.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c

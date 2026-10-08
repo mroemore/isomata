@@ -217,3 +217,8 @@ permanently in `fuzz/corpus/<target>/` as `regress*`.
   branch data can vanish with no error. Verify the tool, not just the number.
 - **Guard the slot count as well as the byte count.** A resource usually has two
   limits (bytes *and* slots); guarding one does not guard the other.
+- **A new engine source missing from the Android source list.** The Meson suite
+  and desktop build will not notice that `android/app/jni/CMakeLists.txt` lacks
+  a new `.c` file — the APK fails only at link time (hit twice: `audio.c`,
+  `grid.c`). Add the file to the CMake list in the same change, and build the
+  APK before calling a source-adding task done.
