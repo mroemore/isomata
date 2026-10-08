@@ -94,10 +94,19 @@ static void settings_draw(void *self, App *app)
 	float scale = appUiScale(app);
 	int vw = uiScalePhysicalToVirtual(appPixelWidth(app), scale);
 	int vh = uiScalePhysicalToVirtual(appPixelHeight(app), scale);
+	int sx;
+	int sy;
+	int sw;
+	int sh;
 
+	/* The dim overlay covers the whole window; the pane is centred inside
+	 * the safe area so its controls clear notches / status / navigation
+	 * bars (on desktop the safe area is the full window). */
+	appSafeArea(app, &sx, &sy, &sw, &sh);
 	uiSetRect(st->root, 0, 0, vw, vh);
-	uiSetRect(st->pane, (vw - SETTINGS_PANE_W) / 2, (vh - SETTINGS_PANE_H) / 2,
-		  SETTINGS_PANE_W, SETTINGS_PANE_H);
+	uiSetRect(st->pane, sx + (sw - SETTINGS_PANE_W) / 2,
+		  sy + (sh - SETTINGS_PANE_H) / 2, SETTINGS_PANE_W,
+		  SETTINGS_PANE_H);
 	uiLayout(st->root);
 	uiDraw(st->root, appUiDrawCtx(app));
 }

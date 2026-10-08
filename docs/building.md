@@ -106,7 +106,7 @@ Vulkan disabled for a headless (`SDL_VIDEODRIVER=dummy`) target build.
   aarch64-linux-gnu-gcc -std=c11 -Wall -Wextra -Werror -I src -I tests \
       -c <each pure + test source> ...
   aarch64-linux-gnu-gcc -static <objects> -lm -o test_pure-aarch64
-  qemu-aarch64-static ./test_pure-aarch64        # 204 Tests 0 Failures 0 Ignored -> OK
+  qemu-aarch64-static ./test_pure-aarch64        # 208 Tests 0 Failures 0 Ignored -> OK
   ```
 
   armhf is identical with `arm-linux-gnueabihf-gcc` / `qemu-arm`.

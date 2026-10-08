@@ -70,7 +70,7 @@ On this box the Meson cross *configure* stops at `dependency('sdl3')`: there
 is no target-side SDL3 pkg-config/sysroot, so the full ARM app cannot link.
 The code itself is verified for ARM instead: the headless pure test suite
 cross-compiles to a static aarch64/armhf binary and runs under
-`qemu-aarch64-static` / `qemu-arm` (204 tests, 0 failures), and every
+`qemu-aarch64-static` / `qemu-arm` (208 tests, 0 failures), and every
 SDL-tier translation unit compiles clean for both targets. See
 [docs/building.md](docs/building.md#arm-linux-cross-builds) for the exact
 commands and the remaining prerequisites for a full app cross-build.
