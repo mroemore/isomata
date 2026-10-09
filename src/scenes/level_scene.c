@@ -297,8 +297,8 @@ static void level_update(void *self, App *app, float dt)
 	for (i = 0; i < frame->commandCount && i < INPUT_MAX_COMMANDS; i++)
 		levelHandleCommand(st, app, frame->commands[i]);
 
-	/* The camera follows the drag: dragging right moves the view right and
-	 * dragging down moves the view toward the viewer (cameraPanByDrag). */
+	/* The content follows the finger: dragging right moves the map right
+	 * and dragging down moves it down (cameraPanByDrag). */
 	if (frame->panDx != 0 || frame->panDy != 0)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 

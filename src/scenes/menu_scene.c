@@ -102,7 +102,7 @@ static bool menu_init(void *self, App *app)
 
 	/* The hint runs at a smaller size than the title/items so the full
 	 * wording fits the narrowest supported virtual viewport: at 24px
-	 * "Up/Down select" measures 149-157 virtual px across the verified
+	 * "Up/Down select" measures 147.5-157 virtual px across the verified
 	 * configs, and the pane's 80px inset leaves >= 166 px even at the
 	 * 320x640 / uiScale 1.30 default config (246 virtual px). */
 	hintStyle.pixelSize = MENU_HINT_FONT_PIXELS;

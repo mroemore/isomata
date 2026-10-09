@@ -29,9 +29,10 @@
  *   billboard's centre is perpendicular to the view direction and would
  *   otherwise tie exactly with the anchor it stands on. Because the bias
  *   separates a sprite from a coplanar face, the kind tie-break below is
- *   only reached when two keys are exactly equal AFTER the bias (two
- *   coplanar faces, or a face and a sprite at the same biased depth); the
- *   common sprite-vs-face tie is resolved by the bias, not by kind. Ties
+ *   only reached when two keys are exactly equal AFTER the bias (in practice
+ *   a face and a sprite landing on the same biased depth; two faces of equal
+ *   depth fall to the centre lexicographic break below); the common
+ *   sprite-vs-face tie is resolved by the bias, not by kind. Ties
  *   break deterministically: depth, then kind (VOXEL before SPRITE, so a
  *   transparent billboard blends over opaque terrain at the same depth),
  *   then centre position lexicographically (x, then y, then z), then
