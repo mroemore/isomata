@@ -17,6 +17,11 @@
  *   (nearest sampling, matching the pipeline). Textures are cached in a
  *   small fixed cache (UI_GPU_TEXT_CACHE entries); when full the oldest
  *   entry is destroyed and its slot reused (FIFO eviction).
+ * - drawImage draws one of the five UI icons. uiGpuCreate best-effort loads
+ *   them from assets/icons/ (resolved through platformAssetPath, so Android
+ *   APK assets work) as nearest-sampled textures and releases them in
+ *   uiGpuDestroy. A missing/unreadable PNG is logged once and that icon
+ *   simply draws nothing — it never fails uiGpuCreate or crashes a frame.
  * - No SDL_Renderer is used anywhere.
  *
  * The UiDrawCtx passed to uiDraw is owned by the UiGpu; the UiGpu embeds

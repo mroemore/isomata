@@ -6,6 +6,7 @@
 
 #include "ui/ui_gpu.h"
 
+#include "platform/platform.h"
 #include "render/gpu_backend.h"
 #include "ui/ui_scale.h"
 
@@ -33,9 +34,30 @@ struct UiGpu {
 	int basePixelSize;
 	float scale;
 	SDL_GPUTexture *white;
+	SDL_GPUTexture *icons[UI_ICON_COUNT];	/* NULL = missing/unloadable */
 	UiTextEntry cache[UI_GPU_TEXT_CACHE];
 	int nextSlot;		/* FIFO eviction cursor */
 };
+
+/* The asset file backing each icon (white on transparent, 64x64). NULL for
+ * UI_ICON_COUNT / out-of-range. */
+static const char *uiGpuIconAssetName(UiIcon icon)
+{
+	switch (icon) {
+	case UI_ICON_ROTATE_CCW:
+		return "icons/rotate-2.png";
+	case UI_ICON_ROTATE_CW:
+		return "icons/rotate-clockwise-2.png";
+	case UI_ICON_RESTORE:
+		return "icons/restore.png";
+	case UI_ICON_BULB:
+		return "icons/bulb.png";
+	case UI_ICON_BULB_OFF:
+		return "icons/bulb-off.png";
+	default:
+		return NULL;
+	}
+}
 
 /* Upload an RGBA32 pixel buffer as a nearest-sampled GPU texture. Uses the
  * open frame's command buffer when there is one (the copy pass runs before
@@ -124,6 +146,41 @@ static SDL_GPUTexture *uiGpuUploadPixels(UiGpu *ui, int w, int h, int pitch,
 	if (ownCmd)
 		SDL_SubmitGPUCommandBuffer(cmd);
 	SDL_ReleaseGPUTransferBuffer(ui->device, transfer);
+	return tex;
+}
+
+/* Load one icon PNG (resolved through platformAssetPath so Android APK
+ * assets work) and upload it. Returns NULL and logs ONCE per create when
+ * the file is missing/unreadable — the UI tolerates a missing icon (the
+ * button simply skips the image); this never fails uiGpuCreate. */
+static SDL_GPUTexture *uiGpuLoadIcon(UiGpu *ui, UiIcon icon)
+{
+	const char *name = uiGpuIconAssetName(icon);
+	char path[512];
+	SDL_Surface *raw;
+	SDL_Surface *rgba;
+	SDL_GPUTexture *tex;
+
+	if (name == NULL || platformAssetPath(name, path, sizeof(path)) == NULL)
+		return NULL;
+	raw = SDL_LoadPNG(path);
+	if (raw == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "ui_gpu: icon '%s' failed to load: %s", path,
+			     SDL_GetError());
+		return NULL;
+	}
+	rgba = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
+	SDL_DestroySurface(raw);
+	if (rgba == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "ui_gpu: icon '%s' convert failed: %s", path,
+			     SDL_GetError());
+		return NULL;
+	}
+	tex = uiGpuUploadPixels(ui, rgba->w, rgba->h, (int)rgba->pitch,
+				rgba->pixels);
+	SDL_DestroySurface(rgba);
 	return tex;
 }
 
@@ -232,15 +289,39 @@ static void uiGpuDrawText(UiDrawCtx *ctx, int x, int y, const char *text,
 			     (float)entry->w, (float)entry->h, uv, rgba);
 }
 
+static void uiGpuDrawImage(UiDrawCtx *ctx, int x, int y, int w, int h,
+			   UiIcon icon, uint32_t rgba)
+{
+	static const float uv[4][2] = {
+		{ 0.0f, 0.0f }, { 1.0f, 0.0f }, { 1.0f, 1.0f }, { 0.0f, 1.0f },
+	};
+	UiGpu *ui = (UiGpu *)ctx;
+	int px = x;
+	int py = y;
+	int pw = w;
+	int ph = h;
+
+	if (ui == NULL || (int)icon < 0 || icon >= UI_ICON_COUNT)
+		return;
+	/* Missing icon: already logged once at create; skip (blank button). */
+	if (ui->icons[icon] == NULL)
+		return;
+	uiScaleRect(&px, &py, &pw, &ph, ui->scale);
+	gpuBackendDrawUiQuad(ui->gpu, ui->icons[icon], (float)px, (float)py,
+			     (float)pw, (float)ph, uv, rgba);
+}
+
 static const UiDrawCtxVt uiGpuVt = {
 	uiGpuFillRect,
 	uiGpuDrawText,
+	uiGpuDrawImage,
 };
 
 UiGpu *uiGpuCreate(GpuBackend *gpu, const char *fontPath, int fontPixelSize)
 {
 	Uint8 whitePixel[4] = { 255, 255, 255, 255 };
 	UiGpu *ui;
+	int i;
 
 	if (gpu == NULL || fontPath == NULL || fontPath[0] == '\0' ||
 	    fontPixelSize <= 0)
@@ -274,6 +355,10 @@ UiGpu *uiGpuCreate(GpuBackend *gpu, const char *fontPath, int fontPixelSize)
 		uiGpuDestroy(ui);
 		return NULL;
 	}
+	/* Best-effort icon load: a missing PNG leaves that slot NULL (logged
+	 * once above) and the button just skips the image. */
+	for (i = 0; i < UI_ICON_COUNT; i++)
+		ui->icons[i] = uiGpuLoadIcon(ui, (UiIcon)i);
 	return ui;
 }
 
@@ -286,6 +371,10 @@ void uiGpuDestroy(UiGpu *ui)
 	for (i = 0; i < UI_GPU_TEXT_CACHE; i++) {
 		if (ui->cache[i].used && ui->cache[i].texture != NULL)
 			SDL_ReleaseGPUTexture(ui->device, ui->cache[i].texture);
+	}
+	for (i = 0; i < UI_ICON_COUNT; i++) {
+		if (ui->icons[i] != NULL)
+			SDL_ReleaseGPUTexture(ui->device, ui->icons[i]);
 	}
 	if (ui->white != NULL)
 		SDL_ReleaseGPUTexture(ui->device, ui->white);
