@@ -128,9 +128,12 @@ coloured light mixture from multiple sources.
   is minimal even before smoothing.
 - **L4 — Debug view**: a key toggles a light-only render (faces show their
   light colour, no texture) for tuning.
-- **L5 — Tasks**: T14 = light grid + propagation (sky + block) + emitters
-  (point/spot) + pure golden tests; T15 = sampling + AO + lights parsing +
-  demo lights + debug view + Xvfb/emulator evidence.
+- **L5 — Tasks**: **T14** = light grid + propagation (sky + block) + emitters
+  (point/spot) + `$` parsing + **flat per-face light sampled into emission** +
+  demo lights + golden tests + Xvfb/emulator evidence + APK — i.e. T14 lands a
+  **visible, testable** basic lighting pass (the pure core alone would not be
+  hands-on testable). **T15** = smooth per-corner sampling + AO + the
+  smooth/flat toggle + debug view + tuning/polish.
 
 ---
 
