@@ -46,6 +46,8 @@ build/isomata     # opens a window; close it or Ctrl-C to quit
 
 Controls: `Q`/`E` (or the on-screen ROT L / ROT R buttons) rotate 45 degrees per press, `R` (or the on-screen RESET button) restores the startup view, `+`/`-` zoom, drag pans, arrows/`hjkl` navigate, `Esc` pauses.
 
+Maps: see [docs/map-authoring.md](docs/map-authoring.md) for both map formats — the ASCII slices (`assets/maps/demo.txt`) and the PNG-slice authoring pipeline (`assets/maps/demo/`).
+
 If a system pkg-config entry for `sdl3-ttf` is missing (e.g. only the runtime
 lib is installed), Meson transparently falls back to
 `subprojects/sdl3-ttf.wrap`, which builds SDL_ttf 3.2.2 (cmake-method wrap,

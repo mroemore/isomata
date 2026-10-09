@@ -19,3 +19,12 @@ All three are 16-bit mono 44100 Hz, generated reproducibly by
 audio tier (`src/audio/audio.c`). Re-run `python3 scripts/gen-audio.py` to
 regenerate them; the WAVs are committed so a normal build never runs it.
 
+## Maps
+
+- `maps/demo.txt` — the ASCII source of truth for the demo scene (16x16, 9
+  horizontal slices, room/roof/skylight/doorway/lamp; see `voxmap.h`).
+- `maps/demo/` — the same scene as PNG slices (`00.png`..`08.png`) plus
+  `legend.txt`, generated from `demo.txt` by `scripts/gen-map-png.sh`. The app
+  prefers this directory and falls back to `demo.txt`; the two are proven
+  identical by `tests/test_pngmap.c`. See `docs/map-authoring.md`.
+
