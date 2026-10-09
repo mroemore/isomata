@@ -107,11 +107,13 @@ void lightGridAt(const LightGrid *grid, int x, int y, int z, uint8_t out[3]);
  * smoothing). The sky term is scaled by LIGHT_SKY_GAIN_PCT and added to the
  * block channel (saturated at 255), then mapped through the ambient floor:
  *   combined = min(255, sky * LIGHT_SKY_GAIN_PCT / 100 + block[c])
- *   out[c]   = LIGHT_AMBIENT + combined * (255 - LIGHT_AMBIENT) / 255
- * so a fully dark cell reads LIGHT_AMBIENT and a full cell reads 255. A NULL
- * grid writes {255, 255, 255} (lighting disabled); an out-of-grid cell writes
- * the open-sky factor (a sky-open cell with no block light), so map-edge faces
- * match void-neighbour faces. A NULL out is a no-op. */
+ *   out[c]   = LIGHT_AMBIENT + (combined * (255 - LIGHT_AMBIENT) + 127) / 255
+ * (integer arithmetic; the +127 makes the division round to nearest, half up,
+ * which the tests pin). So a fully dark cell reads LIGHT_AMBIENT and a full
+ * cell reads 255. A NULL grid writes {255, 255, 255} (lighting disabled); an
+ * out-of-grid cell writes the open-sky factor (a sky-open cell with no block
+ * light), so map-edge faces match void-neighbour faces. A NULL out is a
+ * no-op. */
 void lightGridFactorAt(const LightGrid *grid, int x, int y, int z,
 		       uint8_t out[3]);
 
@@ -131,7 +133,10 @@ void lightGridPropagateSolid(LightGrid *grid, const uint8_t *solid);
  * reaches ~10 cells before the fill attenuates it to 0); radius <= 0 keeps the
  * full channel values and leaves only the global attenuation. Merges per
  * channel with any existing value. No-op for a NULL grid, a non-finite/absent
- * point, or a point outside the grid. */
+ * point, or a point outside the grid. The seed lands on the cell containing
+ * (x, y, z) whether or not that cell is solid (the emitter is a point in space,
+ * not a surface); the fill then carries the light out into the surrounding air
+ * and it never crosses a solid cell. */
 void lightGridSeedPoint(LightGrid *grid, float x, float y, float z, float r,
 			float g, float b, float radius);
 
@@ -142,8 +147,10 @@ void lightGridSeedPoint(LightGrid *grid, float x, float y, float z, float r,
  *   value = channel * distanceFalloff * angleFalloff
  * where both falloffs are linear (1 at the apex/axis, 0 at radius/half-angle).
  * The fill then softens the cone edges. Merges per channel. No-op for a NULL
- * grid, a NULL/zero `dir`, radius <= 0, or halfAngleDeg <= 0. `map` supplies
- * the LOS solidity (NULL = no blockers). */
+ * grid, a NULL/zero `dir`, radius <= 0, halfAngleDeg <= 0, or an apex outside
+ * the grid (the same float-space bounds rule lightGridSeedPoint uses; this also
+ * keeps the LOS DDA's float->int casts in range for any finite input). `map`
+ * supplies the LOS solidity (NULL = no blockers). */
 void lightGridSeedSpot(LightGrid *grid, const Voxmap *map, float x, float y,
 		       float z, const float dir[3], float halfAngleDeg, float r,
 		       float g, float b, float radius);

@@ -155,11 +155,11 @@ void lightGridAt(const LightGrid *grid, int x, int y, int z, uint8_t out[3])
 	}
 }
 
-/* Map a 0..255 combined light to the ambient-floored brightness factor. */
+/* Map a 0..255 combined light to the ambient-floored brightness factor. The
+ * caller only passes v >= 0 (sky and block are unsigned), so there is no lower
+ * clamp; v is capped at 255 before the map. */
 static uint8_t factorFromCombined(int v)
 {
-	if (v < 0)
-		v = 0;
 	if (v > 255)
 		v = 255;
 	return (uint8_t)(LIGHT_AMBIENT +
@@ -377,6 +377,19 @@ static void seedChannel(LightGrid *g, size_t idx, int channel, uint8_t value,
 		*slot = v;
 }
 
+/* True when (x, y, z) is finite and the cell containing it is inside the grid.
+ * Both emitters reject an origin failing this in float space, before any
+ * float->int cast: a huge (or non-finite) coordinate would be UB to cast, and
+ * an emitter origin outside the grid seeds nothing. A spot apex outside the
+ * grid is therefore malformed too (the same rule as a point). */
+static bool originInGrid(const LightGrid *grid, float x, float y, float z)
+{
+	return isfinite(x) && isfinite(y) && isfinite(z) &&
+	       x >= 0.0f && y >= 0.0f && z >= 0.0f &&
+	       x < (float)grid->w && y < (float)grid->h &&
+	       z < (float)grid->d;
+}
+
 void lightGridSeedPoint(LightGrid *grid, float x, float y, float z, float r,
 			float g, float b, float radius)
 {
@@ -388,13 +401,7 @@ void lightGridSeedPoint(LightGrid *grid, float x, float y, float z, float r,
 
 	if (grid == NULL)
 		return;
-	if (!isfinite(x) || !isfinite(y) || !isfinite(z))
-		return;
-	/* Reject out-of-range points in float space before any float->int cast
-	 * (a huge coordinate would be UB to cast). */
-	if (x < 0.0f || y < 0.0f || z < 0.0f)
-		return;
-	if (x >= (float)grid->w || y >= (float)grid->h || z >= (float)grid->d)
+	if (!originInGrid(grid, x, y, z))
 		return;
 	cx = (int)floorf(x);
 	cy = (int)floorf(y);
@@ -414,7 +421,12 @@ static bool mapCellSolid(const Voxmap *map, int x, int y, int z)
 }
 
 /* Amanatides-Woo voxel DDA from (ax, ay, az) to the centre of (tx, ty, tz).
- * Returns false when a solid map cell strictly between the endpoints blocks. */
+ * Returns false when a solid map cell strictly between the endpoints blocks.
+ *
+ * Precondition: the apex is finite and inside the grid (lightGridSeedSpot
+ * rejects anything else before calling), and the target is a grid cell. The
+ * start cell is therefore in [0, dim) and each step moves cx/cy/cz by at most
+ * one, so with the step guard the integer walk cannot overflow int. */
 static bool losClear(const Voxmap *map, float ax, float ay, float az, int tx,
 		     int ty, int tz)
 {
@@ -481,22 +493,21 @@ static bool losClear(const Voxmap *map, float ax, float ay, float az, int tx,
 }
 
 /* Integer cell range [lo, hi] on one axis covered by [c - radius, c + radius],
- * clamped to [0, n - 1]. Returns false when the range is empty. Safe for any
- * finite `c` and any `radius` (no out-of-range float->int cast). */
-static bool axisRange(float c, float radius, int n, int *lo, int *hi)
+ * clamped to [0, n - 1]. Precondition: c is finite and in [0, n) -- the caller
+ * rejects an out-of-grid apex -- so floorf(c) is in [0, n-1], the range always
+ * contains it, and lo <= hi (never empty). Safe for any radius: the clamps keep
+ * both float->int casts in range. */
+static void axisRange(float c, float radius, int n, int *lo, int *hi)
 {
 	float a = floorf(c) - radius;
 	float b = floorf(c) + radius;
 
-	if (b < 0.0f || a > (float)(n - 1))
-		return false;
 	if (a < 0.0f)
 		a = 0.0f;
 	if (b > (float)(n - 1))
 		b = (float)(n - 1);
 	*lo = (int)a;
 	*hi = (int)b;
-	return true;
 }
 
 void lightGridSeedSpot(LightGrid *grid, const Voxmap *map, float x, float y,
@@ -523,7 +534,7 @@ void lightGridSeedSpot(LightGrid *grid, const Voxmap *map, float x, float y,
 		return;
 	if (!(radius > 0.0f) || !(halfAngleDeg > 0.0f))
 		return;
-	if (!isfinite(x) || !isfinite(y) || !isfinite(z))
+	if (!originInGrid(grid, x, y, z))
 		return;
 	len = sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
 	if (!(len > 0.0f) || !isfinite(len))
@@ -534,10 +545,9 @@ void lightGridSeedSpot(LightGrid *grid, const Voxmap *map, float x, float y,
 	angleRad = halfAngleDeg * (PI_F / 180.0f);
 	cosHalf = cosf(angleRad);
 
-	if (!axisRange(x, radius, grid->w, &minX, &maxX) ||
-	    !axisRange(y, radius, grid->h, &minY, &maxY) ||
-	    !axisRange(z, radius, grid->d, &minZ, &maxZ))
-		return;
+	axisRange(x, radius, grid->w, &minX, &maxX);
+	axisRange(y, radius, grid->h, &minY, &maxY);
+	axisRange(z, radius, grid->d, &minZ, &maxZ);
 
 	for (cz = minZ; cz <= maxZ; cz++) {
 		for (cy = minY; cy <= maxY; cy++) {

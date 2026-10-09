@@ -678,6 +678,23 @@ static void test_factor_helper(void)
 		TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[0]);
 		destroyLightGrid(d);
 	}
+
+	/* Full block light over sky saturates combined at 255 (the v > 255
+	 * clamp in the factor map). */
+	{
+		LightGrid *s = lightGridCreate(1, 1, 1);
+		uint8_t o[3];
+
+		TEST_ASSERT_NOT_NULL(s);
+		lightGridSeedPoint(s, 0.5f, 0.5f, 0.5f, 255.0f, 255.0f, 255.0f,
+				   0.0f);
+		lightGridPropagateSolid(s, NULL);	/* sky 255 in the air cell */
+		lightGridFactorAt(s, 0, 0, 0, o);
+		TEST_ASSERT_EQUAL_INT(255, o[0]);
+		TEST_ASSERT_EQUAL_INT(255, o[1]);
+		TEST_ASSERT_EQUAL_INT(255, o[2]);
+		destroyLightGrid(s);
+	}
 }
 
 static void test_factor_sampled_into_top_face(void)
@@ -733,6 +750,85 @@ static void test_factor_coloured_light_into_face(void)
 	destroyVoxmap(map);
 }
 
+/* --- 16. spot apex bounds (float->int UB regression) -------------------- */
+
+/* A huge-but-finite apex must be rejected in float space, never cast to int.
+ * With a comparable radius, axisRange's floorf(c) - radius used to cancel to
+ * 0, the range check passed, and losClear cast 1e30 to int (UB). */
+static void test_spot_huge_apex_rejected(void)
+{
+	LightGrid *g = lightGridCreate(4, 4, 4);
+	const float down[3] = { 0.0f, -1.0f, 0.0f };
+	int x;
+	int y;
+	int z;
+
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedSpot(g, NULL, 1e30f, 0.5f, 0.5f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 1e30f);
+	lightGridSeedSpot(g, NULL, 0.5f, 1e30f, 0.5f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 1e30f);
+	lightGridSeedSpot(g, NULL, 0.5f, 0.5f, 1e30f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 1e30f);
+	lightGridSeedSpot(g, NULL, -1e30f, -1e30f, -1e30f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 1e30f);
+	/* Each negative axis is the deciding term of the shared in-grid guard. */
+	lightGridSeedSpot(g, NULL, 0.5f, -1.0f, 0.5f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 4.0f);
+	lightGridSeedSpot(g, NULL, 0.5f, 0.5f, -1.0f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 4.0f);
+	/* This one reaches the DDA with the guard removed: 1e19 is finite and
+	 * |apex| <= radius, so dist <= radius, and the axis points back at the
+	 * grid so the cone contains cells -- losClear would cast 1e19 to int. */
+	{
+		const float back[3] = { -1.0f, 0.0f, 0.0f };
+
+		lightGridSeedSpot(g, NULL, 1e19f, 0.5f, 0.5f, back, 45.0f,
+				  255.0f, 255.0f, 255.0f, 1e19f);
+	}
+	for (z = 0; z < 4; z++)
+		for (y = 0; y < 4; y++)
+			for (x = 0; x < 4; x++) {
+				TEST_ASSERT_EQUAL_INT(0,
+						      lightGridBlockAt(g, x, y, z, 0));
+				TEST_ASSERT_EQUAL_INT(0,
+						      lightGridBlockAt(g, x, y, z, 1));
+				TEST_ASSERT_EQUAL_INT(0,
+						      lightGridBlockAt(g, x, y, z, 2));
+			}
+	/* An apex at the grid edge with a huge radius is still in range and
+	 * seeds its own cell (full falloff at distance 0). */
+	lightGridSeedSpot(g, NULL, 3.5f, 3.5f, 3.5f, down, 45.0f, 255.0f,
+			  255.0f, 255.0f, 1e30f);
+	TEST_ASSERT_EQUAL_INT(255, lightGridBlockAt(g, 3, 3, 3, 0));
+	destroyLightGrid(g);
+}
+
+/* The exact crafted line from the review: it parses (every token is finite)
+ * and seeding it is a no-op rather than UB. */
+static void test_spot_crafted_line_no_ub(void)
+{
+	const char *text = "$ spot 1e30 0.5 0.5 255 0 0 0 -1 0 45 1e30\n"
+			   "1\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+	LightGrid *g = lightGridCreate(4, 4, 4);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
+	{
+		const VoxmapLight *l = voxmapLightAt(map, 0);
+
+		TEST_ASSERT_NOT_NULL(l);
+		lightGridSeedSpot(g, map, l->x, l->y, l->z, l->dir,
+				  l->halfAngleDeg, l->r, l->g, l->b, l->radius);
+	}
+	TEST_ASSERT_EQUAL_INT(0, lightGridBlockAt(g, 0, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, lightGridBlockAt(g, 3, 3, 3, 0));
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
 void run_test_lightgrid(void);
 
 void run_test_lightgrid(void)
@@ -755,4 +851,6 @@ void run_test_lightgrid(void)
 	RUN_TEST(test_factor_helper);
 	RUN_TEST(test_factor_sampled_into_top_face);
 	RUN_TEST(test_factor_coloured_light_into_face);
+	RUN_TEST(test_spot_huge_apex_rejected);
+	RUN_TEST(test_spot_crafted_line_no_ub);
 }
