@@ -99,12 +99,18 @@ coloured light mixture from multiple sources.
   tunable per-step attenuation (default −16/255 per step → ~16-cell range).
   This is the genre-standard voxel light engine: it bends around corners (the
   "GI" feel), mixes colours stably (red + green overlap → yellow, per-channel
-  max), and is pure and testable. Sky seeds white light from the topmost air
-  cells (full strength downward until blocked, then attenuated spread);
-  ambient is a constant floor added at sampling. *Alternative if preferred:
-  direct per-emitter evaluation with line-of-sight rays and inverse-square
-  falloff (smoother, pricier, no corner-bending) — BFS is the recommendation.*
-  True ray-traced GI / radiosity / lightmaps stay out of scope.
+  max), and is pure and testable. The fill is **full 3D (6-neighbour)** — light
+  travels up and down as well as sideways, so overhead lamps light the floor
+  below, light spills through doorways and around corners, and a solid roof
+  blocks a lamp from the room beneath. Sky seeds white light from the topmost
+  air cells and propagates straight down **without attenuation until blocked**
+  (bright shafts, dark overhangs), then spreads with normal attenuation;
+  ambient is a constant floor added at sampling. Optional cheap extra:
+  per-material light attenuation so translucent materials (glass/foliage) dim
+  light instead of blocking it. *Alternative if preferred: direct per-emitter
+  evaluation with line-of-sight rays and inverse-square falloff (smoother,
+  pricier, no corner-bending) — BFS is the recommendation.* True ray-traced
+  GI / radiosity / lightmaps stay out of scope.
 - **L2 — Emitters**: `$ point x y z r g b [radius]` and
   `$ spot x y z r g b dir=x,y,z angle=deg [radius]` lines in the map file.
   Points seed their cell; spots seed the cone volume (line-of-sight checked,
@@ -115,7 +121,11 @@ coloured light mixture from multiple sources.
   faces, with per-corner smoothing (average of the adjacent air cells) — the
   classic voxel smooth-light look; multiplied by the existing directional
   shading and material tint; per-corner AO (neighbour occupancy) applied here
-  too. The result bakes into the vertex colour — **no shader change**.
+  too. The result bakes into the vertex colour — **no shader change** (the GPU
+  interpolates the corner values across each face = the smooth gradient).
+  A **toggle** offers smooth (default, Minecraft-style) vs flat per-face
+  lighting; our 8-bit levels are 16× finer than Minecraft's 4-bit, so banding
+  is minimal even before smoothing.
 - **L4 — Debug view**: a key toggles a light-only render (faces show their
   light colour, no texture) for tuning.
 - **L5 — Tasks**: T14 = light grid + propagation (sky + block) + emitters
