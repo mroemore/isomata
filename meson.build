@@ -67,6 +67,7 @@ engine_deps = [
 ctol_sources = files('src/events.c', 'src/achievement.c', 'src/scene.c',
 		     'src/input/input.c',
 		     'src/render/math3d.c', 'src/render/camera3d.c',
+		     'src/render/atlas.c', 'src/render/materials.c',
 		     'src/render/voxmap.c', 'src/render/grid.c',
 		     'src/render/drawlist.c',
 		     'src/render/sprites.c', 'src/render/frame.c',
@@ -140,8 +141,11 @@ run_command('cp', files('assets/shaders/world.frag.spv'),
 	    _stage_shader_dir / 'world.frag.spv', check : true)
 run_command('cp', files('assets/shaders/grid.frag.spv'),
 	    _stage_shader_dir / 'grid.frag.spv', check : true)
-run_command('cp', files('assets/textures/placeholder.png'),
-	    _stage_texture_dir / 'placeholder.png', check : true)
+# Stage the whole textures tree (materials.txt + every material PNG), so the
+# runtime atlas can resolve every referenced file relative to the executable.
+run_command('cp', '-r',
+	    meson.current_source_dir() / 'assets/textures/.',
+	    _stage_texture_dir, check : true)
 run_command('cp', files('assets/maps/demo.txt'),
 	    _stage_map_dir / 'demo.txt', check : true)
 
