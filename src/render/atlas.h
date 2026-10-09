@@ -82,4 +82,11 @@ bool atlasBlitPixels(uint8_t *dst, int dstW, int dstH, int dstX, int dstY,
 bool atlasFillFallbackCell(uint8_t *dst, int dstW, int dstH, int x, int y,
 			   int size);
 
+/* Fill a `size`x`size` region of `dst` at (x, y) with opaque white. The debug
+ * view samples this cell so the light colour is not tinted by a material
+ * texture. Clipped to the destination bounds; false on NULL / non-positive
+ * size. */
+bool atlasFillWhiteCell(uint8_t *dst, int dstW, int dstH, int x, int y,
+			int size);
+
 #endif /* ISOMATA_RENDER_ATLAS_H */

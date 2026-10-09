@@ -577,11 +577,53 @@ static void test_sort_base_line_picks_two_lowest_corners(void)
 	destroyDrawList(&list);
 }
 
+/* The shaded variant stores 4 distinct corner tints; the uniform helper fills
+ * all four with the same tint and keeps `tint` as the base/fallback. */
+static void test_voxel_face_shaded_corner_tints(void)
+{
+	const float quad[4][3] = {
+		{ 0.0f, 1.0f, 0.0f },
+		{ 1.0f, 1.0f, 0.0f },
+		{ 1.0f, 1.0f, 1.0f },
+		{ 0.0f, 1.0f, 1.0f },
+	};
+	const float top[4][2] = ATLAS_UV_TOP;
+	const uint32_t corner[4] = {
+		DRAW_TINT(1, 2, 3, 4), DRAW_TINT(5, 6, 7, 8),
+		DRAW_TINT(9, 10, 11, 12), DRAW_TINT(13, 14, 15, 16)
+	};
+	uint32_t uniform = DRAW_TINT(20, 21, 22, 23);
+	DrawList list;
+	const DrawItem *item;
+
+	initDrawList(&list, 2);
+	TEST_ASSERT_TRUE(appendVoxelFaceShaded(&list, quad, top, ALPHA_OPAQUE,
+					       corner));
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, quad, top, ALPHA_OPAQUE,
+					 uniform));
+
+	item = drawListItem(&list, 0);
+	TEST_ASSERT_EQUAL_MEMORY(corner, item->cornerTint, sizeof(corner));
+	TEST_ASSERT_EQUAL_INT((int)corner[0], (int)item->tint);
+
+	item = drawListItem(&list, 1);
+	TEST_ASSERT_EQUAL_INT((int)uniform, (int)item->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)uniform, (int)item->cornerTint[3]);
+	TEST_ASSERT_EQUAL_INT((int)uniform, (int)item->tint);
+
+	TEST_ASSERT_FALSE(appendVoxelFaceShaded(&list, quad, top, ALPHA_OPAQUE,
+						NULL));
+	TEST_ASSERT_FALSE(appendVoxelFaceShaded(&list, NULL, top, ALPHA_OPAQUE,
+						corner));
+	destroyDrawList(&list);
+}
+
 void run_test_drawlist(void);
 
 void run_test_drawlist(void)
 {
 	RUN_TEST(test_append_capacity_bounded);
+	RUN_TEST(test_voxel_face_shaded_corner_tints);
 	RUN_TEST(test_append_null_and_empty_list);
 	RUN_TEST(test_voxel_face_uvs_and_kind);
 	RUN_TEST(test_sort_far_to_near);

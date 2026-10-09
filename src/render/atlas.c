@@ -115,6 +115,35 @@ bool atlasBlitPixels(uint8_t *dst, int dstW, int dstH, int dstX, int dstY,
 	return true;
 }
 
+bool atlasFillWhiteCell(uint8_t *dst, int dstW, int dstH, int x, int y,
+			int size)
+{
+	int row;
+
+	if (dst == NULL || dstW <= 0 || dstH <= 0 || size <= 0)
+		return false;
+	for (row = 0; row < size; row++) {
+		int dy = y + row;
+		int col;
+
+		if (dy < 0 || dy >= dstH)
+			continue;
+		for (col = 0; col < size; col++) {
+			int dx = x + col;
+			uint8_t *d;
+
+			if (dx < 0 || dx >= dstW)
+				continue;
+			d = dst + ((size_t)dy * (size_t)dstW + (size_t)dx) * 4;
+			d[0] = 255;
+			d[1] = 255;
+			d[2] = 255;
+			d[3] = 255;
+		}
+	}
+	return true;
+}
+
 bool atlasFillFallbackCell(uint8_t *dst, int dstW, int dstH, int x, int y,
 			   int size)
 {

@@ -255,10 +255,47 @@ static void test_blit_clips_to_cell(void)
 	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 8, 8, 0, 0, src, 4, 4, 16, 0));
 }
 
+/* The white cell is opaque white (the light-debug view's texture). */
+static void test_white_cell(void)
+{
+	uint8_t dst[8 * 8 * 4];
+	int row;
+	int col;
+
+	memset(dst, 0, sizeof(dst));
+	TEST_ASSERT_TRUE(atlasFillWhiteCell(dst, 8, 8, 0, 0, 4));
+	for (row = 0; row < 4; row++) {
+		for (col = 0; col < 4; col++) {
+			int p = (row * 8 + col) * 4;
+
+			TEST_ASSERT_EQUAL_INT(255, dst[p + 0]);
+			TEST_ASSERT_EQUAL_INT(255, dst[p + 1]);
+			TEST_ASSERT_EQUAL_INT(255, dst[p + 2]);
+			TEST_ASSERT_EQUAL_INT(255, dst[p + 3]);
+		}
+	}
+	/* Outside the 4x4 region is untouched. */
+	TEST_ASSERT_EQUAL_INT(0, dst[(0 * 8 + 4) * 4]);
+	TEST_ASSERT_EQUAL_INT(0, dst[(4 * 8 + 0) * 4]);
+
+	/* Clips to the destination bounds (top/left and bottom/right). */
+	TEST_ASSERT_TRUE(atlasFillWhiteCell(dst, 8, 8, 6, 6, 4));
+	TEST_ASSERT_EQUAL_INT(255, dst[(6 * 8 + 6) * 4]);
+	TEST_ASSERT_EQUAL_INT(255, dst[(7 * 8 + 7) * 4]);
+	TEST_ASSERT_TRUE(atlasFillWhiteCell(dst, 8, 8, -2, -2, 4));
+	TEST_ASSERT_EQUAL_INT(255, dst[(0 * 8 + 0) * 4]);
+	TEST_ASSERT_EQUAL_INT(255, dst[(1 * 8 + 1) * 4]);
+	TEST_ASSERT_FALSE(atlasFillWhiteCell(NULL, 8, 8, 0, 0, 4));
+	TEST_ASSERT_FALSE(atlasFillWhiteCell(dst, 0, 8, 0, 0, 4));
+	TEST_ASSERT_FALSE(atlasFillWhiteCell(dst, 8, 0, 0, 0, 4));
+	TEST_ASSERT_FALSE(atlasFillWhiteCell(dst, 8, 8, 0, 0, 0));
+}
+
 void run_test_atlas(void);
 
 void run_test_atlas(void)
 {
+	RUN_TEST(test_white_cell);
 	RUN_TEST(test_cell_size_selection);
 	RUN_TEST(test_layout_grid);
 	RUN_TEST(test_layout_rejects_bad_args);

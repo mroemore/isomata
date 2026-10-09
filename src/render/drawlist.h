@@ -67,7 +67,16 @@ typedef enum DrawKind {
 typedef struct DrawItem {
 	float worldQuad[4][3];	/* 4 corners, world space, canonical order */
 	float uv[4][2];		/* matching atlas UVs */
-	uint32_t tint;		/* RGBA (see DRAW_TINT) */
+	uint32_t tint;		/* RGBA (see DRAW_TINT): the uniform / base
+				 * tint. Kept as the canonical value for the flat
+				 * and sprite paths; cornerTint below carries the
+				 * per-vertex colour the GPU actually packs. */
+	uint32_t cornerTint[4];	/* per-corner RGBA, in the same canonical
+				 * order as worldQuad/uv. The GPU packer emits
+				 * these per vertex (the vertex format already has
+				 * per-vertex colour, so smooth lighting needs no
+				 * shader change). A uniform item sets all four to
+				 * `tint`. */
 	uint8_t kind;		/* DRAW_KIND_* */
 	uint8_t alphaMode;	/* materials.h AlphaMode: 0 opaque, 1 blend,
 				 * 2 cutout (shader discard) */
@@ -106,6 +115,13 @@ bool appendDrawItem(DrawList *list, const DrawItem *item);
  * oriented for the face); `alphaMode` is a materials.h AlphaMode value. */
 bool appendVoxelFace(DrawList *list, const float worldQuad[4][3],
 		     const float uv[4][2], uint8_t alphaMode, uint32_t tint);
+
+/* Shaded variant: as appendVoxelFace but with a distinct RGBA tint per corner
+ * (canonical corner order), for smooth per-corner lighting. `cornerTint[0]`
+ * becomes the item's uniform `tint` fallback. False on NULL args / full list. */
+bool appendVoxelFaceShaded(DrawList *list, const float worldQuad[4][3],
+			   const float uv[4][2], uint8_t alphaMode,
+			   const uint32_t cornerTint[4]);
 
 /* Sort back-to-front for the given camera (see the invariant block). A NULL
  * camera sorts against the identity view. NULL list is a no-op. */

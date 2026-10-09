@@ -69,6 +69,10 @@ GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
  * the manifest was unavailable (emitters then use the built-in fallback). */
 const MaterialTable *gpuBackendMaterials(GpuBackend *gpu);
 
+/* The 4-corner UV of the reserved white atlas cell, for the light-debug view.
+ * Returns false (uv untouched) for a NULL backend/out. */
+bool gpuBackendDebugUV(const GpuBackend *gpu, float uv[4][2]);
+
 /* Release every GPU object, unclaim the window, and destroy the device.
  * NULL is a no-op. */
 void gpuBackendDestroy(GpuBackend *gpu);

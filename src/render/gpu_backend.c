@@ -70,6 +70,8 @@ struct GpuBackend {
 	SDL_GPUSampler *sampler;
 	SDL_GPUTextureFormat colorFormat;
 	MaterialTable materials;		/* name -> face UV rects + alpha */
+	float debugUV[4][2];		/* 4-corner UV of the reserved white
+					 * atlas cell (the light-debug view) */
 
 	/* Infinite ground grid (tolerant: pipeline/buffers NULL if init failed). */
 	SDL_GPUGraphicsPipeline *gridPipeline;
@@ -637,7 +639,11 @@ static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
 	}
 
 	cell = atlasCellSizeFor(maxSize);
-	if (!atlasComputeLayout(fileCount > 0 ? fileCount : 1, cell, &layout))
+	/* Reserve one slot after the material files for a solid-white cell: the
+	 * light-debug view samples it so its tint (the light colour) is not
+	 * multiplied by a material texture. Appending the slot keeps every
+	 * material's slot index unchanged. */
+	if (!atlasComputeLayout(fileCount + 1, cell, &layout))
 		goto done;
 	pixels = calloc((size_t)layout.width * (size_t)layout.height * 4, 1);
 	if (pixels == NULL)
@@ -656,6 +662,27 @@ static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
 		else
 			atlasFillFallbackCell(pixels, layout.width, layout.height,
 					      x, y, sizes[i]);
+	}
+	{
+		int wx;
+		int wy;
+		AtlasRect wr;
+
+		if (atlasSlotOrigin(&layout, fileCount, &wx, &wy)) {
+			atlasFillWhiteCell(pixels, layout.width, layout.height,
+					   wx, wy, layout.cellSize);
+			if (atlasSlotRect(&layout, fileCount, layout.cellSize,
+					  &wr)) {
+				gpu->debugUV[0][0] = wr.u0;
+				gpu->debugUV[0][1] = wr.v0;
+				gpu->debugUV[1][0] = wr.u1;
+				gpu->debugUV[1][1] = wr.v0;
+				gpu->debugUV[2][0] = wr.u1;
+				gpu->debugUV[2][1] = wr.v1;
+				gpu->debugUV[3][0] = wr.u0;
+				gpu->debugUV[3][1] = wr.v1;
+			}
+		}
 	}
 
 	if (materialTableBuild(&gpu->materials, &manifest, names, fileCount,
@@ -817,6 +844,14 @@ const MaterialTable *gpuBackendMaterials(GpuBackend *gpu)
 	return gpu != NULL ? &gpu->materials : NULL;
 }
 
+bool gpuBackendDebugUV(const GpuBackend *gpu, float uv[4][2])
+{
+	if (gpu == NULL || uv == NULL)
+		return false;
+	memcpy(uv, gpu->debugUV, sizeof(gpu->debugUV));
+	return true;
+}
+
 SDL_GPUCommandBuffer *gpuBackendFrameCommandBuffer(GpuBackend *gpu)
 {
 	if (gpu == NULL || !gpu->frameActive)
@@ -836,13 +871,10 @@ static Uint32 buildVertices(const DrawList *list, GpuVertex *out)
 
 	for (i = 0; i < list->count; i++) {
 		const DrawItem *item = &list->items[i];
-		float r = (float)((item->tint >> 24) & 0xffu) / 255.0f;
-		float g = (float)((item->tint >> 16) & 0xffu) / 255.0f;
-		float b = (float)((item->tint >> 8) & 0xffu) / 255.0f;
-		float a = (float)(item->tint & 0xffu) / 255.0f;
 
 		for (k = 0; k < GPU_VERTICES_PER_ITEM; k++) {
 			int c = corner[k];
+			uint32_t tint = item->cornerTint[c];
 			GpuVertex *v = &out[n++];
 
 			v->x = item->worldQuad[c][0];
@@ -850,10 +882,10 @@ static Uint32 buildVertices(const DrawList *list, GpuVertex *out)
 			v->z = item->worldQuad[c][2];
 			v->u = item->uv[c][0];
 			v->v = item->uv[c][1];
-			v->r = r;
-			v->g = g;
-			v->b = b;
-			v->a = a;
+			v->r = (float)((tint >> 24) & 0xffu) / 255.0f;
+			v->g = (float)((tint >> 16) & 0xffu) / 255.0f;
+			v->b = (float)((tint >> 8) & 0xffu) / 255.0f;
+			v->a = (float)(tint & 0xffu) / 255.0f;
 			v->alphaMode = item->alphaMode == ALPHA_CUTOUT ? 1.0f
 								       : 0.0f;
 		}

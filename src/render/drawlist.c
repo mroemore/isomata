@@ -90,13 +90,24 @@ bool appendDrawItem(DrawList *list, const DrawItem *item)
 bool appendVoxelFace(DrawList *list, const float worldQuad[4][3],
 		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
 {
+	uint32_t cornerTint[4] = { tint, tint, tint, tint };
+
+	return appendVoxelFaceShaded(list, worldQuad, uv, alphaMode,
+				     cornerTint);
+}
+
+bool appendVoxelFaceShaded(DrawList *list, const float worldQuad[4][3],
+			   const float uv[4][2], uint8_t alphaMode,
+			   const uint32_t cornerTint[4])
+{
 	DrawItem item;
 
-	if (worldQuad == NULL || uv == NULL)
+	if (worldQuad == NULL || uv == NULL || cornerTint == NULL)
 		return false;
 	memcpy(item.worldQuad, worldQuad, sizeof(item.worldQuad));
 	memcpy(item.uv, uv, sizeof(item.uv));
-	item.tint = tint;
+	memcpy(item.cornerTint, cornerTint, sizeof(item.cornerTint));
+	item.tint = cornerTint[0];
 	item.kind = DRAW_KIND_VOXEL;
 	item.alphaMode = alphaMode;
 	return appendDrawItem(list, &item);
