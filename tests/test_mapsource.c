@@ -520,20 +520,24 @@ static void test_assemble_size_guards_and_null_label(void)
 static void test_voxmap_parse_light_line_public(void)
 {
 	VoxmapLight l;
+	const char *point = "$ point 1 2 3 4 5 6 7";
+	const char *spot = "$ spot 0 0 0 9 9 9 0 0 2 30";
+	const char *notLight = "point 1 2 3 4 5 6";
+	const char *shortLine = "$ point 1";
 
-	TEST_ASSERT_TRUE(voxmapParseLightLine("$ point 1 2 3 4 5 6 7", 23, &l));
+	TEST_ASSERT_TRUE(voxmapParseLightLine(point, strlen(point), &l));
 	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_POINT, l.kind);
 	TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, l.x);
 	TEST_ASSERT_FLOAT_WITHIN(1e-6f, 7.0f, l.radius);
-	TEST_ASSERT_TRUE(voxmapParseLightLine(
-		"$ spot 0 0 0 9 9 9 0 0 2 30", 26, &l));
+	TEST_ASSERT_TRUE(voxmapParseLightLine(spot, strlen(spot), &l));
 	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_SPOT, l.kind);
 	TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, l.dir[2]);
 	/* Not a light line / malformed / NULL args. */
-	TEST_ASSERT_FALSE(voxmapParseLightLine("point 1 2 3 4 5 6", 17, &l));
-	TEST_ASSERT_FALSE(voxmapParseLightLine("$ point 1", 9, &l));
+	TEST_ASSERT_FALSE(voxmapParseLightLine(notLight, strlen(notLight), &l));
+	TEST_ASSERT_FALSE(voxmapParseLightLine(shortLine, strlen(shortLine),
+					       &l));
 	TEST_ASSERT_FALSE(voxmapParseLightLine(NULL, 0, &l));
-	TEST_ASSERT_FALSE(voxmapParseLightLine("$ point 1 2 3 4 5 6", 17, NULL));
+	TEST_ASSERT_FALSE(voxmapParseLightLine(point, strlen(point), NULL));
 }
 
 static void test_voxmap_build_raw(void)
