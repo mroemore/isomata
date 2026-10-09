@@ -41,22 +41,20 @@ either way.)
 - **One texture bind per frame**: the world and grid share one atlas + one
   pipeline; textured tiles keep that (per-face UVs into a runtime atlas).
 
-### Design decisions (proposed — veto any by number)
+### Design decisions (agreed 2026-10-09)
 
-- **D1 — N→6 expansion (per set)**: 1 = all six faces; 2 = top + sides (bottom
-  uses the sides texture); 3 = top + sides + bottom; 6 = per-face. Same rules
-  for the inside set. A tile that omits the inside set defaults to the outside
-  set (so "12 squares" is the maximum, not the common case).
-- **D2 — Inside vs outside selection**: classify air cells as **exterior**
-  (connected to open sky) or **interior** (enclosed) with a flood fill; a face
-  uses the outside set when its exposed side is exterior air, the inside set
-  when interior. Pure and testable; the same pass later seeds lighting's sky
-  term.
-- **D3 — Map format**: cells stay one char; the map file gains an optional
-  legend mapping each char → height + material (e.g. `g = height 2, grass`);
-  digits default to a built-in legend (digit = height, default material) so
-  existing maps keep working. *Alternative if preferred: two-char cells
-  (`2g`).*
+- **D1 — 6 per-face slots, outside only** (user simplification): each material
+  defines textures for the six faces (top, bottom, north, south, east, west).
+  Fill rule: a material specifies at least one texture — **one file fills all
+  six** (the common case); individual faces can be overridden by name. No
+  1/2/3 shorthand, no inside set for now (12 → 6).
+- **D2 — inside set deferred**: interior/exterior air classification is not
+  needed without the inside set; the same flood fill returns later as
+  lighting's sky term.
+- **D3 — Map format**: cells stay one char; the map gains an optional legend
+  mapping each char → height + material (e.g. `g = height 2, grass`); digits
+  default to a built-in legend so existing maps keep working. Plus the PNG
+  layer pipeline (T13, below).
 - **D4 — Textures and import**: square power-of-two sources (16/32/64), packed
   at load into **one runtime atlas** (RGBA); per-face UVs index the atlas. A
   manifest maps material ids → files (e.g. `grass top=… side=… …`). Loading via
@@ -74,17 +72,42 @@ either way.)
 
 1. Atlas packer: pure packing math (slot layout, UV rects) + glue load
    (`SDL_LoadPNG` → GPU texture), tests for the packer.
-2. Material model: 12-slot sets + the D1 expansion (pure, tests).
+2. Material model: 6 per-face slots + the one-file fill rule (pure, tests).
 3. Map legend + per-cell material (pure parser, tests; fixtures updated).
-4. Interior/exterior flood fill (pure, tests).
-5. Emission: material-aware UVs + inside/outside selection (pure, tests).
-6. Sprite texture ids through the same atlas.
-7. UV-convention flip fix (pin with a test).
-8. Alpha modes (opaque/blend wired; cutout shader path).
-9. Demo content: a few materials (grass/stone/wood) + one alpha tile + a
-   hollow that shows interior faces.
-10. Verification: pure suite + valgrind + floors; Xvfb screenshots (materials,
-    alpha tile, interior faces); emulator phone config; APK publish.
+4. Emission: material-aware UVs (pure, tests).
+5. Sprite texture ids through the same atlas.
+6. UV-convention flip fix (pin with a test).
+7. Alpha modes (opaque/blend wired; cutout shader path).
+8. Demo content: a few materials (grass/stone/wood) + one alpha tile.
+9. Verification: pure suite + valgrind + floors; Xvfb screenshots (materials,
+   alpha tile); emulator phone config; APK publish.
+
+### Task T13 — PNG layer map pipeline (one task, implementer + review)
+
+Authoring model requested by the user: draw the map in a pixel-art program
+(Aseprite/GIMP), **export layers as PNGs, numbered**, and a **legend converts
+colours → tile types**.
+
+Design:
+
+- A map directory (or a small map manifest listing the layers in order)
+  supplies numbered layer PNGs (`01.png`, `02.png`, …). Order: the manifest
+  when present; otherwise natural-sort auto-discovery of `*.png` in the
+  directory.
+- Layers **composite bottom-up** (later layers override where opaque; fully
+  transparent pixels leave the layer below; alpha = no cell in the base layer).
+- Each final pixel's RGB is looked up in a **colour legend** → tile type
+  (height + material). The legend is the same table as the char legend, keyed
+  by colour instead of char (`#RRGGBB = height + material`).
+- Output: the same in-memory Voxmap the ASCII parser produces — everything
+  downstream (emission, lighting later) is format-agnostic.
+- Pure parts: compositing rules, natural sort, colour→tile lookup (tests);
+  glue: PNG load via `SDL_LoadPNG` + asset path.
+- Demo: author one small map as PNG layers (generated with ImageMagick for the
+  test fixture), screenshot-verified in-app.
+
+Everything downstream (lighting later) is format-agnostic.
+
 
 ---
 
