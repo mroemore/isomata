@@ -41,7 +41,9 @@
  *   - anything else -> a load error.
  * In slice mode only a trailing CR is stripped (a trailing space is a real air
  * cell), so rows keep their width; use '.' for air at a line end. Blank
- * (empty) lines are still ignored everywhere.
+ * (empty) lines are still ignored everywhere — but note that a line of ONLY
+ * spaces is not blank: it is a full row of air cells (and participates in the
+ * width check).
  *
  * Legend lines (anywhere in the file; skipped when counting map rows):
  *   @ <char> <height> <material>
