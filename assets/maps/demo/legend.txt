@@ -1,0 +1,10 @@
+#00FF00 grass
+#808080 stone
+#A0522D wood
+#0000FF sixface
+#FF00FF foliage
+$ point 3 2 9 255 190 110 8
+$ point 9 2 12 255 0 0 10
+$ point 10 2 12 0 255 0 10
+$ spot 12 6 12 255 240 200 0 -1 0 40 6
+$ point 5.5 2.5 10.5 255 220 160 6

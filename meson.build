@@ -150,6 +150,11 @@ run_command('cp', '-r',
 	    _stage_texture_dir, check : true)
 run_command('cp', files('assets/maps/demo.txt'),
 	    _stage_map_dir / 'demo.txt', check : true)
+# Stage the PNG slice version of the demo (T13b) so the app can load it and
+# the pngmap equivalence test can decode the committed slices.
+run_command('cp', '-r',
+	    meson.current_source_dir() / 'assets/maps/demo',
+	    _stage_map_dir, check : true)
 
 # Stage the committed WAVs (Task 10) so the app smoke / X11 run can load
 # "audio/*.wav" relative to the executable.
