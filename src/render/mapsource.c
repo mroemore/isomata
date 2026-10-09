@@ -243,8 +243,10 @@ bool mapSourceLegendParse(const char *text, size_t length,
 			VoxmapLight l;
 
 			if (!voxmapParseLightLine(text + i,
-						  (start + rowLen) - i, &l))
+						  (start + rowLen) - i, &l)) {
+				out->badLines++;
 				continue;
+			}
 			if (out->lightCount >= VOXMAP_MAX_LIGHTS) {
 				fprintf(stderr,
 					"mapsource: more than %d lights; skipped\n",
