@@ -1,0 +1,19 @@
+# Isomata material manifest (phase 2, item 1: textures).
+#
+# Grammar (one directive per line; '#' comments and blank lines ignored):
+#   material <name> <file> [alpha=opaque|blend|cutout]
+#   material <name> face <key>=<file> ... [alpha=...]
+# Keys: top bottom north south east west, or side (all four sides). A bare
+# <file> fills all six faces; per-face keys override it. The sixface material
+# is the demo of a visibly different texture per face.
+#
+# Alpha: opaque/blend composite through the fixed alpha blend (opaque textures
+# carry a=255); cutout discards low-alpha texels in the fragment shader.
+
+material default placeholder.png
+material grass   grass.png
+material stone   stone.png
+material wood    wood.png
+material sixface face top=six_top.png bottom=six_bottom.png north=six_north.png south=six_south.png east=six_east.png west=six_west.png
+material foliage leaf.png alpha=cutout
+material sprite  sprite.png alpha=blend

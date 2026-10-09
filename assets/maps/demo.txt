@@ -1,16 +1,21 @@
-1111111111111111
-1111111111111111
-1111111111111111
-1111222222221111
-1122000000221111
-1122000000221111
-1122000000221111
-1122229922222211
-1122229922222211
-1122222222222211
-1112222222222111
-1111222222221111
-1111122222211111
-111111..11111111
-111111..11111111
-111111..11111111
+@ g 1 grass
+@ s 2 stone
+@ w 9 wood
+@ f 3 sixface
+@ a 1 foliage
+gggggggggggggggg
+gggggggggggggggg
+gggggggggggggggg
+ggggssssssssgggg
+ggss......ssgggg
+ggss.aff..ssgggg
+ggss.aff..ssgggg
+ggsssswwssssssgg
+ggsssswwssssssgg
+ggssssssssssssgg
+ggssssssssffssgg
+gggsssssssffsggg
+ggggssssssssgggg
+gggggssssssggggg
+gggggg..gggggggg
+gggggg..gggggggg
