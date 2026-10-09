@@ -15,5 +15,8 @@ material grass   grass.png
 material stone   stone.png
 material wood    wood.png
 material sixface face top=six_top.png bottom=six_bottom.png north=six_north.png south=six_south.png east=six_east.png west=six_west.png
+# Face-labelled demonstrator for the sub-voxel tile shapes (T18): a big letter
+# per face (T/B/N/S/E/W) so orientation is obvious in the specimen screenshots.
+material tile face top=tile_top.png bottom=tile_bottom.png north=tile_north.png south=tile_south.png east=tile_east.png west=tile_west.png
 material foliage leaf.png alpha=cutout
 material sprite  sprite.png alpha=blend
