@@ -4,10 +4,11 @@
  * Self-contained: it flips bits of a known-good map buffer, runs the pure
  * length-bounded parser on each mutant, and checks the parser against an
  * INDEPENDENT oracle for the documented format (rows split on '\n', trailing
- * CR/space/tab stripped, blank and `@` legend lines skipped, equal non-blank
- * non-legend row widths, cells are '.', '0'..'9' or a char declared by a
- * legend line, '.' is void while '0' and a legend height 0 are SOLID height-0
- * cells, a legend line with a char >= 128 is skipped, bounded dims). A
+ * CR/space/tab stripped, blank / `@` legend / `$` light lines skipped, equal
+ * non-blank non-directive row widths, cells are '.', '0'..'9' or a char
+ * declared by a legend line, '.' is void while '0' and a legend height 0 are
+ * SOLID height-0 cells, a legend line with a char >= 128 is skipped, bounded
+ * dims). A
  * mutant whose parse disagrees with the oracle is a survivor and fails the
  * target.
  *
@@ -70,6 +71,19 @@ static int oracleIsLegend(const unsigned char *text, size_t start, size_t len)
 	while (i < end && (text[i] == ' ' || text[i] == '\t'))
 		i++;
 	return i < end && text[i] == '@';
+}
+
+/* A `$` light line is a directive too: the parser skips it (never a map row),
+ * so the oracle must skip it when pinning width/depth. Its contents do not
+ * affect the cell grid the oracle checks. */
+static int oracleIsLight(const unsigned char *text, size_t start, size_t len)
+{
+	size_t i = start;
+	size_t end = start + len;
+
+	while (i < end && (text[i] == ' ' || text[i] == '\t'))
+		i++;
+	return i < end && text[i] == '$';
 }
 
 /* Split a bounded copy of a legend line on spaces/tabs. Returns token count. */
@@ -175,7 +189,8 @@ static void oracleBuild(const unsigned char *text, size_t length, Oracle *o)
 		if (pos < length)
 			pos++;
 		rowLen = oracleTrim(text, start, end);
-		if (rowLen == 0 || oracleIsLegend(text, start, rowLen))
+		if (rowLen == 0 || oracleIsLegend(text, start, rowLen) ||
+		    oracleIsLight(text, start, rowLen))
 			continue;
 		if (width < 0) {
 			if (rowLen > VOXMAP_MAX_DIM) {
@@ -253,7 +268,8 @@ static int parseAgreesWithOracle(const unsigned char *buf, size_t len)
 
 static int test_parsevoxmap_mutation_sweep(void)
 {
-	static const char kBase[] = "@ g 2 grass\n1g3\n456\n";
+	static const char kBase[] =
+		"@ g 2 grass\n$ point 1 1 1 255 0 0 4\n1g3\n456\n";
 	const size_t len = sizeof(kBase) - 1;
 	unsigned int seed = mutate_seed();
 	int killed = 0;

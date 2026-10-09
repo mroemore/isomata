@@ -12,10 +12,10 @@
  *   a char declared by a legend line (below) with height 0..9
  *   anything else is a load error (diagnostic to stderr, load returns NULL)
  * Blank lines are ignored; a trailing CR (CRLF files) and trailing spaces or
- * tabs on a line are stripped. Every non-blank, non-legend line must be the
- * same length (the map width). An empty map, an over-large map, or a ragged
- * map is a load error. VOXMAP_MAX_DIM bounds both dimensions so a bad file
- * cannot force a huge allocation.
+ * tabs on a line are stripped. Every non-blank, non-legend, non-light line must
+ * be the same length (the map width). An empty map, an over-large map, or a
+ * ragged map is a load error. VOXMAP_MAX_DIM bounds both dimensions so a bad
+ * file cannot force a huge allocation.
  *
  * Legend lines (anywhere in the file; skipped when counting map rows):
  *   @ <char> <height> <material>
@@ -26,6 +26,22 @@
  * naming a material absent from the table logs a diagnostic and falls back to
  * the "default" material. A legend line whose char is not a single ASCII byte
  * (< 128) is skipped with a diagnostic (it cannot index the legend table).
+ *
+ * Light lines (anywhere in the file; also skipped when counting map rows):
+ *   $ point x y z r g b [radius]
+ *   $ spot x y z r g b dx dy dz angle [radius]
+ * (x, y, z) is a WORLD position in the same space lightGridSeedPoint /
+ * lightGridSeedSpot consume: the seeded cell is (floor(x), floor(y), floor(z)),
+ * so a lamp at the centre of cell (cx, cy, cz) is written (cx+0.5, cy+0.5,
+ * cz+0.5). r/g/b are 0..255 (clamped). `radius` is a world-unit range: for a
+ * point it caps the seeded value (min(channel, radius * LIGHT_ATTEN)); for a
+ * spot it is the cone length; omitted, a point defaults to 0 (full channel,
+ * global attenuation only) and a spot to VOXMAP_LIGHT_DEFAULT_RADIUS. The spot
+ * direction need not be unit length; it is normalised here, and a zero-length
+ * direction is malformed. A malformed light line is SKIPPED with a stderr
+ * diagnostic (it never fails the load and never crashes): wrong token count, a
+ * non-numeric token, a non-finite value, a zero direction, or a non-positive
+ * angle. At most VOXMAP_MAX_LIGHTS lines are kept; extras are skipped.
  *
  * Two entry points share the parser: parseVoxmapText() takes an in-memory
  * buffer (used by the SDL tier for Android APK assets, which are not
@@ -55,6 +71,17 @@
  * (materials.h): the top face the top slot, each side direction its own
  * slot. With a NULL material table the built-in fallback regions
  * (textures.h) are used, so the emitters stay usable without a manifest.
+ *
+ * LIGHTING (flat per-face; the smooth per-corner pass is T15): each face
+ * multiplies a per-channel brightness factor into its tint. The factor comes
+ * from the air cell the face looks across (lightgrid.h::lightGridFactorAt):
+ *   - a top face samples the cell directly above the column top,
+ *     (x, height, z);
+ *   - a side face samples the air cell immediately above the neighbour column,
+ *     (x + dx, neighbourHeight, z + dz) — the cell the face's lower edge looks
+ *     across (a void/OOB neighbour uses y = 0).
+ * A NULL `lights` keeps every face at full brightness (factor 255), so the
+ * unlit emission path is unchanged.
  */
 
 #include "render/camera3d.h"
@@ -68,6 +95,29 @@
 /* A side at dot <= this faces away from the camera. Non-zero so float noise
  * at an exactly edge-on (dot 0) side still culls it. */
 #define CAMERA_CULL_EPS 1e-4f
+
+/* At most this many `$` light lines are kept per map. */
+#define VOXMAP_MAX_LIGHTS 64
+/* Cone length for a spot line whose optional radius is omitted. */
+#define VOXMAP_LIGHT_DEFAULT_RADIUS 16.0f
+
+#define VOXMAP_LIGHT_POINT 0
+#define VOXMAP_LIGHT_SPOT 1
+
+/* One parsed `$` light. Coordinates are world space (the seeded cell is the
+ * floor); r/g/b are 0..255; dir is unit length for a spot. */
+typedef struct VoxmapLight {
+	int kind;		/* VOXMAP_LIGHT_POINT / VOXMAP_LIGHT_SPOT */
+	float x;
+	float y;
+	float z;
+	float r;
+	float g;
+	float b;
+	float radius;		/* <= 0 = full channel (point) */
+	float dir[3];		/* spot axis, unit length */
+	float halfAngleDeg;	/* spot half-angle, > 0 */
+} VoxmapLight;
 
 /*
  * Per-face brightness multiplied onto the caller tint (RGB only; alpha is
@@ -86,6 +136,10 @@
 #define VOXMAP_CHECKER_BOOST 1.06f
 
 typedef struct Voxmap Voxmap;
+#ifndef ISOMATA_LIGHTGRID_TYPEDEF
+#define ISOMATA_LIGHTGRID_TYPEDEF
+typedef struct LightGrid LightGrid;
+#endif
 
 /* Load a map from a file, resolving legend materials through `materials`
  * (NULL allowed). Returns NULL with a clear stderr diagnostic on a missing
@@ -116,10 +170,18 @@ bool voxmapIsVoid(const Voxmap *map, int x, int y);
 /* Material id at (x, y), or -1 for void / out of bounds / NULL. */
 int voxmapMaterialAt(const Voxmap *map, int x, int y);
 
+/* Parsed `$` light count (0 for a NULL map). */
+int voxmapLightCount(const Voxmap *map);
+
+/* Borrowed light at `index`, or NULL when out of range / the map is NULL. */
+const VoxmapLight *voxmapLightAt(const Voxmap *map, int index);
+
 /* Append every visible face of the map to `list` with the given tint, sampling
- * `materials` (NULL uses the built-in fallback regions). Emits nothing for a
+ * `materials` (NULL uses the built-in fallback regions) and `lights` (NULL
+ * emits full-brightness faces; see the lighting note). Emits nothing for a
  * NULL map/list. */
 void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
-		     DrawList *list, const Camera3D *camera, uint32_t tint);
+		     const LightGrid *lights, DrawList *list,
+		     const Camera3D *camera, uint32_t tint);
 
 #endif /* ISOMATA_RENDER_VOXMAP_H */

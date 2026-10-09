@@ -91,7 +91,7 @@ static void test_zero_is_solid_dot_is_void(void)
 	 * its only neighbour is void/ground, so no side is exposed). */
 	initDrawList(&list, 8);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	TEST_ASSERT_EQUAL_INT(1, (int)drawListCount(&list));
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, drawListItem(&list, 0)->worldQuad[0][1]);
 	destroyDrawList(&list);
@@ -199,7 +199,7 @@ static void emitColumnAtYaw(float yawDeg, bool sides[4], int *tops)
 	}
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, yawDeg, cameraYawDeg(&camera));
 
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(1, 2, 3, 4));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(1, 2, 3, 4));
 
 	sides[0] = sides[1] = sides[2] = sides[3] = false;
 	*tops = 0;
@@ -232,7 +232,7 @@ static void test_faces_single_column_yaw_zero(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);		/* yaw 0 */
-	voxmapEmitFaces(map, NULL, &list, &camera, tint);
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, tint);
 	TEST_ASSERT_EQUAL_INT(2, drawListCount(&list));
 
 	/* Item 0 is the top face at y = 2. */
@@ -328,7 +328,7 @@ static void test_faces_cull_mid_tween_yaw(void)
 	updateCamera3D(&camera, CAMERA_TURN_SECONDS * 0.5f);	/* yaw 22.5 */
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 22.5f, cameraYawDeg(&camera));
 
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(1, 2, 3, 4));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(1, 2, 3, 4));
 	{
 		const float side[4][2] = ATLAS_UV_SIDE;
 
@@ -390,7 +390,7 @@ static void test_faces_cull_hidden_side(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);		/* yaw 0 */
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	/* 2 tops + 1 exposed +Z side (back column only). */
 	TEST_ASSERT_EQUAL_INT(3, drawListCount(&list));
 	for (i = 0; i < drawListCount(&list); i++) {
@@ -414,9 +414,9 @@ static void test_emit_null_safe(void)
 	DrawList list;
 
 	initDrawList(&list, 4);
-	voxmapEmitFaces(NULL, NULL, &list, NULL, 0);
+	voxmapEmitFaces(NULL, NULL, NULL, &list, NULL, 0);
 	TEST_ASSERT_EQUAL_INT(0, drawListCount(&list));
-	voxmapEmitFaces(NULL, NULL, NULL, NULL, 0);
+	voxmapEmitFaces(NULL, NULL, NULL, NULL, NULL, 0);
 	destroyDrawList(&list);
 }
 
@@ -479,11 +479,11 @@ static void test_faces_void_cell_and_null_list(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	/* (0,0) top only; (0,1) top + +Z side; (1,1) top + +Z side. */
 	TEST_ASSERT_EQUAL_INT(5, drawListCount(&list));
 	clearDrawList(&list);
-	voxmapEmitFaces(map, NULL, NULL, &camera, 0);		/* valid map, NULL list */
+	voxmapEmitFaces(map, NULL, NULL, NULL, &camera, 0);		/* valid map, NULL list */
 	TEST_ASSERT_EQUAL_INT(0, drawListCount(&list));
 
 	destroyDrawList(&list);
@@ -568,10 +568,10 @@ static void test_faces_overflow_drops_and_reports_once(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 2);		/* 8 columns -> far more than 2 faces */
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	TEST_ASSERT_EQUAL_INT(2, drawListCount(&list));
 	clearDrawList(&list);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	TEST_ASSERT_EQUAL_INT(2, drawListCount(&list));
 
 	destroyDrawList(&list);
@@ -664,7 +664,7 @@ static void test_checker_odd_even_top(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 77));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 77));
 
 	evenR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
 	oddR = (int)((topTintAt(&list, 1) >> 24) & 0xffu);
@@ -694,7 +694,7 @@ static void test_checker_odd_even_side(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);		/* yaw 0: +Z sides only */
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
 
 	evenR = (int)((plusZSideTintAt(&list, 0) >> 24) & 0xffu);
 	oddR = (int)((plusZSideTintAt(&list, 1) >> 24) & 0xffu);
@@ -723,7 +723,7 @@ static void test_checker_clamps_saturating_tint(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 42));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 42));
 
 	evenR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
 	oddR = (int)((topTintAt(&list, 1) >> 24) & 0xffu);
@@ -753,7 +753,7 @@ static void test_sides_distinct_at_45(void)
 	updateCamera3D(&camera, CAMERA_TURN_SECONDS);
 	TEST_ASSERT_FLOAT_WITHIN(1e-3f, 45.0f, cameraYawDeg(&camera));
 
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
 	pzR = (int)((sideTintByDir(&list, 0) >> 24) & 0xffu);
 	pxR = (int)((sideTintByDir(&list, 1) >> 24) & 0xffu);
 
@@ -778,7 +778,7 @@ static void test_top_brightest(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(200, 200, 200, 255));
 
 	topR = (int)((topTintAt(&list, 0) >> 24) & 0xffu);
 	sideR = (int)((sideTintByDir(&list, 0) >> 24) & 0xffu);
@@ -943,7 +943,7 @@ static void test_emission_uses_material_face_uvs(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, &t, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, &t, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	TEST_ASSERT_EQUAL_INT(2, (int)drawListCount(&list));
 
 	materialFaceUV(&t.items[1].rect[FACE_TOP], FACE_TOP, expectTop);
@@ -983,7 +983,7 @@ static void test_emission_null_table_fallback(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	for (i = 0; i < drawListCount(&list); i++) {
 		const DrawItem *item = drawListItem(&list, i);
 
@@ -1051,7 +1051,7 @@ static void test_shade_zero_channel(void)
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(0, 0, 0, 123));
+	voxmapEmitFaces(map, NULL, NULL, &list, &camera, DRAW_TINT(0, 0, 0, 123));
 	TEST_ASSERT_TRUE(drawListCount(&list) > 0);
 	for (i = 0; i < drawListCount(&list); i++) {
 		const DrawItem *item = drawListItem(&list, i);
@@ -1119,7 +1119,7 @@ static void test_emission_material_id_out_of_range(void)
 
 	initDrawList(&list, 16);
 	initCamera3D(&camera);
-	voxmapEmitFaces(map, &small, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	voxmapEmitFaces(map, &small, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
 	for (i = 0; i < drawListCount(&list); i++) {
 		const DrawItem *item = drawListItem(&list, i);
 
@@ -1160,6 +1160,235 @@ static void test_legend_high_byte_char_skipped(void)
 	/* The high byte was never registered: using it as a cell fails the load. */
 	TEST_ASSERT_NULL(parseVoxmapText("@ \x80 2 grass\n\x80\n",
 					 strlen("@ \x80 2 grass\n\x80\n"), &t));
+}
+
+/* --- `$` light parsing -------------------------------------------------- */
+
+static void test_light_parse_point_and_spot(void)
+{
+	const char *text = "$ point 1 2 3 255 128 64 5\n"
+			   "$ spot 4 5 6 10 20 30 0 -1 0 45\n"
+			   "11\n11\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+	const VoxmapLight *p;
+	const VoxmapLight *s;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLightCount(map));
+
+	p = voxmapLightAt(map, 0);
+	TEST_ASSERT_NOT_NULL(p);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_POINT, p->kind);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 1.0f, p->x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, p->y);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 3.0f, p->z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 255.0f, p->r);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 128.0f, p->g);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 64.0f, p->b);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 5.0f, p->radius);
+
+	s = voxmapLightAt(map, 1);
+	TEST_ASSERT_NOT_NULL(s);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_SPOT, s->kind);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 4.0f, s->x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 5.0f, s->y);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 6.0f, s->z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 10.0f, s->r);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 20.0f, s->g);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 30.0f, s->b);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->dir[0]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, s->dir[1]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->dir[2]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 45.0f, s->halfAngleDeg);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, VOXMAP_LIGHT_DEFAULT_RADIUS, s->radius);
+
+	/* The map itself still parsed. */
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapDepth(map));
+	destroyVoxmap(map);
+}
+
+/* A non-unit direction is normalised; out-of-range channels clamp; an omitted
+ * radius defaults to 0 for a point. */
+static void test_light_parse_normalizes_and_clamps(void)
+{
+	const char *text = "$ spot 0 0 0 255 0 0 0 -2 0 30\n"
+			   "$ point 0 0 0 300 -5 128\n"
+			   "1\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+	const VoxmapLight *s;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLightCount(map));
+	s = voxmapLightAt(map, 0);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_SPOT, s->kind);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->dir[0]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, s->dir[1]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->dir[2]);
+	s = voxmapLightAt(map, 1);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 255.0f, s->r);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->g);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 128.0f, s->b);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, s->radius);
+	destroyVoxmap(map);
+}
+
+/* Malformed light lines are skipped (never a load failure); a valid one after
+ * them still lands. */
+static void test_light_parse_malformed_skipped(void)
+{
+	const char *text =
+		"$ point 1 2 3 255 0\n"			/* too few */
+		"$ point 1 2 3 255 0 0 5 extra\n"	/* too many */
+		"$ point a 2 3 255 0 0\n"		/* bad number */
+		"$ point 1 2 3 inf 0 0\n"		/* non-finite */
+		"$ spot 1 2 3 255 0 0 0 0 0 45\n"	/* zero dir */
+		"$ spot 1 2 3 255 0 0 0 -1 0 0\n"	/* zero angle */
+		"$ spot 1 2 3 255 0 0 0 -1 0\n"		/* too few */
+		"$ bogus 1 2 3\n"			/* unknown kind */
+		"$\n"					/* empty */
+		"$ spot 1 2 3 255 0 0 0 -1 0 45 2\n"	/* valid */
+		"1\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+	const VoxmapLight *s;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
+	s = voxmapLightAt(map, 0);
+	TEST_ASSERT_NOT_NULL(s);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_LIGHT_SPOT, s->kind);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, s->radius);
+	destroyVoxmap(map);
+}
+
+/* Every bad token position (the parse chain short-circuits), leading spaces,
+ * and an overflowing direction are all skipped. */
+static void test_light_parse_token_failures(void)
+{
+	const char *text =
+		"$ point x 2 3 255 0 0\n"
+		"$ point 1 x 3 255 0 0\n"
+		"$ point 1 2 x 255 0 0\n"
+		"$ point 1 2 3 x 0 0\n"
+		"$ point 1 2 3 255 x 0\n"
+		"$ point 1 2 3 255 0 x\n"
+		"$ point 1 2 3 255 0 0 x\n"
+		"$ spot x 2 3 255 0 0 0 -1 0 45\n"
+		"$ spot 1 x 3 255 0 0 0 -1 0 45\n"
+		"$ spot 1 2 x 255 0 0 0 -1 0 45\n"
+		"$ spot 1 2 3 x 0 0 0 -1 0 45\n"
+		"$ spot 1 2 3 255 x 0 0 -1 0 45\n"
+		"$ spot 1 2 3 255 0 x 0 -1 0 45\n"
+		"$ spot 1 2 3 255 0 0 x -1 0 45\n"
+		"$ spot 1 2 3 255 0 0 0 x 0 45\n"
+		"$ spot 1 2 3 255 0 0 0 -1 x 45\n"
+		"$ spot 1 2 3 255 0 0 0 -1 0 x\n"
+		"$ spot 1 2 3 255 0 0 0 -1 0 45 x\n"
+		"$ spot 1 2 3 255 0 0 3e38 3e38 3e38 45\n"	/* inf dir */
+		"1\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(0, voxmapLightCount(map));
+	destroyVoxmap(map);
+}
+
+/* A light line longer than the line buffer is skipped; the next one lands. */
+static void test_light_parse_over_long_line_skipped(void)
+{
+	char text[640];
+	size_t pos = 0;
+	int i;
+
+	pos += (size_t)snprintf(text + pos, sizeof(text) - pos,
+				"$ point 1 2 3 255 0 0 ");
+	for (i = 0; i < 300; i++)
+		text[pos++] = '1';
+	text[pos++] = '\n';
+	pos += (size_t)snprintf(text + pos, sizeof(text) - pos,
+				"$ point 1 2 3 255 0 0 4\n1\n");
+	{
+		Voxmap *map = parseVoxmapText(text, pos, NULL);
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
+		destroyVoxmap(map);
+	}
+}
+
+/* Accessors and the VOXMAP_MAX_LIGHTS cap. */static void test_light_bounds_and_accessors(void)
+{
+	Voxmap *map;
+	char text[4096];
+	size_t pos = 0;
+	int i;
+
+	TEST_ASSERT_EQUAL_INT(0, voxmapLightCount(NULL));
+	TEST_ASSERT_NULL(voxmapLightAt(NULL, 0));
+
+	for (i = 0; i < VOXMAP_MAX_LIGHTS + 6; i++)
+		pos += (size_t)snprintf(text + pos, sizeof(text) - pos,
+					"$ point 1 1 1 255 0 0 4\n");
+	pos += (size_t)snprintf(text + pos, sizeof(text) - pos, "1\n");
+	map = parseVoxmapText(text, pos, NULL);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_MAX_LIGHTS, voxmapLightCount(map));
+	TEST_ASSERT_NULL(voxmapLightAt(map, -1));
+	TEST_ASSERT_NULL(voxmapLightAt(map, VOXMAP_MAX_LIGHTS));
+	TEST_ASSERT_NOT_NULL(voxmapLightAt(map, VOXMAP_MAX_LIGHTS - 1));
+	destroyVoxmap(map);
+}
+
+/* File and in-memory entry points yield the same lights. */
+static void test_light_roundtrip_file_and_memory(void)
+{
+	const char *content = "$ point 2 3 4 10 20 30 6\n"
+			      "$ spot 5 6 7 40 50 60 1 0 0 20\n"
+			      "12\n34\n";
+	Voxmap *mem = parseVoxmapText(content, strlen(content), NULL);
+	Voxmap *file = loadTemp("vm_lights.txt", content);
+	int i;
+
+	TEST_ASSERT_NOT_NULL(mem);
+	TEST_ASSERT_NOT_NULL(file);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLightCount(mem));
+	TEST_ASSERT_EQUAL_INT(voxmapLightCount(mem), voxmapLightCount(file));
+	for (i = 0; i < voxmapLightCount(mem); i++) {
+		const VoxmapLight *a = voxmapLightAt(mem, i);
+		const VoxmapLight *b = voxmapLightAt(file, i);
+
+		TEST_ASSERT_EQUAL_INT(a->kind, b->kind);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->x, b->x);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->y, b->y);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->z, b->z);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->r, b->r);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->g, b->g);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->b, b->b);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->radius, b->radius);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->dir[0], b->dir[0]);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->dir[1], b->dir[1]);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, a->halfAngleDeg, b->halfAngleDeg);
+	}
+	destroyVoxmap(mem);
+	destroyVoxmap(file);
+}
+
+/* Light lines between rows do not change the map's width/depth. */
+static void test_light_lines_not_map_rows(void)
+{
+	const char *text = "$ point 0 0 0 255 255 255 4\n"
+			   "11\n"
+			   "$ spot 0 1 0 255 0 0 0 -1 0 30\n"
+			   "\n"
+			   "   $ point 1 1 1 10 10 10\n"
+			   "11\n";
+	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(3, voxmapLightCount(map));
+	destroyVoxmap(map);
 }
 
 void run_test_voxmap(void);
@@ -1208,4 +1437,12 @@ void run_test_voxmap(void)
 	RUN_TEST(test_emission_material_id_out_of_range);
 	RUN_TEST(test_material_at_bounds);
 	RUN_TEST(test_shade_zero_channel);
+	RUN_TEST(test_light_parse_point_and_spot);
+	RUN_TEST(test_light_parse_normalizes_and_clamps);
+	RUN_TEST(test_light_parse_malformed_skipped);
+	RUN_TEST(test_light_parse_token_failures);
+	RUN_TEST(test_light_parse_over_long_line_skipped);
+	RUN_TEST(test_light_bounds_and_accessors);
+	RUN_TEST(test_light_roundtrip_file_and_memory);
+	RUN_TEST(test_light_lines_not_map_rows);
 }

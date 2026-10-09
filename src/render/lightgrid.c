@@ -155,6 +155,53 @@ void lightGridAt(const LightGrid *grid, int x, int y, int z, uint8_t out[3])
 	}
 }
 
+/* Map a 0..255 combined light to the ambient-floored brightness factor. */
+static uint8_t factorFromCombined(int v)
+{
+	if (v < 0)
+		v = 0;
+	if (v > 255)
+		v = 255;
+	return (uint8_t)(LIGHT_AMBIENT +
+			 (v * (255 - LIGHT_AMBIENT) + 127) / 255);
+}
+
+void lightGridFactorAt(const LightGrid *grid, int x, int y, int z,
+		       uint8_t out[3])
+{
+	int c;
+	int skyFull;
+
+	if (out == NULL)
+		return;
+	if (grid == NULL) {
+		out[0] = 255;
+		out[1] = 255;
+		out[2] = 255;
+		return;
+	}
+	if (!cellInBounds(grid, x, y, z)) {
+		/* Beyond the grid is open sky: a sky-open cell, no block light. */
+		skyFull = factorFromCombined(LIGHT_SKY_FULL *
+					     LIGHT_SKY_GAIN_PCT / 100);
+		out[0] = (uint8_t)skyFull;
+		out[1] = (uint8_t)skyFull;
+		out[2] = (uint8_t)skyFull;
+		return;
+	}
+	{
+		size_t idx = cellIndex(grid, x, y, z);
+		int sky = (int)grid->sky[idx] * LIGHT_SKY_GAIN_PCT / 100;
+
+		for (c = 0; c < 3; c++) {
+			int v = sky +
+				(int)grid->block[(size_t)c * grid->n + idx];
+
+			out[c] = factorFromCombined(v);
+		}
+	}
+}
+
 /* --- bucket flood ------------------------------------------------------ */
 
 static void bucketReset(LightGrid *g)

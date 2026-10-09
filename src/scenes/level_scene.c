@@ -30,6 +30,7 @@
 #include "render/frame.h"
 #include "render/gpu_backend.h"
 #include "render/grid.h"
+#include "render/lightgrid.h"
 #include "render/materials.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
@@ -58,6 +59,7 @@
 
 typedef struct LevelState {
 	Voxmap *map;
+	LightGrid *lights;	/* baked from the map's emitters + sky */
 	Camera3D camera;
 	DrawList list;
 	SpriteEntity sprites[LEVEL_SPRITE_COUNT];
@@ -168,6 +170,54 @@ static void levelOnReset(void *ctx)
 	levelResetCamera(ctx);
 }
 
+/* Build the light grid from the map: seed every parsed `$` emitter (a spot's
+ * line of sight comes from the map), then flood sky + block once. Kept alive
+ * with the level and destroyed in unload. */
+static void levelBuildLights(LevelState *st)
+{
+	int w;
+	int d;
+	int h;
+	int i;
+	int count;
+
+	if (st->map == NULL)
+		return;
+	w = voxmapWidth(st->map);
+	d = voxmapDepth(st->map);
+	h = 1;
+	for (i = 0; i < d; i++) {
+		int x;
+
+		for (x = 0; x < w; x++) {
+			int top = voxmapHeightAt(st->map, x, i) + 1;
+
+			if (top > h)
+				h = top;
+		}
+	}
+	st->lights = lightGridCreate(w, d, h);
+	if (st->lights == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: light grid allocation failed");
+		return;
+	}
+	count = voxmapLightCount(st->map);
+	for (i = 0; i < count; i++) {
+		const VoxmapLight *l = voxmapLightAt(st->map, i);
+
+		if (l->kind == VOXMAP_LIGHT_POINT)
+			lightGridSeedPoint(st->lights, l->x, l->y, l->z, l->r,
+					   l->g, l->b, l->radius);
+		else
+			lightGridSeedSpot(st->lights, st->map, l->x, l->y, l->z,
+					  l->dir, l->halfAngleDeg, l->r, l->g,
+					  l->b, l->radius);
+	}
+	lightGridPropagate(st->lights, st->map);
+	SDL_Log("isomata: light grid %dx%dx%d, %d emitters", w, d, h, count);
+}
+
 static bool level_init(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
@@ -200,6 +250,7 @@ static bool level_init(void *self, App *app)
 	if (st->map == NULL)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");
+	levelBuildLights(st);
 
 	/* UI root: a zero-padding pane is the layout root the toast and the
 	 * controls hang off. The pane itself is never drawn (its draw() paints
@@ -408,7 +459,7 @@ static void level_draw(void *self, App *app)
 		buildGridQuad(&st->camera, aspect, &grid);
 		gpuBackendDrawGrid(gpu, &gridViewProj, &grid);
 
-		buildFrameDrawList(st->map, st->materials, st->sprites,
+		buildFrameDrawList(st->map, st->materials, st->lights, st->sprites,
 				   st->spriteCount, &st->camera, &st->list);
 		gpuBackendDrawList(gpu, &viewProj, &st->list);
 	}
@@ -432,6 +483,8 @@ static void level_unload(void *self, App *app)
 	st->rotR = NULL;
 	st->reset = NULL;
 	destroyDrawList(&st->list);
+	destroyLightGrid(st->lights);
+	st->lights = NULL;
 	destroyVoxmap(st->map);
 	st->map = NULL;
 }

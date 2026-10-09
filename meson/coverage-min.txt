@@ -109,7 +109,11 @@ src/render/gpu_backend.c	0
 # moves 50 -> 42: the demo-map load, sprite build, drawlist fill/sort/draw and
 # the ISO_CAMERA_TURNS / key-control verification hooks add branches only a
 # real GPU run takes (the dummy smoke never draws).
-src/render/voxmap.c		93
+# T14: the `$` light-line parser and the ambient-floored face sampling add
+# branches; the twin suite covers them (malformed variants, caps, over-long
+# lines), so the measured value rises 94.3 -> 94.6 and the floor ratchets 93 ->
+# 94.
+src/render/voxmap.c		94
 # Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
 # beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
 # unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS
@@ -164,9 +168,10 @@ src/scenes/pause_scene.c	0
 src/render/grid.c		91
 
 # T14: the pure lighting core (sky + block grids, bucket flood, sky rule,
-# point/spot emitters with a voxel-DDA line of sight). Floor at its measured
-# branch % (252/258 = 97.7). The untaken arms are defensive/unreachable: the
-# bucket-pool overflow guard (provably cannot fire — at most 2n insertions for
-# a 2n pool), the DDA step guard plus its redundant target-reached break, and
-# the cosA>1 / angleFall<0 float clamps.
+# point/spot emitters with a voxel-DDA line of sight, and the ambient-floored
+# per-face sampling factor). Floor at its measured branch % (262/270 = 97.0).
+# The untaken arms are defensive/unreachable: the bucket-pool overflow guard
+# (provably cannot fire — at most 2n insertions for a 2n pool), the DDA step
+# guard plus its redundant target-reached break, and the cosA>1 / angleFall<0
+# float clamps.
 src/render/lightgrid.c		97

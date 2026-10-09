@@ -62,13 +62,22 @@
 #define LIGHT_SKY_FULL 255
 /* Sampling floor added to every face's light (used by T15, defined here). */
 #define LIGHT_AMBIENT 24
+/* Sky gain, percent. The factor helper scales the sky term by this before
+ * combining it with block light: a fully sky-open world would otherwise
+ * saturate the factor at 255 and a lamp could never read above the uniform
+ * skylight. 100 = no gain (sky saturates). The ASCII heightmap has no
+ * overhangs, so sky is uniform and this gain IS the daylight level. */
+#define LIGHT_SKY_GAIN_PCT 30
 
 /* Dimension / volume guards: a bad size must fail cleanly rather than force a
  * huge allocation. The map is at most 256 x 256 x 10, so these are generous. */
 #define LIGHTGRID_MAX_DIM 4096
 #define LIGHTGRID_MAX_CELLS (1u << 20)
 
+#ifndef ISOMATA_LIGHTGRID_TYPEDEF
+#define ISOMATA_LIGHTGRID_TYPEDEF
 typedef struct LightGrid LightGrid;
+#endif
 
 /* Create a grid of w (x) * d (z) * h (y) cells, all dark. Returns NULL for a
  * non-positive dimension, an over-large dimension, a volume over
@@ -92,6 +101,19 @@ uint8_t lightGridBlockAt(const LightGrid *grid, int x, int y, int z,
 /* Combined light at (x, y, z): out[c] = min(255, sky + block[c]). Out of
  * bounds or a NULL grid writes {0, 0, 0}; a NULL out is a no-op. */
 void lightGridAt(const LightGrid *grid, int x, int y, int z, uint8_t out[3]);
+
+/* Per-channel 0..255 brightness factor for the air cell a face looks across
+ * (the flat per-face sampling of T14; T15 replaces it with per-corner
+ * smoothing). The sky term is scaled by LIGHT_SKY_GAIN_PCT and added to the
+ * block channel (saturated at 255), then mapped through the ambient floor:
+ *   combined = min(255, sky * LIGHT_SKY_GAIN_PCT / 100 + block[c])
+ *   out[c]   = LIGHT_AMBIENT + combined * (255 - LIGHT_AMBIENT) / 255
+ * so a fully dark cell reads LIGHT_AMBIENT and a full cell reads 255. A NULL
+ * grid writes {255, 255, 255} (lighting disabled); an out-of-grid cell writes
+ * the open-sky factor (a sky-open cell with no block light), so map-edge faces
+ * match void-neighbour faces. A NULL out is a no-op. */
+void lightGridFactorAt(const LightGrid *grid, int x, int y, int z,
+		       uint8_t out[3]);
 
 /* Flood-fill the sky and block grids. The solid volume is rebuilt from `map`
  * (NULL = every cell air). Existing block seeds are kept and merged with the

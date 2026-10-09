@@ -18,6 +18,7 @@
  */
 
 #include "render/voxmap.h"
+#include "render/lightgrid.h"
 #include "render/textures.h"
 
 #include <math.h>
@@ -39,6 +40,8 @@ struct Voxmap {
 	int depth;
 	int8_t *cells;		/* width * depth; -1 = void, 0..9 = height */
 	int16_t *materials;	/* width * depth; material id, -1 = void */
+	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
+	int lightCount;
 };
 
 /* Read the whole file into a NUL-terminated malloc buffer, or NULL. */
@@ -96,6 +99,24 @@ static bool isLegendLine(const char *data, size_t start, size_t len)
 	while (i < end && (data[i] == ' ' || data[i] == '\t'))
 		i++;
 	return i < end && data[i] == '@';
+}
+
+/* True when the line's first non-space/tab character is '$'. */
+static bool isLightLine(const char *data, size_t start, size_t len)
+{
+	size_t i = start;
+	size_t end = start + len;
+
+	while (i < end && (data[i] == ' ' || data[i] == '\t'))
+		i++;
+	return i < end && data[i] == '$';
+}
+
+/* True for any directive line (legend or light): such a line is never a map
+ * row and is skipped when pinning width / counting depth. */
+static bool isDirectiveLine(const char *data, size_t start, size_t len)
+{
+	return isLegendLine(data, start, len) || isLightLine(data, start, len);
 }
 
 /* Split a bounded line copy on spaces/tabs. Returns the token count. */
@@ -203,6 +224,159 @@ static bool parseLegend(const char *data, size_t start, size_t len,
 	return true;
 }
 
+/* Parse a decimal float token in full; reject empty / trailing junk / a
+ * non-finite value. */
+static bool parseFloatToken(const char *tok, float *out)
+{
+	char *end;
+	float v;
+
+	if (tok == NULL || tok[0] == '\0')
+		return false;
+	v = strtof(tok, &end);
+	if (end == tok || *end != '\0' || !isfinite(v))
+		return false;
+	*out = v;
+	return true;
+}
+
+/* Clamp a channel to 0..255 (a negative or NaN value becomes 0). */
+static float clampChannel(float v)
+{
+	if (!(v > 0.0f))
+		return 0.0f;
+	if (v > 255.0f)
+		return 255.0f;
+	return v;
+}
+
+static void addLight(VoxmapLight *lights, int *count, const VoxmapLight *l)
+{
+	if (*count >= VOXMAP_MAX_LIGHTS) {
+		fprintf(stderr, "voxmap: more than %d lights; line skipped\n",
+			VOXMAP_MAX_LIGHTS);
+		return;
+	}
+	lights[*count] = *l;
+	(*count)++;
+}
+
+/* Parse one `$` light line into the emitter array. Malformed lines are skipped
+ * with a diagnostic (never a load failure). */
+static void parseLightLine(VoxmapLight *lights, int *count, const char *data,
+			   size_t start, size_t len, const char *label)
+{
+	char line[LEGEND_LINE_MAX];
+	char *tokens[16];
+	int ntok;
+	VoxmapLight l;
+
+	if (len >= sizeof(line)) {
+		fprintf(stderr, "voxmap: '%s' light line too long; skipped\n",
+			label);
+		return;
+	}
+	memcpy(line, data + start, len);
+	line[len] = '\0';
+	ntok = tokenize(line, tokens, 16);
+	if (ntok < 2) {
+		fprintf(stderr, "voxmap: '%s' empty light line; skipped\n",
+			label);
+		return;
+	}
+	memset(&l, 0, sizeof(l));
+	if (strcmp(tokens[1], "point") == 0) {
+		if (ntok != 8 && ntok != 9) {
+			fprintf(stderr,
+				"voxmap: '%s' point light needs 8 or 9 tokens (%d); skipped\n",
+				label, ntok);
+			return;
+		}
+		l.kind = VOXMAP_LIGHT_POINT;
+		if (!parseFloatToken(tokens[2], &l.x) ||
+		    !parseFloatToken(tokens[3], &l.y) ||
+		    !parseFloatToken(tokens[4], &l.z) ||
+		    !parseFloatToken(tokens[5], &l.r) ||
+		    !parseFloatToken(tokens[6], &l.g) ||
+		    !parseFloatToken(tokens[7], &l.b)) {
+			fprintf(stderr,
+				"voxmap: '%s' point light has a bad number; skipped\n",
+				label);
+			return;
+		}
+		if (ntok == 9) {
+			if (!parseFloatToken(tokens[8], &l.radius)) {
+				fprintf(stderr,
+					"voxmap: '%s' point light has a bad radius; skipped\n",
+					label);
+				return;
+			}
+		}
+	} else if (strcmp(tokens[1], "spot") == 0) {
+		float dx;
+		float dy;
+		float dz;
+		float lenDir;
+
+		if (ntok != 12 && ntok != 13) {
+			fprintf(stderr,
+				"voxmap: '%s' spot light needs 12 or 13 tokens (%d); skipped\n",
+				label, ntok);
+			return;
+		}
+		l.kind = VOXMAP_LIGHT_SPOT;
+		if (!parseFloatToken(tokens[2], &l.x) ||
+		    !parseFloatToken(tokens[3], &l.y) ||
+		    !parseFloatToken(tokens[4], &l.z) ||
+		    !parseFloatToken(tokens[5], &l.r) ||
+		    !parseFloatToken(tokens[6], &l.g) ||
+		    !parseFloatToken(tokens[7], &l.b) ||
+		    !parseFloatToken(tokens[8], &dx) ||
+		    !parseFloatToken(tokens[9], &dy) ||
+		    !parseFloatToken(tokens[10], &dz) ||
+		    !parseFloatToken(tokens[11], &l.halfAngleDeg)) {
+			fprintf(stderr,
+				"voxmap: '%s' spot light has a bad number; skipped\n",
+				label);
+			return;
+		}
+		lenDir = sqrtf(dx * dx + dy * dy + dz * dz);
+		if (!(lenDir > 0.0f) || !isfinite(lenDir)) {
+			fprintf(stderr,
+				"voxmap: '%s' spot light has a zero direction; skipped\n",
+				label);
+			return;
+		}
+		l.dir[0] = dx / lenDir;
+		l.dir[1] = dy / lenDir;
+		l.dir[2] = dz / lenDir;
+		if (!(l.halfAngleDeg > 0.0f)) {
+			fprintf(stderr,
+				"voxmap: '%s' spot light has a non-positive angle; skipped\n",
+				label);
+			return;
+		}
+		if (ntok == 13) {
+			if (!parseFloatToken(tokens[12], &l.radius)) {
+				fprintf(stderr,
+					"voxmap: '%s' spot light has a bad radius; skipped\n",
+					label);
+				return;
+			}
+		} else {
+			l.radius = VOXMAP_LIGHT_DEFAULT_RADIUS;
+		}
+	} else {
+		fprintf(stderr, "voxmap: '%s' unknown light kind '%s'; skipped\n",
+			label, tokens[1]);
+		return;
+	}
+	l.r = clampChannel(l.r);
+	l.g = clampChannel(l.g);
+	l.b = clampChannel(l.b);
+	addLight(lights, count, &l);
+}
+
 /* Parse `length` bytes of heightmap text (see voxmap.h). */
 static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 			   const MaterialTable *materials)
@@ -214,6 +388,8 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 	int8_t legendH[LEGEND_CHARS];
 	int16_t legendM[LEGEND_CHARS];
 	int16_t defaultMat = 0;
+	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
+	int lightCount = 0;
 
 	if (text == NULL)
 		return NULL;
@@ -243,6 +419,9 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 			if (!parseLegend(text, start, rowLen, label, legendH,
 					 legendM, materials, defaultMat))
 				return NULL;
+		} else if (isLightLine(text, start, rowLen)) {
+			parseLightLine(lights, &lightCount, text, start, rowLen,
+				       label);
 		}
 	}
 
@@ -260,7 +439,7 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 		if (pos < length)
 			pos++;			/* skip '\n' */
 		rowLen = trimmedLength(text, start, end);
-		if (rowLen == 0 || isLegendLine(text, start, rowLen))
+		if (rowLen == 0 || isDirectiveLine(text, start, rowLen))
 			continue;
 		if (width < 0) {
 			if (rowLen > VOXMAP_MAX_DIM) {
@@ -313,6 +492,10 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 	}
 	map->width = width;
 	map->depth = depth;
+	if (lightCount > 0)
+		memcpy(map->lights, lights,
+		       (size_t)lightCount * sizeof(*lights));
+	map->lightCount = lightCount;
 
 	/* Pass 2: fill the grid and its material ids. */
 	{
@@ -330,8 +513,8 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 			if (pos < length)
 				pos++;
 			if (trimmedLength(text, start, end) == 0 ||
-			    isLegendLine(text, start,
-					 trimmedLength(text, start, end)))
+			    isDirectiveLine(text, start,
+					    trimmedLength(text, start, end)))
 				continue;
 			for (col = 0; col < width; col++) {
 				unsigned char c =
@@ -412,6 +595,18 @@ int voxmapMaterialAt(const Voxmap *map, int x, int y)
 	return map->materials[(size_t)y * map->width + x];
 }
 
+int voxmapLightCount(const Voxmap *map)
+{
+	return map == NULL ? 0 : map->lightCount;
+}
+
+const VoxmapLight *voxmapLightAt(const Voxmap *map, int index)
+{
+	if (map == NULL || index < 0 || index >= map->lightCount)
+		return NULL;
+	return &map->lights[index];
+}
+
 /* --- face generation --------------------------------------------------- */
 
 /* Side directions: 0 = +Z, 1 = +X, 2 = -Z, 3 = -X. */
@@ -472,20 +667,39 @@ static uint8_t shadeChannel(uint8_t c, float factor)
 	return (uint8_t)(v + 0.5f);
 }
 
-/* Apply the face shade and the per-column checker boost to the caller tint:
- * RGB multiplied and clamped per channel, alpha preserved. `x`/`z` are the
- * column's grid coordinates (odd tiles are brightened). */
-static uint32_t shadeTint(uint32_t tint, float faceShade, int x, int z)
+/* Apply the face shade, the per-column checker boost and the sampled light
+ * factor to the caller tint: RGB multiplied and clamped per channel, alpha
+ * preserved. `x`/`z` are the column's grid coordinates (odd tiles are
+ * brightened); `light` is the 0..255 per-channel factor (255 = full). */
+static uint32_t shadeTint(uint32_t tint, float faceShade, int x, int z,
+			  const uint8_t light[3])
 {
-	float factor = faceShade *
-		       (((x + z) & 1) ? VOXMAP_CHECKER_BOOST : 1.0f);
-	uint8_t r = shadeChannel((uint8_t)((tint >> 24) & 0xffu), factor);
-	uint8_t g = shadeChannel((uint8_t)((tint >> 16) & 0xffu), factor);
-	uint8_t b = shadeChannel((uint8_t)((tint >> 8) & 0xffu), factor);
+	float base = faceShade *
+		     (((x + z) & 1) ? VOXMAP_CHECKER_BOOST : 1.0f);
+	uint8_t r = shadeChannel((uint8_t)((tint >> 24) & 0xffu),
+				 base * (float)light[0] / 255.0f);
+	uint8_t g = shadeChannel((uint8_t)((tint >> 16) & 0xffu),
+				 base * (float)light[1] / 255.0f);
+	uint8_t b = shadeChannel((uint8_t)((tint >> 8) & 0xffu),
+				 base * (float)light[2] / 255.0f);
 	uint8_t a = (uint8_t)(tint & 0xffu);
 
 	return ((uint32_t)r << 24) | ((uint32_t)g << 16) |
 	       ((uint32_t)b << 8) | (uint32_t)a;
+}
+
+/* The per-channel brightness factor at a face's adjacent air cell; a NULL
+ * light grid keeps the face at full brightness. */
+static void sampleLight(const LightGrid *lights, int x, int y, int z,
+			uint8_t out[3])
+{
+	if (lights == NULL) {
+		out[0] = 255;
+		out[1] = 255;
+		out[2] = 255;
+		return;
+	}
+	lightGridFactorAt(lights, x, y, z, out);
 }
 
 /* Per-direction side shade (dir 0..3 = +Z, +X, -Z, -X). */
@@ -518,7 +732,7 @@ static bool sideCulled(int dir, float toCamX, float toCamZ)
 }
 
 static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][2],
-		    uint8_t alphaMode, uint32_t tint)
+		    uint8_t alphaMode, uint32_t tint, const uint8_t light[3])
 {
 	float quad[4][3] = {
 		{ (float)x, (float)height, (float)z },
@@ -528,11 +742,12 @@ static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][
 	};
 
 	emitFace(list, quad, uv, alphaMode,
-		 shadeTint(tint, VOXMAP_SHADE_TOP, x, z));
+		 shadeTint(tint, VOXMAP_SHADE_TOP, x, z, light));
 }
 
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
-		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
+		     const float uv[4][2], uint8_t alphaMode, uint32_t tint,
+		     const uint8_t light[3])
 {
 	float fx = (float)x;
 	float fz = (float)z;
@@ -565,11 +780,12 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		break;
 	}
 	emitFace(list, quad, uv, alphaMode,
-		 shadeTint(tint, kSideShade[dir], x, z));
+		 shadeTint(tint, kSideShade[dir], x, z, light));
 }
 
 void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
-		     DrawList *list, const Camera3D *camera, uint32_t tint)
+		     const LightGrid *lights, DrawList *list,
+		     const Camera3D *camera, uint32_t tint)
 {
 	float toCamX;
 	float toCamZ;
@@ -587,13 +803,15 @@ void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
 			int id;
 			float uv[4][2];
 			uint8_t alphaMode;
+			uint8_t light[3];
 
 			if (height < 0)
 				continue;	/* void: no column, no faces */
 			id = map->materials[idx];
 			alphaMode = materialAlpha(materials, id);
 			materialUV(materials, id, FACE_TOP, uv);
-			emitTop(list, x, z, height, uv, alphaMode, tint);
+			sampleLight(lights, x, height, z, light);
+			emitTop(list, x, z, height, uv, alphaMode, tint, light);
 			for (dir = 0; dir < 4; dir++) {
 				int neighbour;
 
@@ -607,8 +825,10 @@ void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
 					continue;	/* not exposed */
 				materialUV(materials, id,
 					   materialFaceForSideDir(dir), uv);
+				sampleLight(lights, x + kSideDx[dir], neighbour,
+					    z + kSideDz[dir], light);
 				emitSide(list, x, z, dir, neighbour, height, uv,
-					 alphaMode, tint);
+					 alphaMode, tint, light);
 			}
 		}
 	}

@@ -4,6 +4,7 @@
 # path, so the whole pure render tier is linked even though the harness only
 # calls parseVoxmapText.
 src/render/voxmap.c
+src/render/lightgrid.c
 src/render/materials.c
 src/render/atlas.c
 src/render/drawlist.c

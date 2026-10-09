@@ -17,8 +17,9 @@
  * - A NULL `map` emits no voxel faces (sprites are still appended); a NULL
  *   `sprites` with count > 0 appends nothing; a NULL `camera` sorts against
  *   the identity view (drawlist.h's rule).
- * - Voxel faces are emitted opaque white (the atlas texel carries the
- *   colour); sprites keep their own tints.
+ * - Voxel faces are emitted with the frame tint scaled by each face's sampled
+ *   light factor (`lights`, from lightgrid.h); a NULL `lights` keeps them at
+ *   full brightness. Sprites keep their own tints.
  * - Returns true once the list has been rebuilt (even if it ends up empty).
  */
 #include "render/camera3d.h"
@@ -37,7 +38,7 @@
 #define FRAME_VOXEL_TINT DRAW_TINT(240, 240, 240, 255)
 
 bool buildFrameDrawList(const Voxmap *map, const MaterialTable *materials,
-			const SpriteEntity *sprites, size_t count,
-			const Camera3D *camera, DrawList *list);
+			const LightGrid *lights, const SpriteEntity *sprites,
+			size_t count, const Camera3D *camera, DrawList *list);
 
 #endif /* ISOMATA_RENDER_FRAME_H */

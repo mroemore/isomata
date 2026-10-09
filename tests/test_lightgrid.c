@@ -23,6 +23,7 @@
 #include "unity.h"
 
 #include "render/lightgrid.h"
+#include "render/textures.h"
 #include "render/voxmap.h"
 
 #include <math.h>
@@ -621,6 +622,117 @@ static void test_dump_format_and_combined(void)
 	destroyLightGrid(g);
 }
 
+/* --- 15. sampling factor + face integration ---------------------------- */
+
+/* The emitted top face (identified by its atlas UV, so the base-line sort of
+ * the side faces cannot confuse the lookup). */
+static const DrawItem *findTopFace(const DrawList *list)
+{
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+
+		if (memcmp(item->uv, topUV, sizeof(topUV)) == 0)
+			return item;
+	}
+	return NULL;
+}
+
+static void test_factor_helper(void)
+{
+	LightGrid *g = lightGridCreate(3, 1, 1);
+	uint8_t out[3];
+
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 0.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagateSolid(g, NULL);	/* all air: sky 255 */
+
+	/* sky 255 -> gained 76; block 64/48/32 -> combined 140/124/108. */
+	lightGridFactorAt(g, 0, 0, 0, out);
+	TEST_ASSERT_EQUAL_INT(151, out[0]);
+	lightGridFactorAt(g, 1, 0, 0, out);
+	TEST_ASSERT_EQUAL_INT(136, out[0]);
+	lightGridFactorAt(g, 2, 0, 0, out);
+	TEST_ASSERT_EQUAL_INT(122, out[0]);
+	/* Out of grid = open sky (no block light). */
+	lightGridFactorAt(g, 5, 0, 0, out);
+	TEST_ASSERT_EQUAL_INT(93, out[0]);
+	/* NULL grid = lighting disabled. */
+	lightGridFactorAt(NULL, 0, 0, 0, out);
+	TEST_ASSERT_EQUAL_INT(255, out[0]);
+	lightGridFactorAt(g, 0, 0, 0, NULL);	/* no-op */
+	destroyLightGrid(g);
+
+	/* A dark (enclosed) air cell reads the ambient floor. */
+	{
+		LightGrid *d = lightGridCreate(1, 1, 3);
+		uint8_t mask[3];
+
+		memset(mask, 0, sizeof(mask));
+		mask[gidx(1, 3, 0, 0, 0)] = 1;	/* y=0 solid */
+		mask[gidx(1, 3, 0, 2, 0)] = 1;	/* y=2 solid */
+		lightGridPropagateSolid(d, mask);
+		lightGridFactorAt(d, 0, 1, 0, out);
+		TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[0]);
+		destroyLightGrid(d);
+	}
+}
+
+static void test_factor_sampled_into_top_face(void)
+{
+	Voxmap *map = mkMap("1\n");
+	LightGrid *g = lightGridCreate(1, 1, 2);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, map);
+
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	top = findTopFace(&list);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(151, 151, 151, 255),
+			      (int)top->tint);
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+static void test_factor_coloured_light_into_face(void)
+{
+	Voxmap *map = mkMap("1\n");
+	LightGrid *g = lightGridCreate(1, 1, 2);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 0.0f, 0.0f, 4.0f);
+	lightGridPropagate(g, map);
+
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	top = findTopFace(&list);
+	TEST_ASSERT_NOT_NULL(top);
+	/* R: sky 76 + 64 -> 151; G/B: sky only 76 -> 93. */
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(151, 93, 93, 255),
+			      (int)top->tint);
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
 void run_test_lightgrid(void);
 
 void run_test_lightgrid(void)
@@ -640,4 +752,7 @@ void run_test_lightgrid(void)
 	RUN_TEST(test_bounds_and_null);
 	RUN_TEST(test_determinism);
 	RUN_TEST(test_dump_format_and_combined);
+	RUN_TEST(test_factor_helper);
+	RUN_TEST(test_factor_sampled_into_top_face);
+	RUN_TEST(test_factor_coloured_light_into_face);
 }
