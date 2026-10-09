@@ -71,18 +71,30 @@ static void test_load_dimensions_and_heights(void)
 	destroyVoxmap(map);
 }
 
-/* '0' and '.' are both void: height 0 is the "nothing" level, not a
- * ground-level cell. */
-static void test_zero_and_dot_are_void(void)
+/* '0' is a solid ground-level cell (height 0, emits a top face at y=0) with
+ * the default material; '.' is void. */
+static void test_zero_is_solid_dot_is_void(void)
 {
 	Voxmap *map = loadTemp("vm_zero.txt", "0.\n");
+	DrawList list;
+	Camera3D camera;
 
 	TEST_ASSERT_NOT_NULL(map);
-	TEST_ASSERT_EQUAL_INT(-1, voxmapHeightAt(map, 0, 0));
-	TEST_ASSERT_TRUE(voxmapIsVoid(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_FALSE(voxmapIsVoid(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAt(map, 0, 0));
 	TEST_ASSERT_EQUAL_INT(-1, voxmapHeightAt(map, 1, 0));
 	TEST_ASSERT_TRUE(voxmapIsVoid(map, 1, 0));
-	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAt(map, 1, 0));
+
+	/* The height-0 cell emits its top face at y = 0 (and nothing else:
+	 * its only neighbour is void/ground, so no side is exposed). */
+	initDrawList(&list, 8);
+	initCamera3D(&camera);
+	voxmapEmitFaces(map, NULL, &list, &camera, DRAW_TINT(255, 255, 255, 255));
+	TEST_ASSERT_EQUAL_INT(1, (int)drawListCount(&list));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, drawListItem(&list, 0)->worldQuad[0][1]);
+	destroyDrawList(&list);
 	destroyVoxmap(map);
 }
 
@@ -521,15 +533,15 @@ static void test_parse_memory_length_bounded(void)
 	destroyVoxmap(map);
 }
 
-/* Void cells through the memory path: '0' and '.' are both void. */
-static void test_parse_memory_void_and_zero(void)
+/* '0' is solid (height 0) and '.' is void through the memory path too. */
+static void test_parse_memory_zero_solid_dot_void(void)
 {
 	const char *text = "0.\n";
 	Voxmap *map = parseVoxmapText(text, strlen(text), NULL);
 
 	TEST_ASSERT_NOT_NULL(map);
-	TEST_ASSERT_EQUAL_INT(-1, voxmapHeightAt(map, 0, 0));
-	TEST_ASSERT_TRUE(voxmapIsVoid(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_FALSE(voxmapIsVoid(map, 0, 0));
 	TEST_ASSERT_TRUE(voxmapIsVoid(map, 1, 0));
 	destroyVoxmap(map);
 }
@@ -826,7 +838,8 @@ static void test_legend_maps_char_to_material(void)
 	destroyVoxmap(map);
 }
 
-/* A legend can override a digit's height and material; height 0 is void. */
+/* A legend can override a digit's height and material; a legend height of 0
+ * is a SOLID ground-level cell (not void). */
 static void test_legend_overrides_digit(void)
 {
 	MaterialTable t;
@@ -838,8 +851,27 @@ static void test_legend_overrides_digit(void)
 	TEST_ASSERT_NOT_NULL(map);
 	TEST_ASSERT_EQUAL_INT(5, voxmapHeightAt(map, 0, 0));
 	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));
-	TEST_ASSERT_TRUE(voxmapIsVoid(map, 1, 0));	/* legend height 0 */
-	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAt(map, 1, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 1, 0));	/* solid */
+	TEST_ASSERT_FALSE(voxmapIsVoid(map, 1, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAt(map, 1, 0));
+	destroyVoxmap(map);
+}
+
+/* A legend char with height 0 is solid and carries its material; only '.' is
+ * void. */
+static void test_legend_height_zero_is_solid(void)
+{
+	MaterialTable t;
+	Voxmap *map;
+	const char *text = "@ z 0 grass\nz.\n";
+
+	buildTestTable(&t);
+	map = parseVoxmapText(text, strlen(text), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_FALSE(voxmapIsVoid(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));	/* grass */
+	TEST_ASSERT_TRUE(voxmapIsVoid(map, 1, 0));
 	destroyVoxmap(map);
 }
 
@@ -1105,7 +1137,7 @@ void run_test_voxmap(void);
 void run_test_voxmap(void)
 {
 	RUN_TEST(test_load_dimensions_and_heights);
-	RUN_TEST(test_zero_and_dot_are_void);
+	RUN_TEST(test_zero_is_solid_dot_is_void);
 	RUN_TEST(test_crlf_trailing_whitespace_and_blank_lines);
 	RUN_TEST(test_bounds_and_null_queries);
 	RUN_TEST(test_invalid_cell_fails);
@@ -1115,7 +1147,7 @@ void run_test_voxmap(void)
 	RUN_TEST(test_over_large_map_fails);
 	RUN_TEST(test_parse_memory_basic);
 	RUN_TEST(test_parse_memory_length_bounded);
-	RUN_TEST(test_parse_memory_void_and_zero);
+	RUN_TEST(test_parse_memory_zero_solid_dot_void);
 	RUN_TEST(test_parse_memory_rejects_bad_input);
 	RUN_TEST(test_faces_single_column_yaw_zero);
 	RUN_TEST(test_faces_cull_set_at_rest_yaws);
@@ -1134,6 +1166,7 @@ void run_test_voxmap(void)
 	RUN_TEST(test_top_brightest);
 	RUN_TEST(test_legend_maps_char_to_material);
 	RUN_TEST(test_legend_overrides_digit);
+	RUN_TEST(test_legend_height_zero_is_solid);
 	RUN_TEST(test_legend_attached_and_spaced);
 	RUN_TEST(test_legend_unknown_material_and_bad_line);
 	RUN_TEST(test_legend_lines_not_map_rows);

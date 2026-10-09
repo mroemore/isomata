@@ -47,8 +47,7 @@ static void oracleLegendDefaults(int8_t h[128])
 	for (c = 0; c < 128; c++)
 		h[c] = ORACLE_INVALID;
 	h['.'] = -1;
-	h['0'] = -1;
-	for (c = '1'; c <= '9'; c++)
+	for (c = '0'; c <= '9'; c++)
 		h[c] = (int8_t)(c - '0');
 }
 
@@ -154,9 +153,7 @@ static void oracleBuild(const unsigned char *text, size_t length, Oracle *o)
 				o->valid = 0;
 				return;
 			}
-			o->h[ch] = (tok[hIdx][0] == '0')
-					   ? -1
-					   : (int8_t)(tok[hIdx][0] - '0');
+			o->h[ch] = (int8_t)(tok[hIdx][0] - '0');
 		}
 	}
 

@@ -249,6 +249,50 @@ int materialIdByName(const MaterialTable *table, const char *name)
 	return -1;
 }
 
+int materialFileSlot(char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
+		     const char *name)
+{
+	int k;
+
+	if (fileNames == NULL || name == NULL)
+		return -1;
+	for (k = 0; k < fileCount; k++)
+		if (strcmp(fileNames[k], name) == 0)
+			return k;
+	return -1;
+}
+
+int materialTableBuild(MaterialTable *table, const MaterialManifest *manifest,
+		       char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
+		       const AtlasLayout *layout, const int *fileSizes)
+{
+	size_t i;
+
+	if (table == NULL || manifest == NULL || fileNames == NULL ||
+	    layout == NULL || fileSizes == NULL)
+		return -1;
+	table->count = 0;
+	for (i = 0; i < manifest->count; i++) {
+		const MaterialDef *def = &manifest->defs[i];
+		int id = materialTableAdd(table, def->name, def->alpha);
+		int f;
+
+		if (id < 0)
+			return -1;
+		for (f = 0; f < 6; f++) {
+			int slot = materialFileSlot(fileNames, fileCount,
+						    def->file[f]);
+			AtlasRect r;
+
+			if (slot < 0)
+				continue;
+			if (atlasSlotRect(layout, slot, fileSizes[slot], &r))
+				materialTableSetRect(table, id, (FaceId)f, r);
+		}
+	}
+	return (int)table->count;
+}
+
 FaceId materialFaceForSideDir(int dir)
 {
 	switch (dir) {

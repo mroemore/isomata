@@ -98,6 +98,19 @@ bool materialTableSetRect(MaterialTable *table, int id, FaceId face,
 /* Look up a material id by exact name; -1 when absent or on NULL args. */
 int materialIdByName(const MaterialTable *table, const char *name);
 
+/* Index of `name` in a unique file-name list, or -1 when absent. */
+int materialFileSlot(char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
+		     const char *name);
+
+/* Build a material table from a parsed manifest. Each face's file is looked up
+ * in `fileNames` (fileCount entries, as packed into the atlas); that slot's UV
+ * rect for `fileSizes[slot]` texels becomes the face's rect. Returns the number
+ * of materials added, or -1 on a NULL argument. A file absent from `fileNames`
+ * leaves that face's rect zeroed (emitters then fall back). */
+int materialTableBuild(MaterialTable *table, const MaterialManifest *manifest,
+		       char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
+		       const AtlasLayout *layout, const int *fileSizes);
+
 /* FaceId for a voxmap side direction (0=+Z, 1=+X, 2=-Z, 3=-X). */
 FaceId materialFaceForSideDir(int dir);
 

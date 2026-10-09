@@ -6,10 +6,10 @@
  * no SDL.
  *
  * Format (one row per line, rows top-to-bottom):
- *   '1'..'9'  a column of that many unit blocks (height 1..9)
- *   '0'       void: no column at all (height 0 is the "nothing" level)
+ *   '0'..'9'  a column of that many unit blocks (height 0..9); '0' is a solid
+ *             ground-level cell that still emits a top face at y = 0
  *   '.'       void: no column at all (a hole; emits nothing)
- *   a char declared by a legend line (below) with height 1..9
+ *   a char declared by a legend line (below) with height 0..9
  *   anything else is a load error (diagnostic to stderr, load returns NULL)
  * Blank lines are ignored; a trailing CR (CRLF files) and trailing spaces or
  * tabs on a line are stripped. Every non-blank, non-legend line must be the
@@ -19,12 +19,12 @@
  *
  * Legend lines (anywhere in the file; skipped when counting map rows):
  *   @ <char> <height> <material>
- * map a single character to a height (0..9; 0 = void) and a material name.
- * The '@' may be attached to the char (`@g 2 grass`). A legend char overrides
- * the built-in default for that char. Digits 1..9 default to height = digit
- * with the "default" material; '0' and '.' default to void. A legend naming a
- * material absent from the table logs a diagnostic and falls back to the
- * "default" material.
+ * map a single character to a height (0..9; 0 = a solid ground-level cell) and
+ * a material name. The '@' may be attached to the char (`@g 2 grass`). A legend
+ * char overrides the built-in default for that char. Digits 0..9 default to
+ * height = digit with the "default" material; '.' defaults to void. A legend
+ * naming a material absent from the table logs a diagnostic and falls back to
+ * the "default" material.
  *
  * Two entry points share the parser: parseVoxmapText() takes an in-memory
  * buffer (used by the SDL tier for Android APK assets, which are not
@@ -34,7 +34,7 @@
  * termination.
  *
  * Height query semantics (pinned by test_voxmap):
- *   voxmapHeightAt returns the column height 1..9 for an in-bounds cell, and
+ *   voxmapHeightAt returns the column height 0..9 for an in-bounds cell, and
  *   -1 for a void cell, an out-of-bounds cell, or a NULL map.
  *   voxmapIsVoid is exactly "height < 0" (void, out of bounds, or NULL).
  *   voxmapMaterialAt returns the material id for an in-bounds non-void cell,

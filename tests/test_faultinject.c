@@ -21,6 +21,7 @@
 #include "events.h"
 #include "input/input.h"
 #include "render/drawlist.h"
+#include "render/voxmap.h"
 #include "scene.h"
 
 #include <string.h>
@@ -227,6 +228,28 @@ static int test_achievement_alloc_failures(void)
 	return 0;
 }
 
+/* parseVoxmapText: the map struct, cell array and material array are the only
+ * allocations; each failure index must yield NULL with nothing leaked. */
+static int test_voxmap_alloc_failures(void)
+{
+	long n;
+
+	for (n = 0; n < FAIL_SWEEP_LIMIT; n++) {
+		Voxmap *map;
+
+		fi_reset();
+		fi_fail_after(n);
+		map = parseVoxmapText("12\n34\n", 6, NULL);
+		if (map != NULL)
+			destroyVoxmap(map);
+		else
+			ASSERT_TRUE(fi_failures() > 0);
+		fi_fail_after(-1);
+		ASSERT_EQ_INT(0, fi_live());
+	}
+	return 0;
+}
+
 int main(void)
 {
 	int failed = 0;
@@ -238,5 +261,6 @@ int main(void)
 	RUN(test_scene_alloc_failures);
 	RUN(test_drawlist_alloc_failure);
 	RUN(test_achievement_alloc_failures);
+	RUN(test_voxmap_alloc_failures);
 	HARNESS_SUMMARY("faultinject");
 }

@@ -31,13 +31,13 @@
 #define LEGEND_CHARS 128
 /* Longest legend line we accept (short by construction). */
 #define LEGEND_LINE_MAX 256
-/* -2 = char not a valid cell, -1 = void, 1..9 = column height. */
+/* -2 = char not a valid cell, -1 = void, 0..9 = column height. */
 #define LEGEND_INVALID (-2)
 
 struct Voxmap {
 	int width;
 	int depth;
-	int8_t *cells;		/* width * depth; -1 = void, 1..9 = height */
+	int8_t *cells;		/* width * depth; -1 = void, 0..9 = height */
 	int16_t *materials;	/* width * depth; material id, -1 = void */
 };
 
@@ -129,8 +129,7 @@ static void legendDefaults(int8_t h[LEGEND_CHARS], int16_t m[LEGEND_CHARS],
 		m[c] = defaultMat;
 	}
 	h[(unsigned char)'.'] = -1;
-	h[(unsigned char)'0'] = -1;
-	for (c = '1'; c <= '9'; c++)
+	for (c = '0'; c <= '9'; c++)
 		h[c] = (int8_t)(c - '0');
 }
 
@@ -188,7 +187,7 @@ static bool parseLegend(const char *data, size_t start, size_t len,
 			id = found;
 		}
 	}
-	h[ch] = (height == 0) ? -1 : (int8_t)height;
+	h[ch] = (int8_t)height;
 	m[ch] = (int16_t)id;
 	return true;
 }

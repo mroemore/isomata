@@ -292,6 +292,71 @@ static void test_table_and_manifest_bounds(void)
 	TEST_ASSERT_FALSE(parseManifest(&m, "material a a.png b.png\n"));
 }
 
+/* The default material keeps the pre-T12 top/side look: its top and side face
+ * rects are DIFFERENT (top = default_top slot, side = default_side slot), so a
+ * digit map renders distinct tops and sides rather than one patchwork texture
+ * on every face. Built through the pure materialTableBuild helper. */
+static void test_default_material_top_side_differ(void)
+{
+	MaterialManifest m;
+	MaterialTable t;
+	char names[2][MATERIAL_PATH_MAX];
+	AtlasLayout layout;
+	int sizes[2] = { 16, 16 };
+	int id;
+
+	strcpy(names[0], "default_top.png");
+	strcpy(names[1], "default_side.png");
+	TEST_ASSERT_TRUE(parseManifest(&m,
+		"material default face top=default_top.png side=default_side.png\n"));
+	TEST_ASSERT_TRUE(atlasComputeLayout(2, 16, &layout));
+	memset(&t, 0, sizeof(t));
+	TEST_ASSERT_EQUAL_INT(1, materialTableBuild(&t, &m, names, 2, &layout,
+						    sizes));
+	id = materialIdByName(&t, "default");
+	TEST_ASSERT_EQUAL_INT(0, id);
+
+	/* Top and side rects differ... */
+	TEST_ASSERT_TRUE(memcmp(&t.items[id].rect[FACE_TOP],
+				&t.items[id].rect[FACE_SOUTH],
+				sizeof(AtlasRect)) != 0);
+	/* ...while the four sides share the side slot. */
+	TEST_ASSERT_EQUAL_MEMORY(&t.items[id].rect[FACE_SOUTH],
+				 &t.items[id].rect[FACE_NORTH],
+				 sizeof(AtlasRect));
+	TEST_ASSERT_EQUAL_MEMORY(&t.items[id].rect[FACE_SOUTH],
+				 &t.items[id].rect[FACE_WEST],
+				 sizeof(AtlasRect));
+
+	/* materialFileSlot / materialTableBuild guards. */
+	TEST_ASSERT_EQUAL_INT(1, materialFileSlot(names, 2, "default_side.png"));
+	TEST_ASSERT_EQUAL_INT(-1, materialFileSlot(names, 2, "nope"));
+	TEST_ASSERT_EQUAL_INT(-1, materialFileSlot(names, 2, NULL));
+	TEST_ASSERT_EQUAL_INT(-1, materialFileSlot(NULL, 2, "x"));
+	TEST_ASSERT_EQUAL_INT(-1, materialTableBuild(NULL, &m, names, 2, &layout,
+						     sizes));
+	TEST_ASSERT_EQUAL_INT(-1, materialTableBuild(&t, NULL, names, 2, &layout,
+						     sizes));
+	TEST_ASSERT_EQUAL_INT(-1, materialTableBuild(&t, &m, NULL, 0, &layout,
+						     sizes));
+	TEST_ASSERT_EQUAL_INT(-1, materialTableBuild(&t, &m, names, 2, NULL,
+						     sizes));
+	TEST_ASSERT_EQUAL_INT(-1, materialTableBuild(&t, &m, names, 2, &layout,
+						     NULL));
+
+	/* A face whose file is absent from the list leaves a zeroed rect. */
+	{
+		MaterialManifest m2;
+		MaterialTable t2;
+
+		memset(&t2, 0, sizeof(t2));
+		TEST_ASSERT_TRUE(parseManifest(&m2, "material x missing.png\n"));
+		TEST_ASSERT_EQUAL_INT(1, materialTableBuild(&t2, &m2, names, 2,
+							    &layout, sizes));
+		TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, t2.items[0].rect[FACE_TOP].u0);
+	}
+}
+
 void run_test_materials(void);
 
 void run_test_materials(void)
@@ -305,4 +370,5 @@ void run_test_materials(void)
 	RUN_TEST(test_face_for_side_dir);
 	RUN_TEST(test_face_uv_orientation);
 	RUN_TEST(test_table_and_manifest_bounds);
+	RUN_TEST(test_default_material_top_side_differ);
 }

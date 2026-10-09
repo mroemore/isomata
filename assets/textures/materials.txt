@@ -10,7 +10,7 @@
 # Alpha: opaque/blend composite through the fixed alpha blend (opaque textures
 # carry a=255); cutout discards low-alpha texels in the fragment shader.
 
-material default placeholder.png
+material default face top=default_top.png side=default_side.png
 material grass   grass.png
 material stone   stone.png
 material wood    wood.png

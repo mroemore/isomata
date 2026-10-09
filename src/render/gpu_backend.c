@@ -545,18 +545,6 @@ static bool uploadTexture(GpuBackend *gpu, const void *pixels, Uint32 width,
 	return true;
 }
 
-/* Index of `name` in the unique file list, or -1. */
-static int findFileSlot(char (*names)[MATERIAL_PATH_MAX], int count,
-			const char *name)
-{
-	int k;
-
-	for (k = 0; k < count; k++)
-		if (strcmp(names[k], name) == 0)
-			return k;
-	return -1;
-}
-
 /* Load texturesDir/materials.txt, load every referenced PNG, pack them into
  * ONE RGBA atlas, build the material table, and upload the atlas. Tolerant by
  * design: a missing/malformed manifest or a missing file logs a diagnostic
@@ -603,7 +591,7 @@ static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
 		for (f = 0; f < 6; f++) {
 			const char *fn = manifest.defs[i].file[f];
 
-			if (findFileSlot(names, fileCount, fn) < 0) {
+			if (materialFileSlot(names, fileCount, fn) < 0) {
 				if (fileCount >= ATLAS_MAX_SLOTS) {
 					SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 						     "gpu_backend: too many atlas files (> %d)",
@@ -669,25 +657,10 @@ static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
 					      x, y, sizes[i]);
 	}
 
-	memset(&gpu->materials, 0, sizeof(gpu->materials));
-	for (i = 0; i < (int)manifest.count; i++) {
-		int id = materialTableAdd(&gpu->materials, manifest.defs[i].name,
-					  manifest.defs[i].alpha);
-		int f;
-
-		if (id < 0)
-			break;
-		for (f = 0; f < 6; f++) {
-			int slot = findFileSlot(names, fileCount,
-						manifest.defs[i].file[f]);
-			AtlasRect r;
-
-			if (slot < 0)
-				continue;
-			if (atlasSlotRect(&layout, slot, sizes[slot], &r))
-				materialTableSetRect(&gpu->materials, id,
-						     (FaceId)f, r);
-		}
+	if (materialTableBuild(&gpu->materials, &manifest, names, fileCount,
+			       &layout, sizes) < 0) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: material table build failed");
 	}
 
 	if (!uploadTexture(gpu, pixels, (Uint32)layout.width,
