@@ -966,6 +966,100 @@ static void test_ao_percent_table(void)
 	TEST_ASSERT_EQUAL_INT(100, lightGridAoPercent(-1));
 }
 
+/* --- 18. occupancy-driven solidity (T13a slice maps) ------------------- */
+
+/* A 7x7x3 slice map: solid floor, a room whose walls sit at x,z in 1..5, a
+ * solid ceiling over the room, and open air outside. The interior is 3x3 at
+ * (2..4, 1, 2..4). In kRoomDoorway the west wall cell (1,1,3) is removed. */
+static const char *kRoomClosed =
+	"1111111\n1111111\n1111111\n1111111\n1111111\n1111111\n1111111\n"
+	"---\n"
+	".......\n.11111.\n.1...1.\n.1...1.\n.1...1.\n.11111.\n.......\n"
+	"---\n"
+	".......\n.11111.\n.11111.\n.11111.\n.11111.\n.11111.\n.......\n";
+
+static const char *kRoomDoorway =
+	"1111111\n1111111\n1111111\n1111111\n1111111\n1111111\n1111111\n"
+	"---\n"
+	".......\n.11111.\n.1...1.\n.....1.\n.1...1.\n.11111.\n.......\n"
+	"---\n"
+	".......\n.11111.\n.11111.\n.11111.\n.11111.\n.11111.\n.......\n";
+
+/* The occupancy rule: a roofed interior cell is dark (sky 0) while an open
+ * cell above the roof is full sky. */
+static void test_occupancy_roof_shadow(void)
+{
+	Voxmap *map = mkMap(kRoomClosed);
+	LightGrid *g = lightGridCreate(7, 7, 4);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	lightGridPropagate(g, map);
+	TEST_ASSERT_EQUAL_INT(0, lightGridSkyAt(g, 3, 1, 3));
+	TEST_ASSERT_EQUAL_INT(0, lightGridSkyAt(g, 2, 1, 2));
+	TEST_ASSERT_EQUAL_INT(LIGHT_SKY_FULL, lightGridSkyAt(g, 3, 3, 3));
+	TEST_ASSERT_EQUAL_INT(LIGHT_SKY_FULL, lightGridSkyAt(g, 0, 1, 0));
+	destroyVoxmap(map);
+	destroyLightGrid(g);
+}
+
+/* A doorway lets a sky shaft in: full outside, 239 at the gap, 223 one step
+ * into the room, dimmer at the far interior corner. */
+static void test_occupancy_doorway_shaft(void)
+{
+	Voxmap *map = mkMap(kRoomDoorway);
+	LightGrid *g = lightGridCreate(7, 7, 4);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridPropagate(g, map);
+	TEST_ASSERT_EQUAL_INT(LIGHT_SKY_FULL, lightGridSkyAt(g, 0, 1, 3));
+	TEST_ASSERT_EQUAL_INT(239, lightGridSkyAt(g, 1, 1, 3));
+	TEST_ASSERT_EQUAL_INT(223, lightGridSkyAt(g, 2, 1, 3));
+	TEST_ASSERT_EQUAL_INT(175, lightGridSkyAt(g, 4, 1, 4));
+	destroyVoxmap(map);
+	destroyLightGrid(g);
+}
+
+/* A lamp in a closed room lights the room; nothing escapes the walls. */
+static void test_occupancy_lamp_closed_room(void)
+{
+	Voxmap *map = mkMap(kRoomClosed);
+	LightGrid *g = lightGridCreate(7, 7, 4);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 3.5f, 1.5f, 3.5f, 255.0f, 255.0f, 255.0f, 0.0f);
+	lightGridPropagate(g, map);
+	TEST_ASSERT_EQUAL_INT(255, lightGridBlockAt(g, 3, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(239, lightGridBlockAt(g, 2, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(223, lightGridBlockAt(g, 2, 1, 2, 0));
+	TEST_ASSERT_EQUAL_INT(0, lightGridBlockAt(g, 0, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(0, lightGridBlockAt(g, 0, 1, 0, 0));
+	destroyVoxmap(map);
+	destroyLightGrid(g);
+}
+
+/* With a doorway the same lamp leaks out through the gap only: the gap carries
+ * 223, the cell outside it 207, and the far outside cell the 6-step 159. */
+static void test_occupancy_lamp_leaks_doorway(void)
+{
+	Voxmap *map = mkMap(kRoomDoorway);
+	LightGrid *g = lightGridCreate(7, 7, 4);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 3.5f, 1.5f, 3.5f, 255.0f, 255.0f, 255.0f, 0.0f);
+	lightGridPropagate(g, map);
+	TEST_ASSERT_EQUAL_INT(255, lightGridBlockAt(g, 3, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(223, lightGridBlockAt(g, 1, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(207, lightGridBlockAt(g, 0, 1, 3, 0));
+	TEST_ASSERT_EQUAL_INT(159, lightGridBlockAt(g, 0, 1, 0, 0));
+	destroyVoxmap(map);
+	destroyLightGrid(g);
+}
+
 void run_test_lightgrid(void);
 
 void run_test_lightgrid(void)
@@ -995,4 +1089,8 @@ void run_test_lightgrid(void)
 	RUN_TEST(test_factor_coloured_light_into_face);
 	RUN_TEST(test_spot_huge_apex_rejected);
 	RUN_TEST(test_spot_crafted_line_no_ub);
+	RUN_TEST(test_occupancy_roof_shadow);
+	RUN_TEST(test_occupancy_doorway_shaft);
+	RUN_TEST(test_occupancy_lamp_closed_room);
+	RUN_TEST(test_occupancy_lamp_leaks_doorway);
 }

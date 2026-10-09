@@ -15,10 +15,12 @@
  * channel saturated) for the sampling layer.
  *
  * SOLIDITY. A cell is solid when the caller's solid volume marks it solid.
- * lightGridPropagate() derives that volume from a Voxmap: solid iff
- * y < voxmapHeightAt(map, x, z), so a void column (or a column shorter than y)
- * is air. lightGridPropagateSolid() takes a caller-built volume, which is how
- * overhangs/ceilings that the ASCII heightmap cannot express are modelled.
+ * lightGridPropagate() derives that volume from a Voxmap's occupancy grid
+ * (voxmapSolidAt), so a slice map's overhangs/ceilings and interiors are
+ * honoured — a roof casts a real sky shadow and a doorway lets a shaft in. For
+ * a single-section heightmap the occupancy is exactly "y < voxmapHeightAt", so
+ * that case is unchanged. lightGridPropagateSolid() takes a caller-built
+ * volume, which is how a ceiling/overhang can be modelled without a map.
  * Light lives only in air; a solid cell's stored value stays 0 and light never
  * crosses it. (One deliberate exception: an emitter seeded directly inside a
  * solid cell holds its seeded value and floods out to air neighbours — see

@@ -187,17 +187,9 @@ static void levelBuildLights(LevelState *st)
 		return;
 	w = voxmapWidth(st->map);
 	d = voxmapDepth(st->map);
-	h = 1;
-	for (i = 0; i < d; i++) {
-		int x;
-
-		for (x = 0; x < w; x++) {
-			int top = voxmapHeightAt(st->map, x, i) + 1;
-
-			if (top > h)
-				h = top;
-		}
-	}
+	/* One air layer above the topmost voxel, so sky seeds above a roof (and
+	 * matches the old maxHeight+1 grid for a single-section heightmap). */
+	h = voxmapLevels(st->map) + 1;
 	st->lights = lightGridCreate(w, d, h);
 	if (st->lights == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

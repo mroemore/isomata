@@ -404,6 +404,10 @@ static void propagateInternal(LightGrid *g)
 	floodField(g, g->block + 2 * g->n);
 }
 
+/* Rebuild the solid volume from the map's occupancy grid. For a
+ * single-section heightmap this is exactly "y < voxmapHeightAt(x, z)" (the old
+ * rule), so single-section lighting is unchanged; a slice map's overhangs and
+ * interiors are honoured instead of being flattened to a column height. */
 static void buildSolidFromMap(LightGrid *g, const Voxmap *map)
 {
 	int x;
@@ -412,11 +416,9 @@ static void buildSolidFromMap(LightGrid *g, const Voxmap *map)
 
 	for (z = 0; z < g->d; z++) {
 		for (x = 0; x < g->w; x++) {
-			int height = voxmapHeightAt(map, x, z);
-
 			for (y = 0; y < g->h; y++)
 				g->solid[cellIndex(g, x, y, z)] =
-					(y < height) ? 1 : 0;
+					voxmapSolidAt(map, x, y, z) ? 1 : 0;
 		}
 	}
 }
@@ -497,11 +499,13 @@ void lightGridSeedPoint(LightGrid *grid, float x, float y, float z, float r,
 	seedChannel(grid, idx, 2, clampU8(b), cap);
 }
 
-/* True when (x, y, z) is a solid cell of `map` (a NULL/OOB/void column is
- * air). */
+/* True when (x, y, z) is a solid voxel of `map` (a NULL/OOB/void cell is
+ * air). Occupancy-based, so a slice map's overhangs block a spot's line of
+ * sight correctly; for a single-section map it matches the old
+ * "y < voxmapHeightAt" rule exactly. */
 static bool mapCellSolid(const Voxmap *map, int x, int y, int z)
 {
-	return y < voxmapHeightAt(map, x, z);
+	return voxmapSolidAt(map, x, y, z);
 }
 
 /* Amanatides-Woo voxel DDA from (ax, ay, az) to the centre of (tx, ty, tz).
