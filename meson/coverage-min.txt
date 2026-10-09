@@ -119,7 +119,14 @@ src/render/gpu_backend.c	0
 # suite covers them (exact corner tints for top/side faces, all four side
 # directions, debug smooth+flat, NULL grid), so the measured value rises
 # 94.6 -> 95.4 and the floor ratchets 94 -> 95.
-src/render/voxmap.c		95
+# T13a: the occupancy grid, the slice-section parser and the run/bottom
+# emission add many branches; the twin suite covers the parser (sections,
+# whitespace, malformed variants, size guards) and emission (runs, bottoms,
+# smooth/debug bottoms, heightmap-vs-slice identity), so the measured value
+# rises 95.4 -> 96.3 and the floor ratchets 95 -> 96. (Unreachable defensive
+# arms were removed rather than excused; the remaining untaken arms are the
+# file-I/O failure returns and the empty-heightmap depth arm.)
+src/render/voxmap.c		96
 # Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
 # beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
 # unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS
@@ -182,4 +189,8 @@ src/render/grid.c		91
 # (provably cannot fire — at most 2n insertions for a 2n pool), the DDA step
 # guard plus its redundant target-reached break, and the cosA>1 / angleFall<0
 # float clamps.
+# T13a: lightGridPropagate now builds its solid volume from the voxmap
+# occupancy (voxmapSolidAt) instead of the heightmap rule; the slice-map
+# occupancy tests cover roof shadow / doorway shaft / interior lamp, measured
+# 97.4 (floor unchanged at 97).
 src/render/lightgrid.c		97
