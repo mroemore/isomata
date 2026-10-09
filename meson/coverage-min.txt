@@ -84,7 +84,9 @@ src/input/input.c		97
 # smoke run takes its entry guards/default arm. Final fix wave: the smoke run
 # also pushes a synthetic mouse press/motion/release (smokeProbeInput), taking
 # the mouse branches and the window->pixel conversion, so the floor rises.
-src/input/input_sdl.c		22
+# T15: the smoke probe now pushes SDLK_T / SDLK_F key events, taking the two
+# new mapping cases; the measured value rises 22.6 -> 29.7.
+src/input/input_sdl.c		29
 # Task 10 SDL tier: audio.c init/destroy is exercised by the dummy-driver
 # smoke run (a dummy playback device opens and 8 voices bind); no plays run
 # because the smoke feeds no input. Floor at the measured branch %.
@@ -113,7 +115,11 @@ src/render/gpu_backend.c	0
 # branches; the twin suite covers them (malformed variants, caps, over-long
 # lines), so the measured value rises 94.3 -> 94.6 and the floor ratchets 93 ->
 # 94.
-src/render/voxmap.c		94
+# T15: smooth per-corner emission, AO and the debug view add branches; the twin
+# suite covers them (exact corner tints for top/side faces, all four side
+# directions, debug smooth+flat, NULL grid), so the measured value rises
+# 94.6 -> 95.4 and the floor ratchets 94 -> 95.
+src/render/voxmap.c		95
 # Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
 # beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
 # unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS
@@ -134,7 +140,9 @@ src/render/frame.c		100
 # T12: the runtime texture atlas packer and the material model/manifest (both
 # pure, twin suites). Floors at their measured branch %; the untaken arms are
 # the packer's clamp/guard edges and the manifest's malformed-input returns.
-src/render/atlas.c		95
+# T15: the reserved white debug cell (atlasFillWhiteCell) is covered including
+# its clip/guard arms; measured rises 95 -> 96.3.
+src/render/atlas.c		96
 src/render/materials.c		90
 # Task 9: the pure Command -> UiIntent bridge. The commandToIntent default
 # (rotate/zoom/unknown) is reached by the unmapped-command test; the
