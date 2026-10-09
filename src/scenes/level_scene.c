@@ -31,6 +31,7 @@
 #include "render/gpu_backend.h"
 #include "render/grid.h"
 #include "render/lightgrid.h"
+#include "render/map_loader.h"
 #include "render/materials.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
@@ -232,17 +233,39 @@ static bool level_init(void *self, App *app)
 	spriteMaterial = (int16_t)materialIdByName(st->materials, "sprite");
 	levelBuildSprites(st, spriteMaterial);
 
-	/* Load the map through SDL I/O so Android APK assets resolve (the pure
-	 * parser's file reader cannot see them); parseVoxmapText copies the
-	 * cells it needs, so the SDL_LoadFile buffer is freed immediately. */
-	if (platformAssetPath("maps/demo.txt", mapPath, sizeof(mapPath)) != NULL) {
-		size_t mapSize = 0;
-		void *mapText = SDL_LoadFile(mapPath, &mapSize);
+	/* Load the demo map through SDL I/O so Android APK assets resolve. The
+	 * PNG slice directory (T13b) is preferred; the ASCII demo.txt is the
+	 * source of truth and the fallback. Both are the SAME scene, so the
+	 * render is identical; the log names the source that loaded. */
+	{
+		char mapDir[512];
+		int mapSlices = 0;
 
-		if (mapText != NULL) {
-			st->map = parseVoxmapText(mapText, mapSize, st->materials);
-			SDL_free(mapText);
+		if (platformAssetPath("maps/demo", mapDir, sizeof(mapDir)) !=
+		    NULL) {
+			st->map = loadVoxmapDirectory(mapDir, st->materials,
+						      &mapSlices);
+			if (st->map != NULL)
+				SDL_Log("isomata: level map from PNG directory '%s' (%d slices)",
+					mapDir, mapSlices);
 		}
+	}
+	if (st->map == NULL) {
+		/* parseVoxmapText copies the cells it needs, so the SDL_LoadFile
+		 * buffer is freed immediately. */
+		if (platformAssetPath("maps/demo.txt", mapPath,
+				      sizeof(mapPath)) != NULL) {
+			size_t mapSize = 0;
+			void *mapText = SDL_LoadFile(mapPath, &mapSize);
+
+			if (mapText != NULL) {
+				st->map = parseVoxmapText(mapText, mapSize,
+							  st->materials);
+				SDL_free(mapText);
+			}
+		}
+		if (st->map != NULL)
+			SDL_Log("isomata: level map from ASCII '%s'", mapPath);
 	}
 	if (st->map == NULL)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
