@@ -16,11 +16,17 @@
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/materials.h"
 #include "render/sprites.h"
+#include "render/textures.h"
 
 #include <string.h>
 
 #define EPS 1e-4f
+
+/* Pinned UV quads for the typed-helper tests (fallback 2x2 atlas). */
+static const float kTopUV[4][2] = ATLAS_UV_TOP;
+static const float kSideUV[4][2] = ATLAS_UV_SIDE;
 
 /* A flat 1x1 quad centred on (cx, cy, cz) in the y = cy plane. */
 static DrawItem makeItem(float cx, float cy, float cz, uint8_t kind,
@@ -39,6 +45,7 @@ static DrawItem makeItem(float cx, float cy, float cz, uint8_t kind,
 	memcpy(item.uv, uv, sizeof(uv));
 	item.tint = tint;
 	item.kind = kind;
+	item.alphaMode = ALPHA_OPAQUE;
 	return item;
 }
 
@@ -115,19 +122,26 @@ static void test_voxel_face_uvs_and_kind(void)
 	uint32_t tint = DRAW_TINT(10, 20, 30, 40);
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, quad, DRAW_FACE_TOP, tint));
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, quad, DRAW_FACE_SIDE, tint));
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, quad, kTopUV, ALPHA_OPAQUE,
+					 tint));
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, quad, kSideUV, ALPHA_CUTOUT,
+					 tint));
 	TEST_ASSERT_EQUAL_INT(2, (int)drawListCount(&list));
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
 	TEST_ASSERT_EQUAL_MEMORY(top, drawListItem(&list, 0)->uv, sizeof(top));
+	TEST_ASSERT_EQUAL_INT(ALPHA_OPAQUE, drawListItem(&list, 0)->alphaMode);
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 1)->kind);
 	TEST_ASSERT_EQUAL_MEMORY(side, drawListItem(&list, 1)->uv, sizeof(side));
+	TEST_ASSERT_EQUAL_INT(ALPHA_CUTOUT, drawListItem(&list, 1)->alphaMode);
 	TEST_ASSERT_EQUAL_INT((int)tint, (int)drawListItem(&list, 0)->tint);
 	TEST_ASSERT_EQUAL_MEMORY(quad, drawListItem(&list, 0)->worldQuad,
 				 sizeof(quad));
 
-	TEST_ASSERT_FALSE(appendVoxelFace(&list, NULL, DRAW_FACE_TOP, tint));
+	TEST_ASSERT_FALSE(appendVoxelFace(&list, NULL, kTopUV, ALPHA_OPAQUE,
+					  tint));
+	TEST_ASSERT_FALSE(appendVoxelFace(&list, quad, NULL, ALPHA_OPAQUE,
+					  tint));
 	destroyDrawList(&list);
 }
 
@@ -308,7 +322,7 @@ static void test_sort_sprite_biased_over_coplanar_face(void)
 	Camera3D camera = cameraAtYaw(0.0f);
 	Mat4 view = cameraView(&camera);
 	SpriteEntity sprite = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 	/* Offset the face centre along the camera-backward axis (row 2 of the
 	 * view, unit length) so its view depth is ~0.01 nearer than the
 	 * origin the sprite stands on. */
@@ -317,7 +331,7 @@ static void test_sort_sprite_biased_over_coplanar_face(void)
 
 	initDrawList(&list, 4);
 	TEST_ASSERT_TRUE(appendDrawItem(&list, &face));
-	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
 	sortDrawList(&list, &camera);
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
@@ -333,13 +347,13 @@ static void test_sort_bias_does_not_hide_a_nearer_face(void)
 	Camera3D camera = cameraAtYaw(0.0f);
 	Mat4 view = cameraView(&camera);
 	SpriteEntity sprite = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 	DrawItem face = makeItem(0.5f * view.m[2], 0.5f * view.m[6],
 				 0.5f * view.m[10], DRAW_KIND_VOXEL, 77);
 
 	initDrawList(&list, 4);
 	TEST_ASSERT_TRUE(appendDrawItem(&list, &face));
-	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
 	sortDrawList(&list, &camera);
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 0)->kind);
@@ -362,7 +376,7 @@ static void test_sort_sprite_over_tile_top_sweep(void)
 		{ 3.0f, 1.0f, 3.0f }, { 2.0f, 1.0f, 3.0f },
 	};
 	SpriteEntity sprite = { 2.5f, 1.0f, 2.5f, 1.2f, 1.8f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 	size_t i;
 	size_t j;
 	size_t k;
@@ -377,10 +391,10 @@ static void test_sort_sprite_over_tile_top_sweep(void)
 				cameraPan(&camera, panX[k], panY[k]);
 				initDrawList(&list, 4);
 				TEST_ASSERT_TRUE(appendVoxelFace(
-					&list, tileTop, DRAW_FACE_TOP,
+					&list, tileTop, kTopUV, ALPHA_OPAQUE,
 					DRAW_TINT(10, 20, 30, 40)));
 				TEST_ASSERT_TRUE(
-					appendSprite(&list, &sprite, &camera));
+					appendSprite(&list, &sprite, &camera, NULL));
 				sortDrawList(&list, &camera);
 				TEST_ASSERT_EQUAL_INT(
 					DRAW_KIND_VOXEL,
@@ -419,12 +433,12 @@ static void test_sort_tower_face_base_line_sprite_in_front_yaw0(void)
 		{ 8.0f, 9.0f, 9.0f }, { 6.0f, 9.0f, 9.0f },
 	};
 	SpriteEntity sprite = { 6.5f, 2.0f, 9.5f, 1.2f, 1.8f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerFace, kSideUV, ALPHA_OPAQUE,
 					 DRAW_TINT(240, 240, 240, 255)));
-	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
 	sortDrawList(&list, &camera);
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
@@ -449,12 +463,12 @@ static void test_sort_tower_face_base_line_still_occludes_yaw180(void)
 		{ 6.0f, 9.0f, 7.0f }, { 8.0f, 9.0f, 7.0f },
 	};
 	SpriteEntity sprite = { 6.5f, 2.0f, 9.5f, 1.2f, 1.8f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerNorthFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerNorthFace, kSideUV, ALPHA_OPAQUE,
 					 DRAW_TINT(240, 240, 240, 255)));
-	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
 	sortDrawList(&list, &camera);
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 0)->kind);
@@ -483,9 +497,9 @@ static void test_sort_tower_face_base_line_keeps_ground_tile_in_front(void)
 	const uint32_t tileTint = DRAW_TINT(22, 0, 0, 255);
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, towerFace, kSideUV, ALPHA_OPAQUE,
 					 faceTint));
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, tileTop, DRAW_FACE_TOP,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, tileTop, kTopUV, ALPHA_OPAQUE,
 					 tileTint));
 	sortDrawList(&list, &camera);
 
@@ -508,24 +522,24 @@ static void test_sort_wall_face_base_line_sprite_in_front_and_on_top(void)
 		{ 1.0f, 1.0f, 2.0f }, { 0.0f, 1.0f, 2.0f },
 	};
 	SpriteEntity inFront = { 0.5f, 0.0f, 2.5f, 1.2f, 1.8f,
-				 DRAW_TINT(255, 255, 255, 255) };
+				 DRAW_TINT(255, 255, 255, 255), -1 };
 	SpriteEntity onTop = { 0.5f, 1.0f, 1.5f, 1.2f, 1.8f,
-			       DRAW_TINT(255, 255, 255, 255) };
+			       DRAW_TINT(255, 255, 255, 255), -1 };
 	DrawList list;
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, wallFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, wallFace, kSideUV, ALPHA_OPAQUE,
 					 DRAW_TINT(240, 240, 240, 255)));
-	TEST_ASSERT_TRUE(appendSprite(&list, &inFront, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &inFront, &camera, NULL));
 	sortDrawList(&list, &camera);
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 1)->kind);
 	destroyDrawList(&list);
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, wallFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, wallFace, kSideUV, ALPHA_OPAQUE,
 					 DRAW_TINT(240, 240, 240, 255)));
-	TEST_ASSERT_TRUE(appendSprite(&list, &onTop, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &onTop, &camera, NULL));
 	sortDrawList(&list, &camera);
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 1)->kind);
@@ -550,12 +564,12 @@ static void test_sort_base_line_picks_two_lowest_corners(void)
 		{ 0.0f, 1.0f, 0.0f }, { 0.0f, 2.0f, 0.0f },
 	};
 	SpriteEntity sprite = { 0.0f, 0.0f, 1.32f, 1.2f, 1.8f,
-				DRAW_TINT(255, 255, 255, 255) };
+				DRAW_TINT(255, 255, 255, 255), -1 };
 
 	initDrawList(&list, 4);
-	TEST_ASSERT_TRUE(appendVoxelFace(&list, permutedFace, DRAW_FACE_SIDE,
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, permutedFace, kSideUV, ALPHA_OPAQUE,
 					 DRAW_TINT(240, 240, 240, 255)));
-	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
 	sortDrawList(&list, &camera);
 
 	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 0)->kind);

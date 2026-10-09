@@ -40,6 +40,7 @@
 
 #include "render/drawlist.h"
 #include "render/grid.h"
+#include "render/materials.h"
 #include "render/math3d.h"
 
 #include <SDL3/SDL.h>
@@ -47,17 +48,26 @@
 typedef struct GpuBackend GpuBackend;
 
 /* Create the GPU device, claim the window's swapchain, and build the quad
- * pipeline, placeholder texture, and sampler.
+ * pipeline, runtime texture atlas, and sampler.
  *
  *   shaderDir      directory holding world.vert.spv / world.frag.spv
- *   texturePath    the placeholder PNG (the world atlas)
+ *   texturesDir    directory holding materials.txt and the material PNGs;
+ *                  all referenced files are packed into ONE RGBA atlas (one
+ *                  bind per frame). Missing/malformed entries fall back to a
+ *                  generated texture and a diagnostic; the backend still
+ *                  builds.
  *   screenshotPath if non-NULL, the next frame also renders offscreen at
  *                  the swapchain size and writes it as a PNG here
  *
  * Returns NULL on failure; SDL_LogError carries the reason and the stage.
  */
 GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
-			     const char *texturePath, const char *screenshotPath);
+			     const char *texturesDir, const char *screenshotPath);
+
+/* The material table built from texturesDir/materials.txt (name -> 6 face UV
+ * rects + alpha mode). Never NULL for a live backend; its count may be 0 when
+ * the manifest was unavailable (emitters then use the built-in fallback). */
+const MaterialTable *gpuBackendMaterials(GpuBackend *gpu);
 
 /* Release every GPU object, unclaim the window, and destroy the device.
  * NULL is a no-op. */

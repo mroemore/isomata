@@ -11,11 +11,17 @@
 
 layout(location = 0) in vec2 vUV;
 layout(location = 1) in vec4 vColor;
+layout(location = 2) in float vAlphaMode;
 
 layout(location = 0) out vec4 outColor;
 
 layout(set = 2, binding = 0) uniform sampler2D uTexture;
 
 void main() {
-	outColor = texture(uTexture, vUV) * vColor;
+	vec4 tex = texture(uTexture, vUV) * vColor;
+	/* Alpha modes: opaque and blend composite through the pipeline's fixed
+	 * alpha blend; cutout discards low-alpha texels (foliage-style). */
+	if (vAlphaMode > 0.5 && tex.a < 0.5)
+		discard;
+	outColor = tex;
 }

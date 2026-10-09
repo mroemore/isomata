@@ -2,29 +2,43 @@
 #define ISOMATA_RENDER_VOXMAP_H
 
 /*
- * ASCII heightmap voxel map. Pure: file I/O only, no SDL.
+ * ASCII heightmap voxel map with a per-cell material. Pure: file I/O only,
+ * no SDL.
  *
  * Format (one row per line, rows top-to-bottom):
- *   '0'..'9'  a column of that many unit blocks (height 0..9); '0' is a valid
- *             ground-level cell that still emits a top face at y = 0
+ *   '1'..'9'  a column of that many unit blocks (height 1..9)
+ *   '0'       void: no column at all (height 0 is the "nothing" level)
  *   '.'       void: no column at all (a hole; emits nothing)
- *   anything else is a load error (diagnostic to stderr, loadVoxmap returns
- *             NULL)
+ *   a char declared by a legend line (below) with height 1..9
+ *   anything else is a load error (diagnostic to stderr, load returns NULL)
  * Blank lines are ignored; a trailing CR (CRLF files) and trailing spaces or
- * tabs on a line are stripped. Every non-blank line must be the same length
- * (the map width). An empty map, an over-large map, or a ragged map is a load
- * error. VOXMAP_MAX_DIM bounds both dimensions so a bad file cannot force a
- * huge allocation.
+ * tabs on a line are stripped. Every non-blank, non-legend line must be the
+ * same length (the map width). An empty map, an over-large map, or a ragged
+ * map is a load error. VOXMAP_MAX_DIM bounds both dimensions so a bad file
+ * cannot force a huge allocation.
+ *
+ * Legend lines (anywhere in the file; skipped when counting map rows):
+ *   @ <char> <height> <material>
+ * map a single character to a height (0..9; 0 = void) and a material name.
+ * The '@' may be attached to the char (`@g 2 grass`). A legend char overrides
+ * the built-in default for that char. Digits 1..9 default to height = digit
+ * with the "default" material; '0' and '.' default to void. A legend naming a
+ * material absent from the table logs a diagnostic and falls back to the
+ * "default" material.
  *
  * Two entry points share the parser: parseVoxmapText() takes an in-memory
  * buffer (used by the SDL tier for Android APK assets, which are not
- * filesystem files) and loadVoxmap() reads a file. The parser is
- * length-bounded and never assumes NUL termination.
+ * filesystem files) and loadVoxmap() reads a file. Both take the material
+ * table used to resolve legend names (NULL is allowed: every material
+ * resolves to id 0). The parser is length-bounded and never assumes NUL
+ * termination.
  *
  * Height query semantics (pinned by test_voxmap):
- *   voxmapHeightAt returns the column height 0..9 for an in-bounds cell, and
+ *   voxmapHeightAt returns the column height 1..9 for an in-bounds cell, and
  *   -1 for a void cell, an out-of-bounds cell, or a NULL map.
  *   voxmapIsVoid is exactly "height < 0" (void, out of bounds, or NULL).
+ *   voxmapMaterialAt returns the material id for an in-bounds non-void cell,
+ *   and -1 for void / out of bounds / NULL.
  *
  * Face generation: for each non-void column, the top face at y = height plus
  * the exposed side faces (a side is exposed when the neighbour's height is
@@ -35,10 +49,16 @@
  * is continuous: at an axis-aligned yaw exactly one side emits (the two
  * edge-on sides have dot 0 and are culled), at 45 degrees two sides emit,
  * and a tween moves smoothly between them. Top faces always emit.
+ *
+ * Each face samples its cell material's UV rect for that face
+ * (materials.h): the top face the top slot, each side direction its own
+ * slot. With a NULL material table the built-in fallback regions
+ * (textures.h) are used, so the emitters stay usable without a manifest.
  */
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/materials.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -66,15 +86,17 @@
 
 typedef struct Voxmap Voxmap;
 
-/* Load a map from a file. Returns NULL with a clear stderr diagnostic on a
- * missing file, a malformed cell, an empty map, or a ragged/over-large map. */
-Voxmap *loadVoxmap(const char *path);
+/* Load a map from a file, resolving legend materials through `materials`
+ * (NULL allowed). Returns NULL with a clear stderr diagnostic on a missing
+ * file, a malformed cell/legend, an empty map, or a ragged/over-large map. */
+Voxmap *loadVoxmap(const char *path, const MaterialTable *materials);
 
 /* Parse a map from `length` bytes of in-memory text. The buffer need NOT be
  * NUL-terminated and is never read past text + length, so a slice of a larger
  * buffer is safe. Same format/validation and NULL-on-error contract as
  * loadVoxmap (diagnostics are labelled "<memory>"). */
-Voxmap *parseVoxmapText(const char *text, size_t length);
+Voxmap *parseVoxmapText(const char *text, size_t length,
+			const MaterialTable *materials);
 
 /* Release a map. NULL is a no-op. */
 void destroyVoxmap(Voxmap *map);
@@ -90,9 +112,13 @@ int voxmapHeightAt(const Voxmap *map, int x, int y);
 /* True when (x, y) is void, out of bounds, or the map is NULL. */
 bool voxmapIsVoid(const Voxmap *map, int x, int y);
 
-/* Append every visible face of the map to `list` with the given tint. Emits
- * nothing for a NULL map/list. */
-void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
-		     uint32_t tint);
+/* Material id at (x, y), or -1 for void / out of bounds / NULL. */
+int voxmapMaterialAt(const Voxmap *map, int x, int y);
+
+/* Append every visible face of the map to `list` with the given tint, sampling
+ * `materials` (NULL uses the built-in fallback regions). Emits nothing for a
+ * NULL map/list. */
+void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
+		     DrawList *list, const Camera3D *camera, uint32_t tint);
 
 #endif /* ISOMATA_RENDER_VOXMAP_H */

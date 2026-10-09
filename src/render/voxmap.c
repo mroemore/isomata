@@ -9,13 +9,16 @@
  * and parses it. The parser never assumes NUL termination — every scan is
  * bounded by the caller's length — so a slice of a larger buffer is safe.
  *
- * Parsing is two passes over the whole buffer: the first validates every row
- * and pins width/depth, the second fills the cell grid. Rows are split on
- * '\n'; a trailing '\r' and trailing spaces/tabs are stripped, and blank
- * lines are skipped, so CRLF files and trailing newlines are fine.
+ * Parsing is three passes over the whole buffer: a legend pass collects the
+ * `@ <char> <height> <material>` lines into a char -> (height, material)
+ * table, a validation pass pins width/depth and rejects unknown cells, and a
+ * fill pass writes the cell grid and its parallel material ids. Rows are split
+ * on '\n'; a trailing '\r' and trailing spaces/tabs are stripped, and blank
+ * and legend lines are skipped, so CRLF files and trailing newlines are fine.
  */
 
 #include "render/voxmap.h"
+#include "render/textures.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -24,10 +27,18 @@
 
 #define PI_F 3.14159265358979323846f
 
+/* Char -> legend table size (ASCII). */
+#define LEGEND_CHARS 128
+/* Longest legend line we accept (short by construction). */
+#define LEGEND_LINE_MAX 256
+/* -2 = char not a valid cell, -1 = void, 1..9 = column height. */
+#define LEGEND_INVALID (-2)
+
 struct Voxmap {
 	int width;
 	int depth;
-	int8_t *cells;	/* width * depth; -1 = void, 0..9 = column height */
+	int8_t *cells;		/* width * depth; -1 = void, 1..9 = height */
+	int16_t *materials;	/* width * depth; material id, -1 = void */
 };
 
 /* Read the whole file into a NUL-terminated malloc buffer, or NULL. */
@@ -76,23 +87,157 @@ static size_t trimmedLength(const char *data, size_t start, size_t end)
 	return end - start;
 }
 
-/* Parse `length` bytes of heightmap text. The buffer need not be
- * NUL-terminated: every scan is bounded by `length`, so a slice of a larger
- * buffer parses exactly its own bytes and never reads past text + length.
- * `label` names the source in stderr diagnostics. Returns NULL on any
- * malformed input (bad cell, ragged/over-large/empty map, allocation
- * failure) or a NULL text pointer. */
-static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
+/* True when the line's first non-space/tab character is '@'. */
+static bool isLegendLine(const char *data, size_t start, size_t len)
+{
+	size_t i = start;
+	size_t end = start + len;
+
+	while (i < end && (data[i] == ' ' || data[i] == '\t'))
+		i++;
+	return i < end && data[i] == '@';
+}
+
+/* Split a bounded line copy on spaces/tabs. Returns the token count. */
+static int tokenize(char *line, char **tokens, int max)
+{
+	int n = 0;
+	char *p = line;
+
+	while (*p != '\0') {
+		while (*p == ' ' || *p == '\t')
+			*p++ = '\0';
+		if (*p == '\0')
+			break;
+		if (n < max)
+			tokens[n] = p;
+		n++;
+		while (*p != '\0' && *p != ' ' && *p != '\t')
+			p++;
+	}
+	return n;
+}
+
+/* The built-in legend: digits 1..9 are heights, '0' and '.' are void. */
+static void legendDefaults(int8_t h[LEGEND_CHARS], int16_t m[LEGEND_CHARS],
+			   int16_t defaultMat)
+{
+	int c;
+
+	for (c = 0; c < LEGEND_CHARS; c++) {
+		h[c] = LEGEND_INVALID;
+		m[c] = defaultMat;
+	}
+	h[(unsigned char)'.'] = -1;
+	h[(unsigned char)'0'] = -1;
+	for (c = '1'; c <= '9'; c++)
+		h[c] = (int8_t)(c - '0');
+}
+
+/* Parse one `@ <char> <height> <material>` line into the legend table. */
+static bool parseLegend(const char *data, size_t start, size_t len,
+			const char *label, int8_t h[LEGEND_CHARS],
+			int16_t m[LEGEND_CHARS], const MaterialTable *materials,
+			int16_t defaultMat)
+{
+	char line[LEGEND_LINE_MAX];
+	char *tokens[8];
+	int ntok;
+	unsigned char ch;
+	int hIdx;
+	int mIdx;
+	int height;
+	int id;
+
+	if (len >= sizeof(line))
+		return false;
+	memcpy(line, data + start, len);
+	line[len] = '\0';
+	ntok = tokenize(line, tokens, 8);
+	if (ntok > 8 || ntok < 3)
+		return false;
+	if (strcmp(tokens[0], "@") == 0) {
+		if (ntok < 4 || strlen(tokens[1]) != 1)
+			return false;
+		ch = (unsigned char)tokens[1][0];
+		hIdx = 2;
+		mIdx = 3;
+	} else if (tokens[0][0] == '@' && strlen(tokens[0]) == 2) {
+		ch = (unsigned char)tokens[0][1];
+		hIdx = 1;
+		mIdx = 2;
+	} else {
+		return false;
+	}
+	if (strlen(tokens[hIdx]) != 1 || tokens[hIdx][0] < '0' ||
+	    tokens[hIdx][0] > '9') {
+		fprintf(stderr, "voxmap: '%s' bad legend height '%s'\n", label,
+			tokens[hIdx]);
+		return false;
+	}
+	height = tokens[hIdx][0] - '0';
+	id = defaultMat;
+	if (materials != NULL) {
+		int found = materialIdByName(materials, tokens[mIdx]);
+
+		if (found < 0) {
+			fprintf(stderr,
+				"voxmap: '%s' legend char '%c' unknown material '%s'; using default\n",
+				label, ch, tokens[mIdx]);
+		} else {
+			id = found;
+		}
+	}
+	h[ch] = (height == 0) ? -1 : (int8_t)height;
+	m[ch] = (int16_t)id;
+	return true;
+}
+
+/* Parse `length` bytes of heightmap text (see voxmap.h). */
+static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
+			   const MaterialTable *materials)
 {
 	Voxmap *map;
 	int width = -1;
 	int depth = 0;
 	size_t pos = 0;
+	int8_t legendH[LEGEND_CHARS];
+	int16_t legendM[LEGEND_CHARS];
+	int16_t defaultMat = 0;
 
 	if (text == NULL)
 		return NULL;
+	if (materials != NULL) {
+		int d = materialIdByName(materials, "default");
 
-	/* Pass 1: validate rows, pin width, count depth. */
+		if (d >= 0)
+			defaultMat = (int16_t)d;
+	}
+	legendDefaults(legendH, legendM, defaultMat);
+
+	/* Pass 0: collect legend lines. */
+	while (pos < length) {
+		size_t start = pos;
+		size_t end;
+		size_t rowLen;
+
+		while (pos < length && text[pos] != '\n')
+			pos++;
+		end = pos;
+		if (pos < length)
+			pos++;			/* skip '\n' */
+		rowLen = trimmedLength(text, start, end);
+		if (rowLen == 0)
+			continue;
+		if (isLegendLine(text, start, rowLen)) {
+			if (!parseLegend(text, start, rowLen, label, legendH,
+					 legendM, materials, defaultMat))
+				return NULL;
+		}
+	}
+
+	/* Pass 1: validate map rows, pin width, count depth. */
+	pos = 0;
 	while (pos < length) {
 		size_t start = pos;
 		size_t end;
@@ -105,8 +250,8 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 		if (pos < length)
 			pos++;			/* skip '\n' */
 		rowLen = trimmedLength(text, start, end);
-		if (rowLen == 0)
-			continue;		/* blank line */
+		if (rowLen == 0 || isLegendLine(text, start, rowLen))
+			continue;
 		if (width < 0) {
 			if (rowLen > VOXMAP_MAX_DIM) {
 				fprintf(stderr,
@@ -122,9 +267,9 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 			return NULL;
 		}
 		for (i = start; i < start + rowLen; i++) {
-			char c = text[i];
+			unsigned char c = (unsigned char)text[i];
 
-			if (c != '.' && (c < '0' || c > '9')) {
+			if (c >= LEGEND_CHARS || legendH[c] == LEGEND_INVALID) {
 				fprintf(stderr,
 					"voxmap: '%s' invalid cell '%c' at row %d\n",
 					label, (c >= 32 && c < 127) ? c : '?',
@@ -148,14 +293,18 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 	if (map == NULL)
 		return NULL;
 	map->cells = malloc((size_t)width * (size_t)depth);
-	if (map->cells == NULL) {
+	map->materials = malloc((size_t)width * (size_t)depth *
+				sizeof(*map->materials));
+	if (map->cells == NULL || map->materials == NULL) {
+		free(map->cells);
+		free(map->materials);
 		free(map);
 		return NULL;
 	}
 	map->width = width;
 	map->depth = depth;
 
-	/* Pass 2: fill the grid. */
+	/* Pass 2: fill the grid and its material ids. */
 	{
 		int row = 0;
 
@@ -170,13 +319,19 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 			end = pos;
 			if (pos < length)
 				pos++;
-			if (trimmedLength(text, start, end) == 0)
+			if (trimmedLength(text, start, end) == 0 ||
+			    isLegendLine(text, start,
+					 trimmedLength(text, start, end)))
 				continue;
 			for (col = 0; col < width; col++) {
-				char c = text[start + (size_t)col];
+				unsigned char c =
+					(unsigned char)text[start + (size_t)col];
+				int8_t h = legendH[c];
+				size_t idx = (size_t)row * width + col;
 
-				map->cells[(size_t)row * width + col] =
-					(c == '.') ? -1 : (int8_t)(c - '0');
+				map->cells[idx] = h;
+				map->materials[idx] =
+					(h < 0) ? -1 : legendM[c];
 			}
 			row++;
 		}
@@ -185,12 +340,13 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label)
 	return map;
 }
 
-Voxmap *parseVoxmapText(const char *text, size_t length)
+Voxmap *parseVoxmapText(const char *text, size_t length,
+			const MaterialTable *materials)
 {
-	return parseVoxmap(text, length, "<memory>");
+	return parseVoxmap(text, length, "<memory>", materials);
 }
 
-Voxmap *loadVoxmap(const char *path)
+Voxmap *loadVoxmap(const char *path, const MaterialTable *materials)
 {
 	size_t size = 0;
 	char *data;
@@ -203,7 +359,7 @@ Voxmap *loadVoxmap(const char *path)
 		fprintf(stderr, "voxmap: cannot read '%s'\n", path);
 		return NULL;
 	}
-	map = parseVoxmap(data, size, path);
+	map = parseVoxmap(data, size, path, materials);
 	free(data);
 	return map;
 }
@@ -213,6 +369,7 @@ void destroyVoxmap(Voxmap *map)
 	if (map == NULL)
 		return;
 	free(map->cells);
+	free(map->materials);
 	free(map);
 }
 
@@ -238,11 +395,22 @@ bool voxmapIsVoid(const Voxmap *map, int x, int y)
 	return voxmapHeightAt(map, x, y) < 0;
 }
 
+int voxmapMaterialAt(const Voxmap *map, int x, int y)
+{
+	if (map == NULL || x < 0 || y < 0 || x >= map->width || y >= map->depth)
+		return -1;
+	return map->materials[(size_t)y * map->width + x];
+}
+
 /* --- face generation --------------------------------------------------- */
 
 /* Side directions: 0 = +Z, 1 = +X, 2 = -Z, 3 = -X. */
 static const int kSideDx[4] = { 0, 1, 0, -1 };
 static const int kSideDz[4] = { 1, 0, -1, 0 };
+
+/* Built-in fallback regions (used with a NULL material table). */
+static const float kFallbackTop[4][2] = ATLAS_UV_TOP;
+static const float kFallbackSide[4][2] = ATLAS_UV_SIDE;
 
 /* One-time overflow diagnostic: appendVoxelFace returns false when the draw
  * list is full, and the face is silently dropped by design (a bounded list
@@ -250,10 +418,31 @@ static const int kSideDz[4] = { 1, 0, -1, 0 };
  * diagnosable; later drops stay quiet to avoid per-face log spam. */
 static bool g_faceOverflowReported = false;
 
-static void emitFace(DrawList *list, const float quad[4][3], DrawFace face,
-		     uint32_t tint)
+/* Fill `uv` with the material's oriented UV quad for `face`, or the built-in
+ * fallback region when the table/id is unusable. A negative id casts to a
+ * huge size_t, so the range check alone covers it. */
+static void materialUV(const MaterialTable *materials, int id, FaceId face,
+		       float uv[4][2])
 {
-	if (!appendVoxelFace(list, quad, face, tint) && !g_faceOverflowReported) {
+	if (materials != NULL && (size_t)id < materials->count)
+		materialFaceUV(&materials->items[id].rect[face], face, uv);
+	else
+		memcpy(uv, (face == FACE_TOP) ? kFallbackTop : kFallbackSide,
+		       sizeof(kFallbackTop));
+}
+
+static uint8_t materialAlpha(const MaterialTable *materials, int id)
+{
+	if (materials != NULL && (size_t)id < materials->count)
+		return (uint8_t)materials->items[id].alpha;
+	return (uint8_t)ALPHA_BLEND;
+}
+
+static void emitFace(DrawList *list, const float quad[4][3],
+		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
+{
+	if (!appendVoxelFace(list, quad, uv, alphaMode, tint) &&
+	    !g_faceOverflowReported) {
 		g_faceOverflowReported = true;
 		fprintf(stderr,
 			"voxmap: draw list full (%zu items); faces dropped (reported once)\n",
@@ -318,7 +507,8 @@ static bool sideCulled(int dir, float toCamX, float toCamZ)
 	return dot <= CAMERA_CULL_EPS;
 }
 
-static void emitTop(DrawList *list, int x, int z, int height, uint32_t tint)
+static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][2],
+		    uint8_t alphaMode, uint32_t tint)
 {
 	float quad[4][3] = {
 		{ (float)x, (float)height, (float)z },
@@ -327,11 +517,12 @@ static void emitTop(DrawList *list, int x, int z, int height, uint32_t tint)
 		{ (float)x, (float)height, (float)(z + 1) },
 	};
 
-	emitFace(list, quad, DRAW_FACE_TOP,
+	emitFace(list, quad, uv, alphaMode,
 		 shadeTint(tint, VOXMAP_SHADE_TOP, x, z));
 }
+
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
-		     uint32_t tint)
+		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
 {
 	float fx = (float)x;
 	float fz = (float)z;
@@ -363,12 +554,12 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
 		break;
 	}
-	emitFace(list, quad, DRAW_FACE_SIDE,
+	emitFace(list, quad, uv, alphaMode,
 		 shadeTint(tint, kSideShade[dir], x, z));
 }
 
-void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
-		     uint32_t tint)
+void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
+		     DrawList *list, const Camera3D *camera, uint32_t tint)
 {
 	float toCamX;
 	float toCamZ;
@@ -381,11 +572,18 @@ void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
 	cameraGroundDir(cameraYawDeg(camera), &toCamX, &toCamZ);
 	for (z = 0; z < map->depth; z++) {
 		for (x = 0; x < map->width; x++) {
-			int height = map->cells[(size_t)z * map->width + x];
+			size_t idx = (size_t)z * map->width + x;
+			int height = map->cells[idx];
+			int id;
+			float uv[4][2];
+			uint8_t alphaMode;
 
 			if (height < 0)
 				continue;	/* void: no column, no faces */
-			emitTop(list, x, z, height, tint);
+			id = map->materials[idx];
+			alphaMode = materialAlpha(materials, id);
+			materialUV(materials, id, FACE_TOP, uv);
+			emitTop(list, x, z, height, uv, alphaMode, tint);
 			for (dir = 0; dir < 4; dir++) {
 				int neighbour;
 
@@ -397,7 +595,10 @@ void voxmapEmitFaces(const Voxmap *map, DrawList *list, const Camera3D *camera,
 					neighbour = 0;	/* void/OOB = ground */
 				if (neighbour >= height)
 					continue;	/* not exposed */
-				emitSide(list, x, z, dir, neighbour, height, tint);
+				materialUV(materials, id,
+					   materialFaceForSideDir(dir), uv);
+				emitSide(list, x, z, dir, neighbour, height, uv,
+					 alphaMode, tint);
 			}
 		}
 	}

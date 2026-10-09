@@ -39,6 +39,8 @@ set(ISOMATA_SRC
 	../../../src/input/input.c
 	../../../src/render/math3d.c
 	../../../src/render/camera3d.c
+	../../../src/render/atlas.c
+	../../../src/render/materials.c
 	../../../src/render/voxmap.c
 	../../../src/render/drawlist.c
 	../../../src/render/sprites.c

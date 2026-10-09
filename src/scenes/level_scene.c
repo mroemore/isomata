@@ -30,6 +30,7 @@
 #include "render/frame.h"
 #include "render/gpu_backend.h"
 #include "render/grid.h"
+#include "render/materials.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
 #include "render/voxmap.h"
@@ -61,6 +62,7 @@ typedef struct LevelState {
 	DrawList list;
 	SpriteEntity sprites[LEVEL_SPRITE_COUNT];
 	size_t spriteCount;
+	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
 	int rotationSteps;	/* running count of applied 45-degree steps */
@@ -72,15 +74,16 @@ typedef struct LevelState {
 } LevelState;
 
 /* The demo's three billboards (Task 8): two on the plateau, one on the
- * tower top, so painter order is visible against the terrain. */
-static void levelBuildSprites(LevelState *st)
+ * tower top, so painter order is visible against the terrain. They sample the
+ * manifest's "sprite" material (an alpha-edged texture). */
+static void levelBuildSprites(LevelState *st, int16_t material)
 {
 	st->sprites[0] = (SpriteEntity){ 6.5f, 2.0f, 9.5f, 1.2f, 1.8f,
-					 DRAW_TINT(255, 255, 255, 255) };
+					 DRAW_TINT(255, 255, 255, 255), material };
 	st->sprites[1] = (SpriteEntity){ 11.5f, 2.0f, 10.5f, 1.2f, 1.8f,
-					 DRAW_TINT(255, 255, 255, 255) };
+					 DRAW_TINT(255, 255, 255, 255), material };
 	st->sprites[2] = (SpriteEntity){ 7.0f, 9.0f, 8.0f, 1.5f, 2.2f,
-					 DRAW_TINT(255, 255, 255, 255) };
+					 DRAW_TINT(255, 255, 255, 255), material };
 	st->spriteCount = LEVEL_SPRITE_COUNT;
 }
 
@@ -169,11 +172,18 @@ static bool level_init(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
 	TextStyle style = levelStyle(app);
+	GpuBackend *gpu = appGpuBackend(app);
 	char mapPath[512];
+	int16_t spriteMaterial;
 
 	levelResetCamera(st);
 	initDrawList(&st->list, LEVEL_DRAWLIST_CAPACITY);
-	levelBuildSprites(st);
+	/* The atlas + material table are owned by the GPU backend; in smoke
+	 * mode (no GPU) materials stay NULL and the emitters use the built-in
+	 * fallback regions. */
+	st->materials = gpu != NULL ? gpuBackendMaterials(gpu) : NULL;
+	spriteMaterial = (int16_t)materialIdByName(st->materials, "sprite");
+	levelBuildSprites(st, spriteMaterial);
 
 	/* Load the map through SDL I/O so Android APK assets resolve (the pure
 	 * parser's file reader cannot see them); parseVoxmapText copies the
@@ -183,7 +193,7 @@ static bool level_init(void *self, App *app)
 		void *mapText = SDL_LoadFile(mapPath, &mapSize);
 
 		if (mapText != NULL) {
-			st->map = parseVoxmapText(mapText, mapSize);
+			st->map = parseVoxmapText(mapText, mapSize, st->materials);
 			SDL_free(mapText);
 		}
 	}
@@ -398,8 +408,8 @@ static void level_draw(void *self, App *app)
 		buildGridQuad(&st->camera, aspect, &grid);
 		gpuBackendDrawGrid(gpu, &gridViewProj, &grid);
 
-		buildFrameDrawList(st->map, st->sprites, st->spriteCount,
-				   &st->camera, &st->list);
+		buildFrameDrawList(st->map, st->materials, st->sprites,
+				   st->spriteCount, &st->camera, &st->list);
 		gpuBackendDrawList(gpu, &viewProj, &st->list);
 	}
 	levelDrawUi(st, app);

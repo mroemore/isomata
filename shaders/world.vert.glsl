@@ -15,6 +15,7 @@
 layout(location = 0) in vec3 inPosition;	/* world space */
 layout(location = 1) in vec2 inUV;
 layout(location = 2) in vec4 inColor;		/* vertex tint */
+layout(location = 3) in float inAlphaMode;	/* 1.0 = cutout discard */
 
 layout(set = 1, binding = 0, std140) uniform UBO {
 	mat4 uViewProj;
@@ -22,9 +23,11 @@ layout(set = 1, binding = 0, std140) uniform UBO {
 
 layout(location = 0) out vec2 vUV;
 layout(location = 1) out vec4 vColor;
+layout(location = 2) out float vAlphaMode;
 
 void main() {
 	gl_Position = ubo.uViewProj * vec4(inPosition, 1.0);
 	vUV = inUV;
 	vColor = inColor;
+	vAlphaMode = inAlphaMode;
 }

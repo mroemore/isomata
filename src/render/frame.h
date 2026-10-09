@@ -23,6 +23,7 @@
  */
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/materials.h"
 #include "render/sprites.h"
 #include "render/voxmap.h"
 
@@ -35,7 +36,8 @@
  * the flat ground tops). The atlas texel still carries the base colour. */
 #define FRAME_VOXEL_TINT DRAW_TINT(240, 240, 240, 255)
 
-bool buildFrameDrawList(const Voxmap *map, const SpriteEntity *sprites,
-			size_t count, const Camera3D *camera, DrawList *list);
+bool buildFrameDrawList(const Voxmap *map, const MaterialTable *materials,
+			const SpriteEntity *sprites, size_t count,
+			const Camera3D *camera, DrawList *list);
 
 #endif /* ISOMATA_RENDER_FRAME_H */

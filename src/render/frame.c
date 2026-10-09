@@ -5,8 +5,9 @@
 
 #include "render/frame.h"
 
-bool buildFrameDrawList(const Voxmap *map, const SpriteEntity *sprites,
-			size_t count, const Camera3D *camera, DrawList *list)
+bool buildFrameDrawList(const Voxmap *map, const MaterialTable *materials,
+			const SpriteEntity *sprites, size_t count,
+			const Camera3D *camera, DrawList *list)
 {
 	size_t i;
 
@@ -14,10 +15,10 @@ bool buildFrameDrawList(const Voxmap *map, const SpriteEntity *sprites,
 		return false;
 
 	clearDrawList(list);
-	voxmapEmitFaces(map, list, camera, FRAME_VOXEL_TINT);
+	voxmapEmitFaces(map, materials, list, camera, FRAME_VOXEL_TINT);
 	if (sprites != NULL)
 		for (i = 0; i < count; i++)
-			appendSprite(list, &sprites[i], camera);
+			appendSprite(list, &sprites[i], camera, materials);
 	sortDrawList(list, camera);
 	return true;
 }

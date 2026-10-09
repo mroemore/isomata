@@ -19,6 +19,7 @@
 #include "render/frame.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
+#include "render/textures.h"
 #include "render/voxmap.h"
 
 #include <stdio.h>
@@ -48,7 +49,7 @@ static Voxmap *loadTemp(const char *name, const char *content)
 
 	if (path == NULL)
 		return NULL;
-	return loadVoxmap(path);
+	return loadVoxmap(path, NULL);
 }
 
 static Camera3D yaw0Camera(void)
@@ -116,9 +117,9 @@ static float viewZ(const DrawItem *item, const Camera3D *camera)
 }
 
 static SpriteEntity demoSprites[3] = {
-	{ 1.5f, 0.0f, 1.5f, 1.0f, 1.5f, DRAW_TINT(255, 0, 0, 255) },
-	{ 0.5f, 1.0f, 2.5f, 1.0f, 1.5f, DRAW_TINT(0, 255, 0, 255) },
-	{ 2.5f, 2.0f, 0.5f, 1.0f, 1.5f, DRAW_TINT(0, 0, 255, 255) },
+	{ 1.5f, 0.0f, 1.5f, 1.0f, 1.5f, DRAW_TINT(255, 0, 0, 255), -1 },
+	{ 0.5f, 1.0f, 2.5f, 1.0f, 1.5f, DRAW_TINT(0, 255, 0, 255), -1 },
+	{ 2.5f, 2.0f, 0.5f, 1.0f, 1.5f, DRAW_TINT(0, 0, 255, 255), -1 },
 };
 
 /* Compare the meaningful DrawItem fields (padding bytes are not part of the
@@ -136,8 +137,8 @@ static void test_null_list_refused(void)
 {
 	Camera3D camera = yaw0Camera();
 
-	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, demoSprites, 3, &camera, NULL));
-	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, 0, NULL, NULL));
+	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, demoSprites, 3, &camera, NULL));
+	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, NULL, 0, NULL, NULL));
 }
 
 /* With no map, the list is exactly the appended sprites. */
@@ -150,11 +151,11 @@ static void test_sprites_only(void)
 
 	initDrawList(&list, 8);
 	initDrawList(&ref, 8);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, demoSprites, 3, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, demoSprites, 3, &camera, &list));
 	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
 
 	for (i = 0; i < 3; i++)
-		appendSprite(&ref, &demoSprites[i], &camera);
+		appendSprite(&ref, &demoSprites[i], &camera, NULL);
 	sortDrawList(&ref, &camera);
 	TEST_ASSERT_EQUAL_INT((int)drawListCount(&ref), (int)drawListCount(&list));
 	for (i = 0; i < 3; i++)
@@ -178,11 +179,11 @@ static void test_map_and_sprites_sorted_and_composed(void)
 	initDrawList(&list, 128);
 	initDrawList(&ref, 128);
 
-	TEST_ASSERT_TRUE(buildFrameDrawList(map, demoSprites, 3, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, demoSprites, 3, &camera, &list));
 
-	voxmapEmitFaces(map, &ref, &camera, FRAME_VOXEL_TINT);
+	voxmapEmitFaces(map, NULL, &ref, &camera, FRAME_VOXEL_TINT);
 	for (i = 0; i < 3; i++)
-		appendSprite(&ref, &demoSprites[i], &camera);
+		appendSprite(&ref, &demoSprites[i], &camera, NULL);
 	sortDrawList(&ref, &camera);
 
 	TEST_ASSERT_EQUAL_INT((int)drawListCount(&ref), (int)drawListCount(&list));
@@ -215,7 +216,7 @@ static void test_voxel_tint_pinned(void)
 
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
-	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, 0, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, NULL, 0, &camera, &list));
 	TEST_ASSERT_TRUE(drawListCount(&list) > 0);
 	/* The lone height-1 cell emits its top face (shade 1.0) and its +Z side.
 	 * Locate the top by atlas UV rather than assuming index 0: the base-line
@@ -241,11 +242,11 @@ static void test_null_camera_and_sprites(void)
 	DrawList list;
 
 	initDrawList(&list, 8);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, demoSprites, 3, NULL, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, demoSprites, 3, NULL, &list));
 	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
 
 	clearDrawList(&list);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, 5, NULL, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, 5, NULL, &list));
 	TEST_ASSERT_EQUAL_INT(0, (int)drawListCount(&list));
 	destroyDrawList(&list);
 }

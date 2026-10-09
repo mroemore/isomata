@@ -269,7 +269,7 @@ App *appCreate(const char *title, int width, int height) {
  * on top) and input. Returns false when a non-smoke run cannot render. */
 static bool appSetupRuntime(App *app, bool smoke) {
 	char shaderDir[512];
-	char texturePath[512];
+	char texturesDir[512];
 	char fontPath[512];
 	const char *screenshot = SDL_getenv("ISO_SCREENSHOT");
 
@@ -283,9 +283,9 @@ static bool appSetupRuntime(App *app, bool smoke) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "isomata: UI font unavailable");
 
 	if (platformAssetPath("shaders", shaderDir, sizeof(shaderDir)) != NULL &&
-	    platformAssetPath("textures/placeholder.png", texturePath,
-			      sizeof(texturePath)) != NULL) {
-		app->gpu = gpuBackendCreate(app->window, shaderDir, texturePath,
+	    platformAssetPath("textures", texturesDir,
+			      sizeof(texturesDir)) != NULL) {
+		app->gpu = gpuBackendCreate(app->window, shaderDir, texturesDir,
 					    screenshot);
 	} else {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,

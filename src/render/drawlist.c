@@ -16,9 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const float kTopUV[4][2] = ATLAS_UV_TOP;
-static const float kSideUV[4][2] = ATLAS_UV_SIDE;
-
 /* How far a sprite is pulled toward the camera for the painter sort. A
  * billboard's quad centre = base + up*h/2 and the camera up axis is
  * perpendicular to the view direction, so the sprite's centre has EXACTLY
@@ -91,19 +88,17 @@ bool appendDrawItem(DrawList *list, const DrawItem *item)
 }
 
 bool appendVoxelFace(DrawList *list, const float worldQuad[4][3],
-		     DrawFace face, uint32_t tint)
+		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
 {
 	DrawItem item;
 
-	if (worldQuad == NULL)
+	if (worldQuad == NULL || uv == NULL)
 		return false;
 	memcpy(item.worldQuad, worldQuad, sizeof(item.worldQuad));
-	if (face == DRAW_FACE_SIDE)
-		memcpy(item.uv, kSideUV, sizeof(item.uv));
-	else
-		memcpy(item.uv, kTopUV, sizeof(item.uv));
+	memcpy(item.uv, uv, sizeof(item.uv));
 	item.tint = tint;
 	item.kind = DRAW_KIND_VOXEL;
+	item.alphaMode = alphaMode;
 	return appendDrawItem(list, &item);
 }
 

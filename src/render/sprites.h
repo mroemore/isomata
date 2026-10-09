@@ -21,6 +21,7 @@
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/materials.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,6 +33,9 @@ typedef struct SpriteEntity {
 	float width;	/* world-space billboard width */
 	float height;	/* world-space billboard height */
 	uint32_t tint;	/* RGBA (see DRAW_TINT) */
+	int16_t material;	/* material id resolved through the atlas; the
+				 * sprite samples that material's front (south)
+				 * face. -1 / absent uses the fallback region. */
 } SpriteEntity;
 
 /* Build the camera-facing billboard quad into worldQuad (4 corners, canonical
@@ -40,9 +44,10 @@ typedef struct SpriteEntity {
 void buildSpriteQuad(const SpriteEntity *sprite, const Camera3D *camera,
 		     float worldQuad[4][3]);
 
-/* Append the sprite as a DRAW_KIND_SPRITE item (ATLAS_UV_SPRITE). Returns
- * false on a NULL sprite, a NULL list, or a full list. */
+/* Append the sprite as a DRAW_KIND_SPRITE item, sampling the sprite material's
+ * front (south) face UVs from `materials` (NULL uses the fallback region).
+ * Returns false on a NULL sprite, a NULL list, or a full list. */
 bool appendSprite(DrawList *list, const SpriteEntity *sprite,
-		  const Camera3D *camera);
+		  const Camera3D *camera, const MaterialTable *materials);
 
 #endif /* ISOMATA_RENDER_SPRITES_H */

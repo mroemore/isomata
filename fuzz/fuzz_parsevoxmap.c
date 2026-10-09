@@ -18,7 +18,7 @@
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-	Voxmap *map = parseVoxmapText((const char *)data, size);
+	Voxmap *map = parseVoxmapText((const char *)data, size, NULL);
 
 	if (map != NULL) {
 		int w = voxmapWidth(map);

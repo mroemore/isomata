@@ -49,7 +49,6 @@
  */
 
 #include "render/camera3d.h"
-#include "render/textures.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -65,17 +64,13 @@ typedef enum DrawKind {
 	DRAW_KIND_SPRITE = 1,	/* alpha-blended billboard */
 } DrawKind;
 
-/* Which atlas region a voxel face samples. */
-typedef enum DrawFace {
-	DRAW_FACE_TOP = 0,	/* ATLAS_UV_TOP */
-	DRAW_FACE_SIDE = 1,	/* ATLAS_UV_SIDE */
-} DrawFace;
-
 typedef struct DrawItem {
 	float worldQuad[4][3];	/* 4 corners, world space, canonical order */
 	float uv[4][2];		/* matching atlas UVs */
 	uint32_t tint;		/* RGBA (see DRAW_TINT) */
 	uint8_t kind;		/* DRAW_KIND_* */
+	uint8_t alphaMode;	/* materials.h AlphaMode: 0 opaque, 1 blend,
+				 * 2 cutout (shader discard) */
 } DrawItem;
 
 typedef struct DrawList {
@@ -107,10 +102,10 @@ const DrawItem *drawListItem(const DrawList *list, size_t index);
 bool appendDrawItem(DrawList *list, const DrawItem *item);
 
 /* Typed helper over the core: append a voxel face. worldQuad is 4 world-space
- * corners in canonical order; `face` selects the pinned atlas region
- * (top/side). */
+ * corners in canonical order; `uv` is the matching 4-corner UV quad (already
+ * oriented for the face); `alphaMode` is a materials.h AlphaMode value. */
 bool appendVoxelFace(DrawList *list, const float worldQuad[4][3],
-		     DrawFace face, uint32_t tint);
+		     const float uv[4][2], uint8_t alphaMode, uint32_t tint);
 
 /* Sort back-to-front for the given camera (see the invariant block). A NULL
  * camera sorts against the identity view. NULL list is a no-op. */

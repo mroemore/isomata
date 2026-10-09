@@ -9,10 +9,11 @@
  */
 
 #include "render/sprites.h"
+#include "render/textures.h"
 
 #include <string.h>
 
-static const float kSpriteUV[4][2] = ATLAS_UV_SPRITE;
+static const float kFallbackUV[4][2] = ATLAS_UV_SPRITE;
 
 void buildSpriteQuad(const SpriteEntity *sprite, const Camera3D *camera,
 		     float worldQuad[4][3])
@@ -65,14 +66,23 @@ void buildSpriteQuad(const SpriteEntity *sprite, const Camera3D *camera,
 }
 
 bool appendSprite(DrawList *list, const SpriteEntity *sprite,
-		  const Camera3D *camera)
+		  const Camera3D *camera, const MaterialTable *materials)
 {
 	DrawItem item;
 
 	if (sprite == NULL)
 		return false;
 	buildSpriteQuad(sprite, camera, item.worldQuad);
-	memcpy(item.uv, kSpriteUV, sizeof(item.uv));
+	item.alphaMode = (uint8_t)ALPHA_BLEND;
+	if (materials != NULL && sprite->material >= 0 &&
+	    (size_t)sprite->material < materials->count) {
+		const Material *m = &materials->items[sprite->material];
+
+		materialFaceUV(&m->rect[FACE_SOUTH], FACE_SOUTH, item.uv);
+		item.alphaMode = (uint8_t)m->alpha;
+	} else {
+		memcpy(item.uv, kFallbackUV, sizeof(item.uv));
+	}
 	item.tint = sprite->tint;
 	item.kind = DRAW_KIND_SPRITE;
 	return appendDrawItem(list, &item);

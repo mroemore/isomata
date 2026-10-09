@@ -17,6 +17,9 @@
 
 #include "render/gpu_backend.h"
 
+#include "render/atlas.h"
+#include "render/materials.h"
+
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_surface.h>
 
@@ -44,6 +47,7 @@ typedef struct GpuVertex {
 	float g;
 	float b;
 	float a;
+	float alphaMode;	/* 1.0 = cutout (frag discards low alpha) */
 } GpuVertex;
 
 /* One batched UI draw: a run of UI vertices sharing one texture. */
@@ -62,9 +66,10 @@ struct GpuBackend {
 	SDL_GPUBuffer *vertexBuffer;
 	SDL_GPUTransferBuffer *vertexTransfer;	/* staging for the world list */
 	size_t vertexItemCapacity;		/* items the world buffers hold */
-	SDL_GPUTexture *texture;		/* world atlas */
+	SDL_GPUTexture *texture;		/* world atlas (packed materials) */
 	SDL_GPUSampler *sampler;
 	SDL_GPUTextureFormat colorFormat;
+	MaterialTable materials;		/* name -> face UV rects + alpha */
 
 	/* Infinite ground grid (tolerant: pipeline/buffers NULL if init failed). */
 	SDL_GPUGraphicsPipeline *gridPipeline;
@@ -192,7 +197,7 @@ static SDL_GPUGraphicsPipeline *createQuadPipeline(SDL_GPUDevice *device,
 						   SDL_GPUTextureFormat colorFormat)
 {
 	SDL_GPUVertexBufferDescription bufferDesc = { 0 };
-	SDL_GPUVertexAttribute attributes[3] = { { 0 } };
+	SDL_GPUVertexAttribute attributes[4] = { { 0 } };
 	SDL_GPUVertexInputState vertexInput = { 0 };
 	SDL_GPUColorTargetDescription colorTarget = { 0 };
 	SDL_GPUGraphicsPipelineCreateInfo info = { 0 };
@@ -213,10 +218,14 @@ static SDL_GPUGraphicsPipeline *createQuadPipeline(SDL_GPUDevice *device,
 	attributes[2].buffer_slot = 0;
 	attributes[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
 	attributes[2].offset = offsetof(GpuVertex, r);
+	attributes[3].location = 3;
+	attributes[3].buffer_slot = 0;
+	attributes[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT;
+	attributes[3].offset = offsetof(GpuVertex, alphaMode);
 	vertexInput.vertex_buffer_descriptions = &bufferDesc;
 	vertexInput.num_vertex_buffers = 1;
 	vertexInput.vertex_attributes = attributes;
-	vertexInput.num_vertex_attributes = 3;
+	vertexInput.num_vertex_attributes = 4;
 
 	/* Alpha blending, no depth (painter-sorted), no culling. */
 	colorTarget.format = colorFormat;
@@ -456,85 +465,60 @@ static bool ensureUiVertexCapacity(GpuBackend *gpu, size_t vertexCapacity)
 	return createUiVertexBuffers(gpu, vertexCapacity);
 }
 
-static bool createTexture(GpuBackend *gpu, const char *texturePath)
+/* Create gpu->texture (R8G8B8A8_UNORM, nearest-sampled) and upload `pixels`
+ * (RGBA8, `pitch` bytes per row). On failure gpu->texture may be set; the
+ * backend's destroy releases it. */
+static bool uploadTexture(GpuBackend *gpu, const void *pixels, Uint32 width,
+			  Uint32 height, Uint32 pitch)
 {
-	SDL_Surface *surface;
-	SDL_Surface *rgba;
 	SDL_GPUTransferBuffer *transfer;
 	SDL_GPUCommandBuffer *cmd;
 	SDL_GPUCopyPass *copy;
 	void *mapped;
-	Uint32 texWidth;
-	Uint32 texHeight;
-	Uint32 pitch;
-
-	surface = SDL_LoadPNG(texturePath);
-	if (surface == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: SDL_LoadPNG failed for '%s': %s",
-			     texturePath, SDL_GetError());
-		return false;
-	}
-	rgba = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
-	SDL_DestroySurface(surface);
-	if (rgba == NULL) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: SDL_ConvertSurface failed for '%s': %s",
-			     texturePath, SDL_GetError());
-		return false;
-	}
-	texWidth = (Uint32)rgba->w;
-	texHeight = (Uint32)rgba->h;
-	pitch = (Uint32)rgba->pitch;
 
 	gpu->texture = SDL_CreateGPUTexture(gpu->device,
 		&(SDL_GPUTextureCreateInfo){
 			.type = SDL_GPU_TEXTURETYPE_2D,
 			.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
 			.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
-			.width = texWidth,
-			.height = texHeight,
+			.width = width,
+			.height = height,
 			.layer_count_or_depth = 1,
 			.num_levels = 1,
 			.sample_count = SDL_GPU_SAMPLECOUNT_1,
 		});
 	if (gpu->texture == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: texture creation failed for '%s': %s",
-			     texturePath, SDL_GetError());
-		SDL_DestroySurface(rgba);
+			     "gpu_backend: atlas texture creation failed: %s",
+			     SDL_GetError());
 		return false;
 	}
-
 	transfer = SDL_CreateGPUTransferBuffer(gpu->device,
 		&(SDL_GPUTransferBufferCreateInfo){
 			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-			.size = pitch * texHeight,
+			.size = pitch * height,
 		});
 	if (transfer == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: texture transfer buffer failed: %s",
+			     "gpu_backend: atlas transfer buffer failed: %s",
 			     SDL_GetError());
-		SDL_DestroySurface(rgba);
 		return false;
 	}
 	mapped = SDL_MapGPUTransferBuffer(gpu->device, transfer, false);
 	if (mapped == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: texture transfer map failed: %s",
+			     "gpu_backend: atlas transfer map failed: %s",
 			     SDL_GetError());
 		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
-		SDL_DestroySurface(rgba);
 		return false;
 	}
-	memcpy(mapped, rgba->pixels, pitch * texHeight);
+	memcpy(mapped, pixels, (size_t)pitch * (size_t)height);
 	SDL_UnmapGPUTransferBuffer(gpu->device, transfer);
-	SDL_DestroySurface(rgba);
 
 	cmd = SDL_AcquireGPUCommandBuffer(gpu->device);
 	if (cmd == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: texture upload command buffer failed: %s",
+			     "gpu_backend: atlas upload command buffer failed: %s",
 			     SDL_GetError());
 		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
 		return false;
@@ -542,7 +526,7 @@ static bool createTexture(GpuBackend *gpu, const char *texturePath)
 	copy = SDL_BeginGPUCopyPass(cmd);
 	if (copy == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: texture upload copy pass failed: %s",
+			     "gpu_backend: atlas upload copy pass failed: %s",
 			     SDL_GetError());
 		SDL_CancelGPUCommandBuffer(cmd);
 		SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
@@ -550,16 +534,183 @@ static bool createTexture(GpuBackend *gpu, const char *texturePath)
 	}
 	SDL_UploadToGPUTexture(copy,
 		&(SDL_GPUTextureTransferInfo){ .transfer_buffer = transfer, .offset = 0,
-					       .pixels_per_row = texWidth,
-					       .rows_per_layer = texHeight },
-		&(SDL_GPUTextureRegion){ .texture = gpu->texture, .w = texWidth,
-					 .h = texHeight, .d = 1 },
+					       .pixels_per_row = width,
+					       .rows_per_layer = height },
+		&(SDL_GPUTextureRegion){ .texture = gpu->texture, .w = width,
+					 .h = height, .d = 1 },
 		false);
 	SDL_EndGPUCopyPass(copy);
 	SDL_SubmitGPUCommandBuffer(cmd);
 	SDL_ReleaseGPUTransferBuffer(gpu->device, transfer);
 	return true;
 }
+
+/* Index of `name` in the unique file list, or -1. */
+static int findFileSlot(char (*names)[MATERIAL_PATH_MAX], int count,
+			const char *name)
+{
+	int k;
+
+	for (k = 0; k < count; k++)
+		if (strcmp(names[k], name) == 0)
+			return k;
+	return -1;
+}
+
+/* Load texturesDir/materials.txt, load every referenced PNG, pack them into
+ * ONE RGBA atlas, build the material table, and upload the atlas. Tolerant by
+ * design: a missing/malformed manifest or a missing file logs a diagnostic
+ * and degrades to a generated fallback; the backend still builds. */
+static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
+{
+	char path[GPU_SCREENSHOT_PATH_MAX];
+	MaterialManifest manifest;
+	Uint8 *mtext = NULL;
+	size_t msize = 0;
+	char (*names)[MATERIAL_PATH_MAX] = NULL;
+	SDL_Surface **surfaces = NULL;
+	int *sizes = NULL;
+	int fileCount = 0;
+	int maxSize = ATLAS_CELL_MIN;
+	AtlasLayout layout;
+	uint8_t *pixels = NULL;
+	bool ok = false;
+	int i;
+	int cell;
+
+	memset(&manifest, 0, sizeof(manifest));
+	if (joinPath(path, sizeof(path), texturesDir, "materials.txt") != NULL)
+		mtext = readFile(path, &msize);
+	if (mtext == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: cannot read material manifest under '%s'",
+			     texturesDir);
+	} else if (!materialManifestParse((const char *)mtext, msize,
+					  &manifest)) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "gpu_backend: material manifest '%s' is malformed",
+			     path);
+		manifest.count = 0;
+	}
+	SDL_free(mtext);
+
+	names = calloc((size_t)MATERIAL_MAX * 6, sizeof(*names));
+	if (names == NULL)
+		goto done;
+	for (i = 0; i < (int)manifest.count; i++) {
+		int f;
+
+		for (f = 0; f < 6; f++) {
+			const char *fn = manifest.defs[i].file[f];
+
+			if (findFileSlot(names, fileCount, fn) < 0) {
+				if (fileCount >= ATLAS_MAX_SLOTS) {
+					SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+						     "gpu_backend: too many atlas files (> %d)",
+						     ATLAS_MAX_SLOTS);
+					goto done;
+				}
+				SDL_snprintf(names[fileCount], MATERIAL_PATH_MAX,
+					     "%s", fn);
+				fileCount++;
+			}
+		}
+	}
+
+	surfaces = calloc((size_t)(fileCount > 0 ? fileCount : 1),
+			  sizeof(*surfaces));
+	sizes = calloc((size_t)(fileCount > 0 ? fileCount : 1), sizeof(*sizes));
+	if (surfaces == NULL || sizes == NULL)
+		goto done;
+	for (i = 0; i < fileCount; i++) {
+		SDL_Surface *s;
+
+		sizes[i] = ATLAS_CELL_MIN;
+		if (joinPath(path, sizeof(path), texturesDir, names[i]) == NULL)
+			continue;
+		s = SDL_LoadPNG(path);
+		if (s == NULL) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "gpu_backend: texture '%s' missing (%s); using fallback",
+				     path, SDL_GetError());
+			continue;
+		}
+		surfaces[i] = SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGBA32);
+		SDL_DestroySurface(s);
+		if (surfaces[i] == NULL)
+			continue;
+		sizes[i] = surfaces[i]->w < surfaces[i]->h
+				   ? surfaces[i]->w
+				   : surfaces[i]->h;
+		if (sizes[i] < 1)
+			sizes[i] = ATLAS_CELL_MIN;
+		if (sizes[i] > maxSize)
+			maxSize = sizes[i];
+	}
+
+	cell = atlasCellSizeFor(maxSize);
+	if (!atlasComputeLayout(fileCount > 0 ? fileCount : 1, cell, &layout))
+		goto done;
+	pixels = calloc((size_t)layout.width * (size_t)layout.height * 4, 1);
+	if (pixels == NULL)
+		goto done;
+	for (i = 0; i < fileCount; i++) {
+		int x;
+		int y;
+
+		if (!atlasSlotOrigin(&layout, i, &x, &y))
+			continue;
+		if (surfaces[i] != NULL)
+			atlasBlitPixels(pixels, layout.width, layout.height, x,
+					y, surfaces[i]->pixels, surfaces[i]->w,
+					surfaces[i]->h, (int)surfaces[i]->pitch);
+		else
+			atlasFillFallbackCell(pixels, layout.width, layout.height,
+					      x, y, sizes[i]);
+	}
+
+	memset(&gpu->materials, 0, sizeof(gpu->materials));
+	for (i = 0; i < (int)manifest.count; i++) {
+		int id = materialTableAdd(&gpu->materials, manifest.defs[i].name,
+					  manifest.defs[i].alpha);
+		int f;
+
+		if (id < 0)
+			break;
+		for (f = 0; f < 6; f++) {
+			int slot = findFileSlot(names, fileCount,
+						manifest.defs[i].file[f]);
+			AtlasRect r;
+
+			if (slot < 0)
+				continue;
+			if (atlasSlotRect(&layout, slot, sizes[slot], &r))
+				materialTableSetRect(&gpu->materials, id,
+						     (FaceId)f, r);
+		}
+	}
+
+	if (!uploadTexture(gpu, pixels, (Uint32)layout.width,
+			   (Uint32)layout.height, (Uint32)layout.width * 4))
+		goto done;
+	SDL_Log("gpu_backend: atlas %dx%d (%d material%s, %d file%s)",
+		layout.width, layout.height, (int)gpu->materials.count,
+		gpu->materials.count == 1 ? "" : "s", fileCount,
+		fileCount == 1 ? "" : "s");
+	ok = true;
+
+done:
+	if (surfaces != NULL) {
+		for (i = 0; i < fileCount; i++)
+			SDL_DestroySurface(surfaces[i]);
+		free(surfaces);
+	}
+	free(sizes);
+	free(names);
+	free(pixels);
+	return ok;
+}
+
 
 static bool createSampler(GpuBackend *gpu)
 {
@@ -586,15 +737,15 @@ static bool createSampler(GpuBackend *gpu)
 /* --- public API ------------------------------------------------------- */
 
 GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
-			     const char *texturePath, const char *screenshotPath)
+			     const char *texturesDir, const char *screenshotPath)
 {
 	GpuBackend *gpu;
 	SDL_GPUTextureFormat colorFormat;
 	bool debug = SDL_getenv("ISO_GPU_DEBUG") != NULL;
 
-	if (window == NULL || shaderDir == NULL || texturePath == NULL) {
+	if (window == NULL || shaderDir == NULL || texturesDir == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "gpu_backend: create needs a window, shader dir and texture path");
+			     "gpu_backend: create needs a window, shader dir and textures dir");
 		return NULL;
 	}
 	gpu = calloc(1, sizeof(*gpu));
@@ -629,7 +780,7 @@ GpuBackend *gpuBackendCreate(SDL_Window *window, const char *shaderDir,
 
 	if (!createPipeline(gpu, shaderDir, colorFormat) ||
 	    !createVertexBuffers(gpu, 64) ||
-	    !createTexture(gpu, texturePath) ||
+	    !createAtlas(gpu, texturesDir) ||
 	    !createSampler(gpu)) {
 		gpuBackendDestroy(gpu);
 		return NULL;
@@ -687,6 +838,11 @@ SDL_GPUDevice *gpuBackendDevice(GpuBackend *gpu)
 	return gpu != NULL ? gpu->device : NULL;
 }
 
+const MaterialTable *gpuBackendMaterials(GpuBackend *gpu)
+{
+	return gpu != NULL ? &gpu->materials : NULL;
+}
+
 SDL_GPUCommandBuffer *gpuBackendFrameCommandBuffer(GpuBackend *gpu)
 {
 	if (gpu == NULL || !gpu->frameActive)
@@ -724,6 +880,8 @@ static Uint32 buildVertices(const DrawList *list, GpuVertex *out)
 			v->g = g;
 			v->b = b;
 			v->a = a;
+			v->alphaMode = item->alphaMode == ALPHA_CUTOUT ? 1.0f
+								       : 0.0f;
 		}
 	}
 	return n;
@@ -1047,6 +1205,7 @@ bool gpuBackendDrawGrid(GpuBackend *gpu, const Mat4 *viewProj,
 		v->g = g;
 		v->b = b;
 		v->a = a;
+		v->alphaMode = 0.0f;
 	}
 	SDL_UnmapGPUTransferBuffer(gpu->device, gpu->gridVertexTransfer);
 
@@ -1123,6 +1282,7 @@ bool gpuBackendDrawUiQuad(GpuBackend *gpu, SDL_GPUTexture *texture,
 		v->g = g;
 		v->b = b;
 		v->a = a;
+		v->alphaMode = 0.0f;
 	}
 	return addUiDraw(gpu, texture, first, GPU_UI_QUAD_VERTICES);
 }
