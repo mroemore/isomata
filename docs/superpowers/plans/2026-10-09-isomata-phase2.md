@@ -1,20 +1,21 @@
 # Isomata Phase 2 — Textures, Lighting, Entities, Particles
 
-**Status: draft for review** (2026-10-09). The build order is agreed with the
-user; user notes are captured below. The texture item is detailed; lighting,
-entities and particles get detailed task plans as their notes land.
+**Status: in progress** (2026-10-09). The build order is agreed with the
+user; user notes are captured below. Item 1 (textures) is **done** (T12,
+reviewed, published). Item 2 (lighting) is detailed and proposed below. Task
+T13 (PNG layer map pipeline) is deferred until after lighting (user).
+Entities and particles get detailed task plans as their notes land.
 
 ## Agreed order
 
-1. **Textures** — small, unblocks the visual identity of everything after.
-2. **Lighting** — the most invasive render change; land it before entities and
-   particles add more render consumers, so they are built on the lit pipeline.
-3. **Entities** — the gameplay core, mostly pure logic; inherits textures and
+1. **Textures** — done (T12).
+2. **Lighting** — detailed below (T14/T15); the most invasive render change,
+   landed before entities and particles add more render consumers.
+3. **Deferred: T13 (PNG layer map pipeline)** — immediately after lighting,
+   per the user.
+4. **Entities** — the gameplay core, mostly pure logic; inherits textures and
    lighting for free.
-4. **Particles** — polish on the settled blend/render pipeline.
-
-(Alternative: swap 2 and 3 if gameplay should come first; particles stay last
-either way.)
+5. **Particles** — polish on the settled blend/render pipeline.
 
 ---
 
@@ -82,7 +83,48 @@ either way.)
 9. Verification: pure suite + valgrind + floors; Xvfb screenshots (materials,
    alpha tile); emulator phone config; APK publish.
 
-### Task T13 — PNG layer map pipeline (one task, implementer + review)
+---
+
+## Item 2 — Lighting
+
+### User requirements (captured)
+
+Global illumination, ambient light, spherical and conical light projections,
+coloured light mixture from multiple sources.
+
+### Design (proposed 2026-10-09 — veto any numbered point)
+
+- **L1 — Model**: a per-voxel **RGB light grid** (3 × uint8 per cell) over the
+  map volume, propagated by **BFS flood fill** with per-channel max-merge and a
+  tunable per-step attenuation (default −16/255 per step → ~16-cell range).
+  This is the genre-standard voxel light engine: it bends around corners (the
+  "GI" feel), mixes colours stably (red + green overlap → yellow, per-channel
+  max), and is pure and testable. Sky seeds white light from the topmost air
+  cells (full strength downward until blocked, then attenuated spread);
+  ambient is a constant floor added at sampling. *Alternative if preferred:
+  direct per-emitter evaluation with line-of-sight rays and inverse-square
+  falloff (smoother, pricier, no corner-bending) — BFS is the recommendation.*
+  True ray-traced GI / radiosity / lightmaps stay out of scope.
+- **L2 — Emitters**: `$ point x y z r g b [radius]` and
+  `$ spot x y z r g b dir=x,y,z angle=deg [radius]` lines in the map file.
+  Points seed their cell; spots seed the cone volume (line-of-sight checked,
+  angle falloff) and BFS softens the edges. Static in v1 (computed at load);
+  the API supports re-seeding + incremental BFS so moving/pulsing lights land
+  as a follow-up.
+- **L3 — Sampling**: each emitted face reads the light of the air cell it
+  faces, with per-corner smoothing (average of the adjacent air cells) — the
+  classic voxel smooth-light look; multiplied by the existing directional
+  shading and material tint; per-corner AO (neighbour occupancy) applied here
+  too. The result bakes into the vertex colour — **no shader change**.
+- **L4 — Debug view**: a key toggles a light-only render (faces show their
+  light colour, no texture) for tuning.
+- **L5 — Tasks**: T14 = light grid + propagation (sky + block) + emitters
+  (point/spot) + pure golden tests; T15 = sampling + AO + lights parsing +
+  demo lights + debug view + Xvfb/emulator evidence.
+
+---
+
+## Deferred — Task T13: PNG layer map pipeline (after lighting — user, 2026-10-09)
 
 Authoring model requested by the user: draw the map in a pixel-art program
 (Aseprite/GIMP), **export layers as PNGs, numbered**, and a **legend converts
@@ -97,30 +139,16 @@ Design:
 - Layers **composite bottom-up** (later layers override where opaque; fully
   transparent pixels leave the layer below; alpha = no cell in the base layer).
 - Each final pixel's RGB is looked up in a **colour legend** → tile type
-  (height + material). The legend is the same table as the char legend, keyed
-  by colour instead of char (`#RRGGBB = height + material`).
+  (height + material) — the same table as the char legend, keyed by colour
+  (`#RRGGBB = height + material`).
 - Output: the same in-memory Voxmap the ASCII parser produces — everything
-  downstream (emission, lighting later) is format-agnostic.
+  downstream (emission, lighting) is format-agnostic.
 - Pure parts: compositing rules, natural sort, colour→tile lookup (tests);
   glue: PNG load via `SDL_LoadPNG` + asset path.
 - Demo: author one small map as PNG layers (generated with ImageMagick for the
   test fixture), screenshot-verified in-app.
 
-Everything downstream (lighting later) is format-agnostic.
-
-
 ---
-
-## Item 2 — Lighting (notes pending)
-
-Scope sketch (to be detailed): per-voxel RGB light grid + flood-fill
-propagation (sky + block light, per-channel attenuation); emitters — spherical
-(radial falloff) and conical (direction, half-angle, falloff) — mixing colours
-per channel with saturation; per-face/corner sampling into `vColor` on top of
-ambient + the existing directional shading; AO from neighbour occupancy; a
-debug light view; incremental updates for moving emitters. "GI" is scoped to
-the voxel flood fill that bends around corners — ray-traced GI / radiosity /
-lightmaps are out of scope.
 
 ## Item 3 — Entities
 
