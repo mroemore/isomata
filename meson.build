@@ -73,6 +73,7 @@ ctol_sources = files('src/events.c', 'src/achievement.c', 'src/scene.c',
 		     'src/render/drawlist.c', 'src/render/lightgrid.c',
 		     'src/render/sprites.c', 'src/render/frame.c',
 		     'src/scenes/ui_bridge.c',
+		     'src/scenes/level_controls.c',
 		     'src/ui/ui_scale.c', 'src/ui/element.c', 'src/ui/layout.c',
 		     'src/ui/element_label.c', 'src/ui/element_button.c',
 		     'src/ui/element_menu.c', 'src/ui/element_overlay.c',
@@ -142,9 +143,11 @@ run_command('cp', files('assets/fonts/KiwiSoda.ttf'),
 _stage_shader_dir = meson.current_build_dir() / 'assets' / 'shaders'
 _stage_texture_dir = meson.current_build_dir() / 'assets' / 'textures'
 _stage_map_dir = meson.current_build_dir() / 'assets' / 'maps'
+_stage_icon_dir = meson.current_build_dir() / 'assets' / 'icons'
 run_command('mkdir', '-p', _stage_shader_dir, check : true)
 run_command('mkdir', '-p', _stage_texture_dir, check : true)
 run_command('mkdir', '-p', _stage_map_dir, check : true)
+run_command('mkdir', '-p', _stage_icon_dir, check : true)
 run_command('cp', files('assets/shaders/world.vert.spv'),
 	    _stage_shader_dir / 'world.vert.spv', check : true)
 run_command('cp', files('assets/shaders/world.frag.spv'),
@@ -163,6 +166,12 @@ run_command('cp', files('assets/maps/demo.txt'),
 run_command('cp', '-r',
 	    meson.current_source_dir() / 'assets/maps/demo',
 	    _stage_map_dir, check : true)
+
+# Stage the UI icons (white on transparent, 64x64) so the level's icon
+# buttons render from "icons/<name>.png" relative to the executable.
+run_command('cp', '-r',
+	    meson.current_source_dir() / 'assets/icons/.',
+	    _stage_icon_dir, check : true)
 
 # Stage the committed WAVs (Task 10) so the app smoke / X11 run can load
 # "audio/*.wav" relative to the executable.

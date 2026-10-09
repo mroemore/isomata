@@ -1,7 +1,8 @@
 /*
  * Level scene (see level_scene.h). SDL-tier: loads the demo map, owns a
  * Camera3D + DrawList + billboards and a small UI root (the achievement
- * toast plus the ROT L / ROT R / RESET controls), and per frame builds/draws
+ * toast plus the icon-only ROT L / ROT R / DEBUG / RESET controls, built and
+ * laid out by the pure level_controls module), and per frame builds/draws
  * the world list, then handles the world commands from the InputFrame.
  *
  * Event wiring:
@@ -36,10 +37,10 @@
 #include "render/math3d.h"
 #include "render/sprites.h"
 #include "render/voxmap.h"
+#include "scenes/level_controls.h"
 #include "scenes/pause_scene.h"
 #include "scenes/ui_bridge.h"
 #include "ui/element.h"
-#include "ui/element_button.h"
 #include "ui/layout.h"
 #include "ui/toast.h"
 #include "ui/ui_font.h"
@@ -53,10 +54,9 @@
 #define LEVEL_TOAST_H 48
 #define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
 
-#define LEVEL_BUTTON_W 96
-#define LEVEL_BUTTON_H 48		/* >= 44 virtual px, touch-friendly */
-#define LEVEL_BUTTON_MARGIN 16		/* inset from the safe-area edges */
-#define LEVEL_BUTTON_GAP 8		/* between the ROT L / ROT R pair */
+/* The four controls (ROT L / ROT R / DEBUG / RESET) and their layout rule
+ * live in the pure level_controls module so they are headless-testable;
+ * LEVEL_BUTTON_W/H/MARGIN/GAP come from there. */
 
 typedef struct LevelState {
 	Voxmap *map;
@@ -73,9 +73,7 @@ typedef struct LevelState {
 	bool lightDebug;	/* T15: light-only debug view (F toggles) */
 	Element *root;		/* UI root (a transparent container) */
 	Element *toast;		/* achievement toast */
-	Element *rotL;		/* rotate counter-clockwise */
-	Element *rotR;		/* rotate clockwise */
-	Element *reset;		/* camera reset */
+	LevelControls controls;	/* rotate x2 / debug / reset icon buttons */
 } LevelState;
 
 /* The demo's three billboards (Task 8): two on the plateau, one on the
@@ -171,6 +169,21 @@ static void levelOnRotateCw(void *ctx)
 static void levelOnReset(void *ctx)
 {
 	levelResetCamera(ctx);
+}
+
+/* The shared light-debug toggle: flips the flag, keeps the DEBUG button's
+ * icon in step and logs. The single path behind both the F key
+ * (CMD_TOGGLE_LIGHT_DEBUG) and the on-screen DEBUG button. */
+static void levelToggleLightDebug(LevelState *st)
+{
+	levelControlsToggleDebug(&st->controls, &st->lightDebug);
+	SDL_Log("isomata: light debug view %s",
+		st->lightDebug ? "on" : "off");
+}
+
+static void levelOnToggleDebug(void *ctx)
+{
+	levelToggleLightDebug(ctx);
 }
 
 /* Build the light grid from the map: seed every parsed `$` emitter (a spot's
@@ -277,31 +290,27 @@ static bool level_init(void *self, App *app)
 	 * an opaque fill); each child is drawn individually (see levelDrawUi). */
 	st->root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
 	st->toast = uiCreateToast(&style);
-	st->rotL = uiCreateButton("ROT L", &style, levelOnRotateCcw, st);
-	st->rotR = uiCreateButton("ROT R", &style, levelOnRotateCw, st);
-	st->reset = uiCreateButton("RESET", &style, levelOnReset, st);
-	if (st->root == NULL || st->toast == NULL || st->rotL == NULL ||
-	    st->rotR == NULL || st->reset == NULL) {
+	if (st->root == NULL || st->toast == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: level UI allocation failed");
 		/* Nothing has been appended yet, so each element is freed once
 		 * (uiDestroyElement is NULL-safe). */
 		uiDestroyElement(st->toast);
-		uiDestroyElement(st->rotL);
-		uiDestroyElement(st->rotR);
-		uiDestroyElement(st->reset);
 		uiDestroyElement(st->root);
 		st->root = NULL;
 		st->toast = NULL;
-		st->rotL = NULL;
-		st->rotR = NULL;
-		st->reset = NULL;
 	} else {
 		uiAppendChild(st->root, st->toast);
-		uiAppendChild(st->root, st->rotL);
-		uiAppendChild(st->root, st->rotR);
-		uiAppendChild(st->root, st->reset);
+		/* The four icon-only controls; a failed build leaves all
+		 * pointers NULL, which the draw/layout walks tolerate. */
+		if (!levelControlsCreate(&st->controls, st->root, &style,
+					 levelOnRotateCcw, levelOnRotateCw,
+					 levelOnToggleDebug, levelOnReset, st))
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: control buttons allocation failed");
 	}
+	/* Start the DEBUG icon in step with the flag (false at init). */
+	levelControlsSetDebugIcon(&st->controls, st->lightDebug);
 
 	/* Subscribe to achievement unlocks (self-unsubscribes in unload). */
 	st->bus = appEventBus(app);
@@ -343,9 +352,7 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 			st->smoothLight ? "on" : "off (flat T14 path)");
 		break;
 	case CMD_TOGGLE_LIGHT_DEBUG:
-		st->lightDebug = !st->lightDebug;
-		SDL_Log("isomata: light debug view %s",
-			st->lightDebug ? "on" : "off");
+		levelToggleLightDebug(st);
 		break;
 	case CMD_BACK:
 		{
@@ -397,14 +404,15 @@ static void level_update(void *self, App *app, float dt)
 	toastUpdate(st->toast, dt);
 }
 
-/* Draw the toast and the three controls on top of the world. The pane root
+/* Draw the toast and the four controls on top of the world. The pane root
  * is a layout container only and is NOT drawn: its draw() paints a constant
  * opaque UI_COLOR_BACKGROUND fill, which would sit behind the toast's
  * alpha-scaled fill and make the box snap from full opacity to gone at
  * HIDDEN instead of fading. Each child is drawn individually, so the toast
  * still self-hides via its alpha while the buttons always draw. Child rects
  * are assigned directly (no uiLayout): the pane's single-axis layout would
- * stack all four children instead of placing the corner controls. */
+ * stack all five children instead of placing the corner controls; the rule
+ * itself lives in the pure level_controls module. */
 static void levelDrawUi(LevelState *st, App *app)
 {
 	UiDrawCtx *ctx = appUiDrawCtx(app);
@@ -412,9 +420,6 @@ static void levelDrawUi(LevelState *st, App *app)
 	int sy;
 	int sw;
 	int sh;
-	int rowY;
-	int resetX;
-	int rotRight;
 
 	if (st->root == NULL)
 		return;
@@ -434,33 +439,12 @@ static void levelDrawUi(LevelState *st, App *app)
 			  toastW, LEVEL_TOAST_H);
 	}
 
-	rowY = sy + sh - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_H;
-	uiSetRect(st->rotL, sx + LEVEL_BUTTON_MARGIN, rowY, LEVEL_BUTTON_W,
-		  LEVEL_BUTTON_H);
-	uiSetRect(st->rotR,
-		  sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W + LEVEL_BUTTON_GAP,
-		  rowY, LEVEL_BUTTON_W, LEVEL_BUTTON_H);
-	/* RESET hugs the safe-area right edge. At narrow virtual widths (a
-	 * phone: 1080 px / 3.41 = ~316 virtual px) that would collide with
-	 * ROT R (resetX < rotR.right + gap), so RESET is lifted onto a second
-	 * row above the pair, still right-aligned inside the safe area; no
-	 * button ever crosses the safe-area right edge. On a desktop (uiScale
-	 * 1, 1280 virtual) the collision arm is not taken and the layout is
-	 * byte-identical to the pre-fallback layout. */
-	resetX = sx + sw - LEVEL_BUTTON_MARGIN - LEVEL_BUTTON_W;
-	rotRight = sx + LEVEL_BUTTON_MARGIN + LEVEL_BUTTON_W +
-		   LEVEL_BUTTON_GAP + LEVEL_BUTTON_W;
-	if (resetX < rotRight + LEVEL_BUTTON_GAP)
-		uiSetRect(st->reset, resetX,
-			  rowY - LEVEL_BUTTON_H - LEVEL_BUTTON_GAP,
-			  LEVEL_BUTTON_W, LEVEL_BUTTON_H);
-	else
-		uiSetRect(st->reset, resetX, rowY, LEVEL_BUTTON_W,
-			  LEVEL_BUTTON_H);
+	levelControlsLayout(&st->controls, sx, sy, sw, sh);
 
-	uiDraw(st->rotL, ctx);
-	uiDraw(st->rotR, ctx);
-	uiDraw(st->reset, ctx);
+	uiDraw(st->controls.rotL, ctx);
+	uiDraw(st->controls.rotR, ctx);
+	uiDraw(st->controls.debug, ctx);
+	uiDraw(st->controls.reset, ctx);
 	uiDraw(st->toast, ctx);
 }
 
@@ -522,9 +506,7 @@ static void level_unload(void *self, App *app)
 	uiDestroyElement(st->root);
 	st->root = NULL;
 	st->toast = NULL;
-	st->rotL = NULL;
-	st->rotR = NULL;
-	st->reset = NULL;
+	st->controls = (LevelControls){ 0 };
 	destroyDrawList(&st->list);
 	destroyLightGrid(st->lights);
 	st->lights = NULL;

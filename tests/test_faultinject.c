@@ -25,6 +25,8 @@
 #include "render/mapsource.h"
 #include "render/voxmap.h"
 #include "scene.h"
+#include "scenes/level_controls.h"
+#include "ui/layout.h"
 
 #include <string.h>
 
@@ -310,6 +312,43 @@ static int test_mapsource_alloc_failures(void)
 	return 0;
 }
 
+/* levelControlsCreate: creating the four buttons is four callocs. Each
+ * failure index must return false with the partial state released (nothing
+ * appended to root, nothing leaked); the sweep past the last index succeeds. */
+static int test_level_controls_alloc_failures(void)
+{
+	long n;
+
+	for (n = 0; n < FAIL_SWEEP_LIMIT; n++) {
+		LevelControls controls;
+		Element *root;
+
+		fi_reset();
+		root = uiCreatePane(UI_AXIS_VERTICAL, 0, 0);
+		ASSERT_NOT_NULL(root);
+
+		memset(&controls, 0, sizeof(controls));
+		fi_reset();
+		fi_fail_after(n);
+		if (levelControlsCreate(&controls, root, NULL, NULL, NULL, NULL,
+					NULL, NULL)) {
+			ASSERT_NOT_NULL(controls.rotL);
+			ASSERT_NOT_NULL(controls.rotR);
+			ASSERT_NOT_NULL(controls.debug);
+			ASSERT_NOT_NULL(controls.reset);
+			ASSERT_NOT_NULL(uiFirstChild(root));
+		} else {
+			ASSERT_TRUE(fi_failures() > 0);
+			ASSERT_NULL(uiFirstChild(root));	/* nothing appended */
+		}
+		fi_fail_after(-1);
+
+		uiDestroyElement(root);
+		ASSERT_EQ_INT(0, fi_live());
+	}
+	return 0;
+}
+
 int main(void)
 {
 	int failed = 0;
@@ -324,5 +363,6 @@ int main(void)
 	RUN(test_voxmap_alloc_failures);
 	RUN(test_lightgrid_alloc_failures);
 	RUN(test_mapsource_alloc_failures);
+	RUN(test_level_controls_alloc_failures);
 	HARNESS_SUMMARY("faultinject");
 }

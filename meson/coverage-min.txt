@@ -65,7 +65,10 @@ src/ui/ui_scale.c		100
 src/ui/element.c		92
 src/ui/layout.c			89
 src/ui/element_label.c		90
-src/ui/element_button.c		89
+# T16: the icon seam closed every branch of element_button (icon-only draw
+# with its clamp/zero-area/absent-callback arms, the setter validation, the
+# text-mode fallbacks, the pointer boundary arms). Measured 50/50 = 100.
+src/ui/element_button.c		100
 src/ui/element_menu.c		89
 src/ui/element_overlay.c	100
 src/ui/toast.c			88
@@ -171,6 +174,12 @@ src/render/materials.c		90
 # command-consumed + same-frame-tap case is pinned by the final fix wave, so
 # every branch is taken.
 src/scenes/ui_bridge.c		100
+# T16: the pure level-controls module (construction, the layout rule at the
+# three verified widths, the debug icon swap). Measured 22/22 = 100: the
+# unit suite covers both layout arms and the NULL guards; the four
+# uiCreateButton allocation-failure arms are closed by the fault-injection
+# sweep (tests/test_faultinject.c).
+src/scenes/level_controls.c	100
 # Task 9 SDL tier (app target only): ui_gpu + the four scenes are exercised
 # by the X11 integration run, not by the headless/dummy suites, so they are
 # tracked at 0 like gpu_backend.c / input_sdl.c.
