@@ -139,6 +139,21 @@ coloured light mixture from multiple sources.
 
 ## Deferred — Task T13: PNG layer map pipeline (after lighting — user, 2026-10-09)
 
+**User decision (2026-10-09): slices (option B).** Each numbered layer PNG = a
+**horizontal height slice**; the stack of slices is a **true 3D voxel map**
+(overhangs, interiors, light shafts). Split into two tasks:
+
+- **T13a — 3D voxel model + emission + ASCII layer sections**: Voxmap becomes
+  an occupancy + per-voxel material grid; emission culls against the 6
+  neighbours with vertical run merging for sides and new bottom faces; the
+  light grid uses the occupancy mask (sky shadows under overhangs work); the
+  ASCII map format gains optional multi-section layers (each section = one y
+  slice) so 3D maps are authorable and testable before the PNG pipeline; a
+  demo structure with an interior + lamp proves it visually.
+- **T13b — PNG slice importer**: numbered layer PNGs (natural sort or
+  manifest) → slices; per-slice colour lookup via a colour legend
+  (`#RRGGBB = material`); transparent = air; demo authored as PNG layers.
+
 Authoring model requested by the user: draw the map in a pixel-art program
 (Aseprite/GIMP), **export layers as PNGs, numbered**, and a **legend converts
 colours → tile types**.
@@ -148,18 +163,17 @@ Design:
 - A map directory (or a small map manifest listing the layers in order)
   supplies numbered layer PNGs (`01.png`, `02.png`, …). Order: the manifest
   when present; otherwise natural-sort auto-discovery of `*.png` in the
-  directory.
-- Layers **composite bottom-up** (later layers override where opaque; fully
-  transparent pixels leave the layer below; alpha = no cell in the base layer).
-- Each final pixel's RGB is looked up in a **colour legend** → tile type
-  (height + material) — the same table as the char legend, keyed by colour
-  (`#RRGGBB = height + material`).
+  directory; ascending = bottom slice first (document).
+- Each slice pixel = one voxel at that level: opaque = solid with the legend
+  material, transparent = air.
+- Each final pixel's RGB is looked up in a **colour legend** → material (the
+  same table as the char legend, keyed by colour: `#RRGGBB = material`).
 - Output: the same in-memory Voxmap the ASCII parser produces — everything
   downstream (emission, lighting) is format-agnostic.
-- Pure parts: compositing rules, natural sort, colour→tile lookup (tests);
+- Pure parts: slice stacking, natural sort, colour→material lookup (tests);
   glue: PNG load via `SDL_LoadPNG` + asset path.
-- Demo: author one small map as PNG layers (generated with ImageMagick for the
-  test fixture), screenshot-verified in-app.
+- Demo: author one small 3D map as PNG layers (generated with ImageMagick for
+  the test fixture), screenshot-verified in-app.
 
 ---
 
