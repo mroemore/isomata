@@ -2945,9 +2945,13 @@ static void test_legend_shape_attributes_ascii(void)
 	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 0));
 	destroyVoxmap(map);
 
-	/* Attributes are order-independent and may precede the material. */
+	/* The attributes may follow the material in any order, but the base
+	 * grammar is fixed: `@ <char> <height> <material>`. Putting shape=/
+	 * dir= BEFORE the material leaves the material slot holding an
+	 * attribute token and `grass` an unrecognised token, so the line is
+	 * malformed. */
 	map = parseText("@ g 1 shape=ramp dir=west grass\ng\n");
-	TEST_ASSERT_NULL(map);	/* material must come third: malformed */
+	TEST_ASSERT_NULL(map);
 	destroyVoxmap(map);
 }
 
@@ -2973,6 +2977,9 @@ static void test_legend_shape_malformed(void)
 	/* A non-attribute token is a malformed legend line. */
 	TEST_ASSERT_NULL(parseText("@ g 1 grass bogus\ng\n"));
 	TEST_ASSERT_NULL(parseText("@ g 1 grass shape=half extra\ng\n"));
+	/* T17: a 3..8-token line with a junk token now FAILS the load (the
+	 * base silently ignored such tokens; only >8 was strict before). */
+	TEST_ASSERT_NULL(parseText("@ g 2 grass bogus\ng\n"));
 }
 
 /* voxmapBuildRawShaped copies the shape bytes; a NULL shape grid is all FULL. */
@@ -3087,7 +3094,9 @@ static void test_shape_culling_extra(void)
 		destroyVoxmap(withFull);
 		destroyVoxmap(without);
 	}
-	/* HALF top culled by a FULL above. */
+	/* Regression (T17 fix): a HALF's top is NEVER culled by a FULL above —
+	 * the surface is at y + 0.5, so the neighbour (base y + 1) leaves a 0.5
+	 * gap that is visible from a low side angle. RED before the fix. */
 	{
 		const float halfTop[4][3] = {
 			{ 0, 1.5f, 0 }, { 1, 1.5f, 0 }, { 1, 1.5f, 1 },
@@ -3098,10 +3107,162 @@ static void test_shape_culling_extra(void)
 		DrawItem out;
 
 		TEST_ASSERT_NOT_NULL(map);
-		TEST_ASSERT_FALSE(emitFindQuad(map, 0.0f, halfTop, &out));
+		TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, halfTop, &out));
+		TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
+		destroyVoxmap(map);
+	}
+	/* Regression (T17 fix): a HALF_RAMP's slope is likewise never culled by
+	 * a FULL above. */
+	{
+		const float slope[4][3] = {
+			{ 0, 1.5f, 0 }, { 1, 1.5f, 0 }, { 1, 1, 1 },
+			{ 0, 1, 1 },
+		};
+		Voxmap *map = parseText(
+			"@ r 1 stone shape=half-ramp dir=north\n@ F 1 stone\n.\n---\nr\n---\nF\n");
+		DrawItem out;
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, slope, &out));
+		TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
 		destroyVoxmap(map);
 	}
 	(void)topUV;
+}
+
+/* Test-local copy of voxmap's shadeChannel (multiply a 0..255 channel by a
+ * factor, clamp, round to nearest). */
+static uint8_t shapeShade(uint8_t c, float factor)
+{
+	float v = (float)c * factor;
+
+	if (v <= 0.0f)
+		return 0;
+	if (v >= 255.0f)
+		return 255;
+	return (uint8_t)(v + 0.5f);
+}
+
+/* Per-face-type light sampling (flat path, tint 240, even tile):
+ *   - HALF top samples the cell ABOVE the voxel (level y + 1);
+ *   - HALF side samples its base-level side neighbour;
+ *   - a ramp triangle flat-samples its side neighbour.
+ * Each expected tint is computed from lightGridFactorAt at the target cell. */
+static void test_shape_light_per_face_type(void)
+{
+	/* HALF top samples (0, 2, 0). */
+	{
+		Voxmap *map = shapeSlice1("@ H 1 stone shape=half\n", "H");
+		LightGrid *g = lightGridCreate(1, 1, 3);
+		DrawList list;
+		Camera3D cam;
+		uint8_t f[3];
+		const float topUV[4][2] = ATLAS_UV_TOP;
+		const DrawItem *top = NULL;
+		uint32_t expect;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_NOT_NULL(g);
+		lightGridSeedPoint(g, 0.5f, 2.5f, 0.5f, 200.0f, 200.0f, 200.0f,
+				   0.0f);
+		lightGridPropagate(g, map);
+		lightGridFactorAt(g, 0, 2, 0, f);
+		initDrawList(&list, 16);
+		initCamera3D(&cam);
+		voxmapEmitFaces(map, NULL, g, &list, &cam,
+				DRAW_TINT(240, 240, 240, 240));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (itemHasUV(drawListItem(&list, i), topUV))
+				top = drawListItem(&list, i);
+		TEST_ASSERT_NOT_NULL(top);
+		expect = DRAW_TINT(shapeShade(240, (float)f[0] / 255.0f),
+				   shapeShade(240, (float)f[1] / 255.0f),
+				   shapeShade(240, (float)f[2] / 255.0f), 240);
+		TEST_ASSERT_EQUAL_INT((int)expect, (int)top->tint);
+		destroyDrawList(&list);
+		destroyLightGrid(g);
+		destroyVoxmap(map);
+	}
+	/* HALF side samples (0, 1, 1), base level 1, shade +Z 0.90. */
+	{
+		Voxmap *map = parseText(
+			"@ H 1 stone shape=half\n..\n..\n---\nH.\n..\n");
+		LightGrid *g = lightGridCreate(1, 2, 3);
+		DrawList list;
+		Camera3D cam;
+		uint8_t f[3];
+		const DrawItem *side;
+		uint32_t expect;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_NOT_NULL(g);
+		lightGridSeedPoint(g, 0.5f, 1.5f, 1.5f, 200.0f, 200.0f, 200.0f,
+				   0.0f);
+		lightGridPropagate(g, map);
+		lightGridFactorAt(g, 0, 1, 1, f);
+		initDrawList(&list, 16);
+		initCamera3D(&cam);
+		voxmapEmitFaces(map, NULL, g, &list, &cam,
+				DRAW_TINT(240, 240, 240, 240));
+		side = findPlusZSideAt(&list, 0);
+		TEST_ASSERT_NOT_NULL(side);
+		expect = DRAW_TINT(
+			shapeShade(240, VOXMAP_SHADE_SIDE_PZ * (float)f[0] / 255.0f),
+			shapeShade(240, VOXMAP_SHADE_SIDE_PZ * (float)f[1] / 255.0f),
+			shapeShade(240, VOXMAP_SHADE_SIDE_PZ * (float)f[2] / 255.0f),
+			240);
+		TEST_ASSERT_EQUAL_INT((int)expect, (int)side->tint);
+		/* The side spans y1..y1.5 (0.5 high). */
+		TEST_ASSERT_FLOAT_WITHIN(EPS, 1.0f, side->worldQuad[0][1]);
+		TEST_ASSERT_FLOAT_WITHIN(EPS, 1.5f, side->worldQuad[2][1]);
+		(void)i;
+		destroyDrawList(&list);
+		destroyLightGrid(g);
+		destroyVoxmap(map);
+	}
+	/* A ramp's east triangle flat-samples (1, 1, 0), shade +X 0.80. */
+	{
+		Voxmap *map = parseText(
+			"@ R 1 stone shape=ramp dir=north\n..\n---\nR.\n");
+		LightGrid *g = lightGridCreate(2, 1, 3);
+		DrawList list;
+		Camera3D cam;
+		uint8_t f[3];
+		const float tri[4][3] = {
+			{ 1, 1, 0 }, { 1, 2, 0 }, { 1, 1, 1 }, { 1, 1, 1 },
+		};
+		const DrawItem *item = NULL;
+		uint32_t expect;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_NOT_NULL(g);
+		lightGridSeedPoint(g, 1.5f, 1.5f, 0.5f, 200.0f, 200.0f, 200.0f,
+				   0.0f);
+		lightGridPropagate(g, map);
+		lightGridFactorAt(g, 1, 1, 0, f);
+		initDrawList(&list, 16);
+		shapeSetYaw(&cam, 90.0f);
+		voxmapEmitFaces(map, NULL, g, &list, &cam,
+				DRAW_TINT(240, 240, 240, 240));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (quadMatches(drawListItem(&list, i), tri))
+				item = drawListItem(&list, i);
+		TEST_ASSERT_NOT_NULL(item);
+		expect = DRAW_TINT(
+			shapeShade(240, VOXMAP_SHADE_SIDE_PX * (float)f[0] / 255.0f),
+			shapeShade(240, VOXMAP_SHADE_SIDE_PX * (float)f[1] / 255.0f),
+			shapeShade(240, VOXMAP_SHADE_SIDE_PX * (float)f[2] / 255.0f),
+			240);
+		TEST_ASSERT_EQUAL_INT((int)expect, (int)item->tint);
+		/* Every corner carries the same flat side sample. */
+		TEST_ASSERT_EQUAL_INT((int)item->tint, (int)item->cornerTint[2]);
+		destroyDrawList(&list);
+		destroyLightGrid(g);
+		destroyVoxmap(map);
+	}
 }
 
 /* Query guard edges: each out-of-range axis, NULL, and a non-ramp dir. */
@@ -3321,6 +3482,7 @@ void run_test_voxmap(void)
 	RUN_TEST(test_legend_shape_malformed);
 	RUN_TEST(test_build_raw_shaped);
 	RUN_TEST(test_shape_culling_extra);
+	RUN_TEST(test_shape_light_per_face_type);
 	RUN_TEST(test_shape_query_guard_edges);
 	RUN_TEST(test_ramp_bottom_culling);
 	RUN_TEST(test_triangle_debug_view);

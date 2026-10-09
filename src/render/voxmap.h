@@ -46,14 +46,19 @@
  * width check).
  *
  * Legend lines (anywhere in the file; skipped when counting map rows):
- *   @ <char> <height> <material>
+ *   @ <char> <height> <material> [shape=…] [dir=…]
  * map a single character to a height (0..9; 0 = a solid ground-level cell) and
- * a material name. The '@' may be attached to the char (`@g 2 grass`). A legend
- * char overrides the built-in default for that char. Digits 0..9 default to
- * height = digit with the "default" material; '.' defaults to void. A legend
- * naming a material absent from the table logs a diagnostic and falls back to
- * the "default" material. A legend line whose char is not a single ASCII byte
- * (< 128) is skipped with a diagnostic (it cannot index the legend table).
+ * a material name, plus the optional shape attributes (see SHAPES). The '@' may
+ * be attached to the char (`@g 2 grass`). A legend char overrides the built-in
+ * default for that char. Digits 0..9 default to height = digit with the
+ * "default" material; '.' defaults to void. A legend naming a material absent
+ * from the table logs a diagnostic and falls back to the "default" material. A
+ * legend line whose char is not a single ASCII byte (< 128) is skipped with a
+ * diagnostic (it cannot index the legend table). The shape/dir attributes may
+ * appear in either order but only AFTER the material; any other extra token
+ * makes the line malformed and the load fails. (The pre-T17 base silently
+ * ignored extra tokens up to the 8-token cap; the attributes reuse that budget,
+ * so a junk token that used to be ignored now fails.)
  *
  * Light lines (anywhere in the file; also skipped when counting map rows):
  *   $ point x y z r g b [radius]
@@ -195,14 +200,20 @@
  * slope quad maps its four corners to the TOP slot's standard oriented 4-corner
  * UV in order.
  *
- * CULLING (conservative, documented). Axis-aligned faces (top/bottom/sides) and
- * the back face are culled when the facing NEIGHBOUR voxel is FULL (a FULL
- * neighbour fully hides them); the slope quad is culled when the cell above is
- * FULL; triangles cull against a FULL side neighbour in their own direction.
+ * CULLING (conservative, documented). Bottom faces, sides and a ramp's back
+ * face are culled when the facing NEIGHBOUR voxel is FULL (a FULL neighbour
+ * fully hides them); triangles cull against a FULL side neighbour in their own
+ * direction. The surface ABOVE is special: a FULL voxel's top culls against a
+ * FULL above, and a full RAMP's slope culls against a FULL above (its surface
+ * reaches y + 1, meeting the neighbour's base), but a HALF's top and a
+ * HALF_RAMP's slope are NEVER culled by the neighbour above — their surface is
+ * at y + 0.5, so a FULL voxel above (base y + 1) leaves a 0.5 air gap that is
+ * visible from a low side angle; culling would be a see-through. (The only
+ * cost is a tiny from-above overdraw when the cell above is FULL, acceptable.)
  * Shape-vs-shape adjacencies can therefore overdraw (faces hidden inside a
  * neighbouring half/ramp are still emitted) — "visible faces only" is preserved
  * against true solids and against air, and the overdraw is only ever between
- * two shapes, always sorted behind the surface that occludes it. A shaper's
+ * two shapes, always sorted behind the surface that occludes it. A shape's
  * side face is also camera-culled by the existing dot test (the back face and
  * the triangles use their own outward normal), so a shape's hidden sides are
  * dropped at an axis-aligned yaw exactly as a full voxel's are.

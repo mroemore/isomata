@@ -1662,11 +1662,13 @@ static void emitShapeFaces(const Voxmap *map, DrawList *list, int x, int y,
 	if (shape == VOXMAP_SHAPE_HALF) {
 		int d;
 
-		if (!voxmapFullAt(map, x, y + 1, z)) {
-			materialUV(materials, id, FACE_TOP, uv);
-			emitTop(list, x, z, fy + 0.5f, y + 1, uv, alpha,
-				opts->tint, lights, opts, debugUV);
-		}
+		/* The top is at y + 0.5, so a FULL voxel above (base y + 1)
+		 * leaves a 0.5 air gap: the top is always visible from a low
+		 * side angle and is NEVER culled by the neighbour above (see
+		 * the header; only the from-above overdraw is possible). */
+		materialUV(materials, id, FACE_TOP, uv);
+		emitTop(list, x, z, fy + 0.5f, y + 1, uv, alpha, opts->tint,
+			lights, opts, debugUV);
 		if (y > 0 && !voxmapFullAt(map, x, y - 1, z)) {
 			materialUV(materials, id, FACE_BOTTOM, uv);
 			emitBottom(list, x, z, fy, y - 1, uv, alpha, opts->tint,
@@ -1704,7 +1706,12 @@ static void emitShapeFaces(const Voxmap *map, DrawList *list, int x, int y,
 			emitSide(list, x, z, backSide, fy, fy + rise, uv, alpha,
 				 opts->tint, lights, opts, debugUV);
 		}
-		if (!voxmapFullAt(map, x, y + 1, z)) {
+		/* A HALF_RAMP's slope tops out at y + 0.5, so a FULL above
+		 * leaves a gap and the slope is never culled by it. A full RAMP
+		 * reaches y + 1, meeting the neighbour's base, so it keeps the
+		 * cull (see the header). */
+		if (shape == VOXMAP_SHAPE_HALF_RAMP ||
+		    !voxmapFullAt(map, x, y + 1, z)) {
 			float q[4][3];
 
 			rampSlopeQuad(x, y, z, dir, rise, q);
