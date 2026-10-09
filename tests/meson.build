@@ -98,14 +98,14 @@ if not meson.is_cross_build()
 	# T13b equivalence pin (SDL tier): decode the committed PNG slice
 	# directory with the real SDL glue and assert the assembled Voxmap is
 	# identical to the ASCII demo. Native-only (decodes real PNGs); its own
-	# main(). map_loader.c is the SDL-tier glue (also compiled into the app).
+	# main(). Links the shared isomata_glue (map_loader.c) so its coverage is
+	# captured (a root-level target keeps the object names flat).
 	test_pngmap_exe = executable('test_pngmap',
 		'test_pngmap.c',
 		'unity.c',
-		'../src/render/map_loader.c',
 		include_directories : ctol_inc,
 		dependencies : engine_deps,
-		link_with : ctol_lib,
+		link_with : [ctol_lib, isomata_glue],
 	)
 	test('pngmap equivalence', test_pngmap_exe,
 		env : [

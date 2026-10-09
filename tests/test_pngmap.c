@@ -147,6 +147,117 @@ static void test_loader_missing_directory(void)
 	TEST_ASSERT_NULL(loadVoxmapDirectory(NULL, &materials, NULL));
 }
 
+/* Build a fresh empty directory under the build tree. */
+static void freshDir(const char *leaf, char *out, size_t outSize)
+{
+	const char *base = SDL_GetBasePath();
+
+	SDL_snprintf(out, outSize, "%stmp_pngmap_%s", base != NULL ? base : "",
+		     leaf);
+	SDL_RemovePath(out);
+	TEST_ASSERT_TRUE(SDL_CreateDirectory(out));
+}
+
+/* A directory with no PNG, a PNG with no legend, and a corrupt PNG are all
+ * clean NULLs (never a crash), so the app's fallback is always reachable. */
+static void test_loader_bad_directories(void)
+{
+	MaterialTable materials;
+	char dir[1024];
+	char file[1200];
+	char legend[1200];
+	const char garbage[] = "definitely not a png";
+	void *pngData;
+	size_t pngSize = 0;
+	char src[1024];
+
+	buildMaterials(&materials);
+
+	/* No PNG at all. */
+	freshDir("empty", dir, sizeof(dir));
+	TEST_ASSERT_NULL(loadVoxmapDirectory(dir, &materials, NULL));
+	TEST_ASSERT_TRUE(SDL_RemovePath(dir));
+
+	/* A valid PNG but no legend.txt. */
+	freshDir("nolegend", dir, sizeof(dir));
+	assetPath("maps/demo/00.png", src, sizeof(src));
+	pngData = SDL_LoadFile(src, &pngSize);
+	TEST_ASSERT_NOT_NULL(pngData);
+	SDL_snprintf(file, sizeof(file), "%s/00.png", dir);
+	TEST_ASSERT_TRUE(SDL_SaveFile(file, pngData, pngSize));
+	SDL_free(pngData);
+	TEST_ASSERT_NULL(loadVoxmapDirectory(dir, &materials, NULL));
+	TEST_ASSERT_TRUE(SDL_RemovePath(file));
+	TEST_ASSERT_TRUE(SDL_RemovePath(dir));
+
+	/* A corrupt PNG (with a legend) fails to decode. A short-named stray
+	 * file exercises the name filter's length guard. */
+	freshDir("corrupt", dir, sizeof(dir));
+	SDL_snprintf(file, sizeof(file), "%s/00.png", dir);
+	SDL_snprintf(legend, sizeof(legend), "%s/legend.txt", dir);
+	TEST_ASSERT_TRUE(SDL_SaveFile(file, garbage, sizeof(garbage) - 1));
+	TEST_ASSERT_TRUE(SDL_SaveFile(legend, "#00FF00 grass\n", 15));
+	SDL_snprintf(file, sizeof(file), "%s/x", dir);
+	TEST_ASSERT_TRUE(SDL_SaveFile(file, "x", 1));
+	TEST_ASSERT_NULL(loadVoxmapDirectory(dir, &materials, NULL));
+	SDL_snprintf(file, sizeof(file), "%s/x", dir);
+	TEST_ASSERT_TRUE(SDL_RemovePath(file));
+	SDL_snprintf(file, sizeof(file), "%s/00.png", dir);
+	TEST_ASSERT_TRUE(SDL_RemovePath(file));
+	TEST_ASSERT_TRUE(SDL_RemovePath(legend));
+	TEST_ASSERT_TRUE(SDL_RemovePath(dir));
+}
+
+/* Two slices of different sizes fail assembly (the loader reports NULL and the
+ * app falls back); a successful load with a NULL outSlices is also fine. */
+static void test_loader_mismatched_slices(void)
+{
+	MaterialTable materials;
+	char dir[1024];
+	char file[1200];
+	char legend[1200];
+	char src[1024];
+	void *pngData;
+	size_t pngSize = 0;
+	SDL_Surface *small;
+
+	buildMaterials(&materials);
+	freshDir("mismatch", dir, sizeof(dir));
+
+	assetPath("maps/demo/00.png", src, sizeof(src));
+	pngData = SDL_LoadFile(src, &pngSize);
+	TEST_ASSERT_NOT_NULL(pngData);
+	SDL_snprintf(file, sizeof(file), "%s/00.png", dir);
+	TEST_ASSERT_TRUE(SDL_SaveFile(file, pngData, pngSize));
+	SDL_free(pngData);
+
+	small = SDL_CreateSurface(2, 2, SDL_PIXELFORMAT_RGBA32);
+	TEST_ASSERT_NOT_NULL(small);
+	SDL_snprintf(file, sizeof(file), "%s/01.png", dir);
+	TEST_ASSERT_TRUE(SDL_SavePNG(small, file));
+	SDL_DestroySurface(small);
+
+	SDL_snprintf(legend, sizeof(legend), "%s/legend.txt", dir);
+	TEST_ASSERT_TRUE(SDL_SaveFile(legend, "#00FF00 grass\n", 15));
+	TEST_ASSERT_NULL(loadVoxmapDirectory(dir, &materials, NULL));
+
+	SDL_snprintf(file, sizeof(file), "%s/00.png", dir);
+	TEST_ASSERT_TRUE(SDL_RemovePath(file));
+	SDL_snprintf(file, sizeof(file), "%s/01.png", dir);
+	TEST_ASSERT_TRUE(SDL_RemovePath(file));
+	TEST_ASSERT_TRUE(SDL_RemovePath(legend));
+	TEST_ASSERT_TRUE(SDL_RemovePath(dir));
+
+	/* A real directory load with a NULL outSlices. */
+	assetPath("maps/demo", dir, sizeof(dir));
+	{
+		Voxmap *map = loadVoxmapDirectory(dir, &materials, NULL);
+
+		TEST_ASSERT_NOT_NULL(map);
+		destroyVoxmap(map);
+	}
+}
+
 int main(void)
 {
 	int rc;
@@ -161,6 +272,8 @@ int main(void)
 	UNITY_BEGIN();
 	RUN_TEST(test_png_slices_equal_ascii_demo);
 	RUN_TEST(test_loader_missing_directory);
+	RUN_TEST(test_loader_bad_directories);
+	RUN_TEST(test_loader_mismatched_slices);
 	rc = UNITY_END();
 	SDL_Quit();
 	return rc;

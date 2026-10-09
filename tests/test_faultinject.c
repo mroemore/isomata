@@ -22,6 +22,7 @@
 #include "input/input.h"
 #include "render/drawlist.h"
 #include "render/lightgrid.h"
+#include "render/mapsource.h"
 #include "render/voxmap.h"
 #include "scene.h"
 
@@ -274,6 +275,41 @@ static int test_lightgrid_alloc_failures(void)
 	return 0;
 }
 
+/* mapSourceAssembleSlices: the solid/material arrays plus the Voxmap it builds
+ * are the only allocations; each failure index must yield NULL with nothing
+ * leaked. */
+static int test_mapsource_alloc_failures(void)
+{
+	MapSourceLegend legend;
+	MapSourceImage img;
+	uint8_t buf[4] = { 0, 255, 0, 255 };
+	long n;
+
+	memset(&legend, 0, sizeof(legend));
+	legend.colors[0].rgb = 0x00FF00u;
+	legend.colors[0].material = 1;
+	legend.colorCount = 1;
+	img.width = 1;
+	img.height = 1;
+	img.rgba = buf;
+	img.pitch = 4;
+
+	for (n = 0; n < FAIL_SWEEP_LIMIT; n++) {
+		Voxmap *map;
+
+		fi_reset();
+		fi_fail_after(n);
+		map = mapSourceAssembleSlices(&img, 1, &legend, "fi", NULL);
+		if (map != NULL)
+			destroyVoxmap(map);
+		else
+			ASSERT_TRUE(fi_failures() > 0);
+		fi_fail_after(-1);
+		ASSERT_EQ_INT(0, fi_live());
+	}
+	return 0;
+}
+
 int main(void)
 {
 	int failed = 0;
@@ -287,5 +323,6 @@ int main(void)
 	RUN(test_achievement_alloc_failures);
 	RUN(test_voxmap_alloc_failures);
 	RUN(test_lightgrid_alloc_failures);
+	RUN(test_mapsource_alloc_failures);
 	HARNESS_SUMMARY("faultinject");
 }

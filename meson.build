@@ -85,6 +85,15 @@ isomata_pure = static_library('isomata_pure', ctol_sources,
 	dependencies : ctol_deps,
 )
 
+# SDL-tier glue shared by the app and the pngmap equivalence test. A ROOT-level
+# target keeps its object names flat so lcov captures its coverage (the
+# `.._src_...` names a target in tests/ would produce are dropped by lcov 1.x —
+# see the isomata_pure note). map_loader.c is the only member today.
+isomata_glue = static_library('isomata_glue', 'src/render/map_loader.c',
+	include_directories : ctol_inc,
+	dependencies : [sdl3_dep],
+)
+
 # The desktop twin: platform.c is compiled here; the Android twin
 # (platform_android.c) is compiled only by android/app/jni/CMakeLists.txt.
 # input_sdl.c is the SDL glue for the pure input core (the only input file
@@ -97,7 +106,6 @@ engine_sources = [
 	'src/input/input_sdl.c',
 	'src/audio/audio.c',
 	'src/render/gpu_backend.c',
-	'src/render/map_loader.c',
 	'src/ui/ui_font.c',
 	'src/ui/ui_gpu.c',
 	'src/scenes/menu_scene.c',
@@ -110,7 +118,7 @@ isomata_exe = executable('isomata',
 	engine_sources + ['src/main.c'],
 	include_directories : include_directories('src'),
 	dependencies : engine_deps,
-	link_with : isomata_pure,
+	link_with : [isomata_pure, isomata_glue],
 	install : true,
 )
 

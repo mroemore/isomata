@@ -101,6 +101,12 @@ src/audio/audio.c		29
 src/render/math3d.c		100
 src/render/camera3d.c		100
 src/render/gpu_backend.c	0
+# T13b: the SDL-tier PNG slice directory loader (directory enumeration +
+# SDL_LoadPNG + the pure assembler). Exercised by the native-only pngmap
+# equivalence test (it decodes the committed demo slices), measured 76.0
+# under the native coverage build; the untaken arms are the OOM / over-long
+# path / >256-slice / surface-convert failure returns.
+src/render/map_loader.c		76
 
 # Task 8: the voxmap/drawlist/sprite tier (all pure; the GPU upload path lives
 # in gpu_backend.c above). Floors are the measured branch % under the headless
@@ -126,7 +132,16 @@ src/render/gpu_backend.c	0
 # rises 95.4 -> 96.3 and the floor ratchets 95 -> 96. (Unreachable defensive
 # arms were removed rather than excused; the remaining untaken arms are the
 # file-I/O failure returns and the empty-heightmap depth arm.)
+# T13b adds the voxmapBuildRaw / voxmapParseLightLine entry points the PNG
+# assembler/loader reuse; the mapsource suite covers them, so the measured
+# value eases 96.3 -> 96.0 (still above the floor).
 src/render/voxmap.c		96
+# T13b: the pure PNG slice source (natural sort, colour legend, slice
+# assembly). The twin suite covers every reachable arm (ordering, duplicate/
+# malformed legend lines, overflow guards, assembler size guards, alpha
+# threshold, the OOM arms via fault injection); measured 98.4. The three
+# untaken arms are defensive compound-condition edges in the sort comparer.
+src/render/mapsource.c		98
 # Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
 # beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
 # unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS

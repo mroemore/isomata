@@ -72,10 +72,14 @@ static void test_natural_sort_basic(void)
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("9.png", "10.png") < 0);
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("10.png", "9.png") > 0);
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("2.png", "10.png") < 0);
+	TEST_ASSERT_TRUE(mapSourceNaturalCompare("12.png", "13.png") < 0);
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("img2.png", "img12.png") < 0);
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("img12.png", "img2.png") > 0);
 	TEST_ASSERT_EQUAL_INT(0, mapSourceNaturalCompare("7.png", "7.png"));
 	TEST_ASSERT_TRUE(mapSourceNaturalCompare("a.png", "b.png") < 0);
+	TEST_ASSERT_TRUE(mapSourceNaturalCompare("b.png", "a.png") > 0);
+	TEST_ASSERT_TRUE(mapSourceNaturalCompare("ab.png", "a.png") > 0);
+	TEST_ASSERT_TRUE(mapSourceNaturalCompare("a.png", "1.png") > 0);
 }
 
 /* Equal numeric value orders by fewer leading zeros first. */
@@ -242,6 +246,31 @@ static void test_legend_overflow_colours_and_lights(void)
 	TEST_ASSERT_EQUAL_INT(2, lg.overflowLights);
 }
 
+/* Whitespace handling: blank lines, leading tabs, tab separators, trailing
+ * spaces, a missing final newline, and a line with too many tokens. */
+static void test_legend_whitespace_and_extra_tokens(void)
+{
+	MapSourceLegend lg;
+	const char *text =
+		"#00ff00 grass\n"
+		"\n"
+		"   \n"
+		"#808080\tstone\n"
+		"  #0000FF sixface\n"
+		"\t$ point 1 2 3 4 5 6\n"
+		"#A0522D wood extra more five\n"
+		"#-12345 grass\n"
+		"#gggggg grass\n"
+		"#FF00FF foliage   ";
+
+	TEST_ASSERT_TRUE(mapSourceLegendParse(text, strlen(text), NULL, &lg));
+	TEST_ASSERT_EQUAL_INT(4, lg.colorCount);	/* grass, stone, sixface, foliage */
+	TEST_ASSERT_EQUAL_INT(3, lg.badLines);		/* 5 tokens, -, gggggg */
+	TEST_ASSERT_EQUAL_INT(1, lg.lightCount);
+	TEST_ASSERT_EQUAL_INT(0, mapSourceColorLookup(&lg, 0x0000FFu));
+	TEST_ASSERT_EQUAL_INT(0, mapSourceColorLookup(&lg, 0xFF00FFu));
+}
+
 /* --- assembly ---------------------------------------------------------- */
 
 /* 2x2 x 2 levels. Level 0: grass, stone / air, grass. Level 1: air, air /
@@ -311,13 +340,13 @@ static void test_assemble_alpha_threshold(void)
 	destroyVoxmap(map);
 }
 
-/* An opaque colour absent from the legend is air and counted. */
+/* An opaque colour absent from the legend is air and counted (plural too). */
 static void test_assemble_unknown_colour_is_air(void)
 {
 	MapSourceLegend lg;
 	MapSourceImage img;
-	uint8_t buf[8];
-	Rgba px[2] = { C_RED, C_GRASS };
+	uint8_t buf[12];
+	Rgba px[3] = { C_RED, C_RED, C_GRASS };
 	MapSourceStats stats;
 	Voxmap *map;
 
@@ -325,13 +354,25 @@ static void test_assemble_unknown_colour_is_air(void)
 	lg.colors[0].rgb = 0x00FF00u;
 	lg.colors[0].material = 1;
 	lg.colorCount = 1;
-	makeImage(&img, buf, 2, 1, px);
+	makeImage(&img, buf, 3, 1, px);
 	map = mapSourceAssembleSlices(&img, 1, &lg, "unknown", &stats);
 	TEST_ASSERT_NOT_NULL(map);
 	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, 0, 0));
-	TEST_ASSERT_TRUE(voxmapSolidAt(map, 1, 0, 0));
-	TEST_ASSERT_EQUAL_INT(1, stats.unknownColorVoxels);
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 1, 0, 0));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 2, 0, 0));
+	TEST_ASSERT_EQUAL_INT(2, stats.unknownColorVoxels);
 	destroyVoxmap(map);
+
+	/* A singular unknown count also hits the singular diagnostic arm. */
+	{
+		Rgba one[1] = { C_RED };
+
+		makeImage(&img, buf, 1, 1, one);
+		map = mapSourceAssembleSlices(&img, 1, &lg, "one", &stats);
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_EQUAL_INT(1, stats.unknownColorVoxels);
+		destroyVoxmap(map);
+	}
 }
 
 /* The legend's lights are attached to the assembled map. */
@@ -395,6 +436,11 @@ static void test_assemble_malformed_inputs(void)
 	imgs[1].rgba = dummy;
 	imgs[1].pitch = 4;
 	TEST_ASSERT_NULL(mapSourceAssembleSlices(imgs, 2, &lg, "x", NULL));
+	/* Same width, different height (the second operand of the size check). */
+	imgs[1].width = 2;
+	imgs[1].height = 1;
+	imgs[1].pitch = 8;
+	TEST_ASSERT_NULL(mapSourceAssembleSlices(imgs, 2, &lg, "x", NULL));
 	/* Pitch too small. */
 	imgs[1].width = 2;
 	imgs[1].height = 2;
@@ -433,6 +479,40 @@ static void test_assemble_malformed_inputs(void)
 	TEST_ASSERT_NULL(mapSourceAssembleSlices(many, VOXMAP_MAX_DIM + 1,
 						 &lg, "x", NULL));
 	free(many);
+}
+
+/* Dimension guards (width/height below 1 or above the cap) and a NULL label
+ * are all clean failures; a NULL label on a valid map still assembles. */
+static void test_assemble_size_guards_and_null_label(void)
+{
+	MapSourceLegend lg;
+	MapSourceImage img;
+	uint8_t buf[4] = { 0, 255, 0, 255 };
+	Voxmap *map;
+
+	memset(&lg, 0, sizeof(lg));
+	lg.colors[0].rgb = 0x00FF00u;
+	lg.colors[0].material = 1;
+	lg.colorCount = 1;
+	img.rgba = buf;
+	img.pitch = 4;
+
+	img.width = 0;
+	img.height = 1;
+	TEST_ASSERT_NULL(mapSourceAssembleSlices(&img, 1, &lg, NULL, NULL));
+	img.width = 1;
+	img.height = 0;
+	TEST_ASSERT_NULL(mapSourceAssembleSlices(&img, 1, &lg, NULL, NULL));
+	img.width = 1;
+	img.height = VOXMAP_MAX_DIM + 1;
+	TEST_ASSERT_NULL(mapSourceAssembleSlices(&img, 1, &lg, NULL, NULL));
+
+	img.width = 1;
+	img.height = 1;
+	map = mapSourceAssembleSlices(&img, 1, &lg, NULL, NULL);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 0, 0));
+	destroyVoxmap(map);
 }
 
 /* --- voxmap entry points used by the glue ------------------------------ */
@@ -485,8 +565,13 @@ static void test_voxmap_build_raw(void)
 
 	/* Out-of-range dimensions and an over-large volume are NULL. */
 	TEST_ASSERT_NULL(voxmapBuildRaw(0, 1, 1, NULL, NULL, NULL, 0));
+	TEST_ASSERT_NULL(voxmapBuildRaw(1, 0, 1, NULL, NULL, NULL, 0));
 	TEST_ASSERT_NULL(voxmapBuildRaw(1, 1, 0, NULL, NULL, NULL, 0));
 	TEST_ASSERT_NULL(voxmapBuildRaw(VOXMAP_MAX_DIM + 1, 1, 1, NULL, NULL,
+					NULL, 0));
+	TEST_ASSERT_NULL(voxmapBuildRaw(1, VOXMAP_MAX_DIM + 1, 1, NULL, NULL,
+					NULL, 0));
+	TEST_ASSERT_NULL(voxmapBuildRaw(1, 1, VOXMAP_MAX_DIM + 1, NULL, NULL,
 					NULL, 0));
 	TEST_ASSERT_NULL(voxmapBuildRaw(256, 256, 17, NULL, NULL, NULL, 0));
 }
@@ -508,11 +593,13 @@ void run_test_mapsource(void)
 	RUN_TEST(test_legend_null_args);
 	RUN_TEST(test_legend_malformed_light_lines);
 	RUN_TEST(test_legend_overflow_colours_and_lights);
+	RUN_TEST(test_legend_whitespace_and_extra_tokens);
 	RUN_TEST(test_assemble_exact_occupancy_and_materials);
 	RUN_TEST(test_assemble_alpha_threshold);
 	RUN_TEST(test_assemble_unknown_colour_is_air);
 	RUN_TEST(test_assemble_attaches_lights);
 	RUN_TEST(test_assemble_malformed_inputs);
+	RUN_TEST(test_assemble_size_guards_and_null_label);
 	RUN_TEST(test_voxmap_parse_light_line_public);
 	RUN_TEST(test_voxmap_build_raw);
 }

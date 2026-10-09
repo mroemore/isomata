@@ -1,0 +1,12 @@
+# Extra sources compiled alongside fuzz_mapsource.c (one path per line,
+# relative to the repo root). mapsource.c reuses voxmapParseLightLine (voxmap.c)
+# and materialIdByName (materials.c); voxmap.c references the drawlist/camera/
+# math3d tier from voxmapEmitFaces, so the whole pure render tier is linked.
+src/render/mapsource.c
+src/render/voxmap.c
+src/render/lightgrid.c
+src/render/materials.c
+src/render/atlas.c
+src/render/drawlist.c
+src/render/camera3d.c
+src/render/math3d.c

@@ -57,13 +57,15 @@ static int tokenize(char *line, char **tokens, int max)
 	return n;
 }
 
-/* Parse a "#RRGGBB" token (exactly 7 chars, case-insensitive hex). */
+/* Parse a "#RRGGBB" token (exactly 7 chars, case-insensitive hex). The caller
+ * only passes a token that starts with '#' (it comes from a '#'-prefixed
+ * line), so only the length and the hex digits need checking. */
 static bool parseHexColor(const char *tok, uint32_t *out)
 {
 	uint32_t v = 0;
 	int i;
 
-	if (tok == NULL || tok[0] != '#' || strlen(tok) != 7)
+	if (strlen(tok) != 7)
 		return false;
 	for (i = 1; i <= 6; i++) {
 		int nib = hexNibble(tok[i]);
@@ -74,6 +76,12 @@ static bool parseHexColor(const char *tok, uint32_t *out)
 	}
 	*out = v;
 	return true;
+}
+
+/* A display label for diagnostics ("<map>" when the caller passed NULL). */
+static const char *mapLabel(const char *label)
+{
+	return label != NULL ? label : "<map>";
 }
 
 /* --- natural sort ------------------------------------------------------- */
@@ -223,10 +231,7 @@ bool mapSourceLegendParse(const char *text, size_t length,
 		if (pos < length)
 			pos++;
 		rowLen = end - start;
-		while (rowLen > 0 &&
-		       (text[start + rowLen - 1] == '\r' ||
-			text[start + rowLen - 1] == ' ' ||
-			text[start + rowLen - 1] == '\t'))
+		while (rowLen > 0 && text[start + rowLen - 1] == '\r')
 			rowLen--;
 		i = start;
 		while (i < start + rowLen &&
@@ -307,7 +312,7 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 	}
 	if (images == NULL || legend == NULL || count < 1) {
 		fprintf(stderr, "mapsource: '%s' no slices\n",
-			label != NULL ? label : "<map>");
+			mapLabel(label));
 		return NULL;
 	}
 	width = images[0].width;
@@ -316,19 +321,19 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 	if (width < 1 || height < 1 || width > VOXMAP_MAX_DIM ||
 	    height > VOXMAP_MAX_DIM || levels > VOXMAP_MAX_DIM) {
 		fprintf(stderr, "mapsource: '%s' bad slice size %dx%d x %d\n",
-			label != NULL ? label : "<map>", width, height, levels);
+			mapLabel(label), width, height, levels);
 		return NULL;
 	}
 	for (s = 0; s < levels; s++) {
 		if (images[s].rgba == NULL) {
 			fprintf(stderr, "mapsource: '%s' slice %d has no pixels\n",
-				label != NULL ? label : "<map>", s);
+				mapLabel(label), s);
 			return NULL;
 		}
 		if (images[s].width != width || images[s].height != height) {
 			fprintf(stderr,
 				"mapsource: '%s' slice %d is %dx%d, expected %dx%d\n",
-				label != NULL ? label : "<map>", s,
+				mapLabel(label), s,
 				images[s].width, images[s].height, width,
 				height);
 			return NULL;
@@ -336,14 +341,14 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 		if (images[s].pitch < (size_t)width * 4u) {
 			fprintf(stderr,
 				"mapsource: '%s' slice %d pitch too small\n",
-				label != NULL ? label : "<map>", s);
+				mapLabel(label), s);
 			return NULL;
 		}
 	}
 	n = (size_t)width * (size_t)height * (size_t)levels;
 	if (n > VOXMAP_MAX_CELLS) {
 		fprintf(stderr, "mapsource: '%s' map too large (%zux%dx%d)\n",
-			label != NULL ? label : "<map>", (size_t)width,
+			mapLabel(label), (size_t)width,
 			height, levels);
 		return NULL;
 	}
@@ -353,7 +358,7 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 		free(solid);
 		free(mats);
 		fprintf(stderr, "mapsource: '%s' out of memory\n",
-			label != NULL ? label : "<map>");
+			mapLabel(label));
 		return NULL;
 	}
 	memset(mats, 0xFF, n * sizeof(*mats));	/* -1 = air */
@@ -395,13 +400,13 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 	free(mats);
 	if (map == NULL) {
 		fprintf(stderr, "mapsource: '%s' voxmap build failed\n",
-			label != NULL ? label : "<map>");
+			mapLabel(label));
 		return NULL;
 	}
 	if (unknown > 0)
 		fprintf(stderr,
 			"mapsource: '%s' %d voxel%s used a colour absent from the legend; treated as air\n",
-			label != NULL ? label : "<map>", unknown,
+			mapLabel(label), unknown,
 			unknown == 1 ? "" : "s");
 	if (outStats != NULL) {
 		outStats->levels = levels;
