@@ -6,8 +6,10 @@
  * INDEPENDENT oracle for the documented format (rows split on '\n', trailing
  * CR/space/tab stripped, blank and `@` legend lines skipped, equal non-blank
  * non-legend row widths, cells are '.', '0'..'9' or a char declared by a
- * legend line, '0'/'.' and a legend height 0 are void, bounded dims). A mutant
- * whose parse disagrees with the oracle is a survivor and fails the target.
+ * legend line, '.' is void while '0' and a legend height 0 are SOLID height-0
+ * cells, a legend line with a char >= 128 is skipped, bounded dims). A
+ * mutant whose parse disagrees with the oracle is a survivor and fails the
+ * target.
  *
  * Deterministic: the sweep is driven by tests/support/mutate.c with the seed
  * from MUTATE_SEED (default 1), so a survivor is reproducible from the seed.
@@ -148,6 +150,8 @@ static void oracleBuild(const unsigned char *text, size_t length, Oracle *o)
 				o->valid = 0;
 				return;
 			}
+			if (ch >= 128)		/* unusable legend cell: skipped */
+				continue;
 			if (strlen(tok[hIdx]) != 1 || tok[hIdx][0] < '0' ||
 			    tok[hIdx][0] > '9') {
 				o->valid = 0;

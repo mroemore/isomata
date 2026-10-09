@@ -651,7 +651,8 @@ static bool createAtlas(GpuBackend *gpu, const char *texturesDir)
 		if (surfaces[i] != NULL)
 			atlasBlitPixels(pixels, layout.width, layout.height, x,
 					y, surfaces[i]->pixels, surfaces[i]->w,
-					surfaces[i]->h, (int)surfaces[i]->pitch);
+					surfaces[i]->h, (int)surfaces[i]->pitch,
+					layout.cellSize);
 		else
 			atlasFillFallbackCell(pixels, layout.width, layout.height,
 					      x, y, sizes[i]);

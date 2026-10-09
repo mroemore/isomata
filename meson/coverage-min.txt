@@ -131,7 +131,7 @@ src/render/frame.c		100
 # pure, twin suites). Floors at their measured branch %; the untaken arms are
 # the packer's clamp/guard edges and the manifest's malformed-input returns.
 src/render/atlas.c		95
-src/render/materials.c		89
+src/render/materials.c		90
 # Task 9: the pure Command -> UiIntent bridge. The commandToIntent default
 # (rotate/zoom/unknown) is reached by the unmapped-command test; the
 # command-consumed + same-frame-tap case is pinned by the final fix wave, so

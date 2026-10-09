@@ -75,13 +75,20 @@ bool atlasSlotRect(const AtlasLayout *layout, int slot, int srcSize,
 }
 
 bool atlasBlitPixels(uint8_t *dst, int dstW, int dstH, int dstX, int dstY,
-		     const uint8_t *src, int srcW, int srcH, int srcStride)
+		     const uint8_t *src, int srcW, int srcH, int srcStride,
+		     int cellSize)
 {
 	int row;
 
 	if (dst == NULL || src == NULL || dstW <= 0 || dstH <= 0 || srcW <= 0 ||
-	    srcH <= 0 || srcStride < srcW * 4)
+	    srcH <= 0 || srcStride < srcW * 4 || cellSize <= 0)
 		return false;
+	/* Never copy past the cell: a non-square (or oversized) source must not
+	 * smear into the next slot. */
+	if (srcW > cellSize)
+		srcW = cellSize;
+	if (srcH > cellSize)
+		srcH = cellSize;
 	for (row = 0; row < srcH; row++) {
 		int dy = dstY + row;
 		int copyW = srcW;

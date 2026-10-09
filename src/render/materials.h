@@ -106,7 +106,9 @@ int materialFileSlot(char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
  * in `fileNames` (fileCount entries, as packed into the atlas); that slot's UV
  * rect for `fileSizes[slot]` texels becomes the face's rect. Returns the number
  * of materials added, or -1 on a NULL argument. A file absent from `fileNames`
- * leaves that face's rect zeroed (emitters then fall back). */
+ * leaves that face's rect zeroed; the glue lists every referenced file, so that
+ * arm is unreachable there (and a zeroed rect would be a degenerate UV, not a
+ * fallback). */
 int materialTableBuild(MaterialTable *table, const MaterialManifest *manifest,
 		       char (*fileNames)[MATERIAL_PATH_MAX], int fileCount,
 		       const AtlasLayout *layout, const int *fileSizes);

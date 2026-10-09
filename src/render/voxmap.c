@@ -168,6 +168,16 @@ static bool parseLegend(const char *data, size_t start, size_t len,
 	} else {
 		return false;
 	}
+	/* A legend char must be a representable ASCII cell; a high byte cannot
+	 * index the legend table (and can never match a map cell, which the
+	 * validation pass rejects). Skip the entry and keep parsing: the line
+	 * is unusable, but it must not corrupt the rest of the map. */
+	if (ch >= LEGEND_CHARS) {
+		fprintf(stderr,
+			"voxmap: '%s' legend char 0x%02x is not a valid cell (>= %d); entry skipped\n",
+			label, (unsigned)ch, LEGEND_CHARS);
+		return true;
+	}
 	if (strlen(tokens[hIdx]) != 1 || tokens[hIdx][0] < '0' ||
 	    tokens[hIdx][0] > '9') {
 		fprintf(stderr, "voxmap: '%s' bad legend height '%s'\n", label,

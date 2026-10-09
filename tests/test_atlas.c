@@ -143,7 +143,7 @@ static void test_blit_copies_and_clips(void)
 		src[i * 4 + 2] = 30;
 		src[i * 4 + 3] = 40;
 	}
-	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 1, 1, src, 2, 2, 8));
+	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 1, 1, src, 2, 2, 8, 16));
 	/* (1,1) gets src texel 0. */
 	TEST_ASSERT_EQUAL_INT(10, dst[(1 * 4 + 1) * 4 + 0]);
 	TEST_ASSERT_EQUAL_INT(40, dst[(1 * 4 + 1) * 4 + 3]);
@@ -154,21 +154,21 @@ static void test_blit_copies_and_clips(void)
 
 	/* Partly off the right edge: only the in-bounds column lands. */
 	memset(dst, 0, sizeof(dst));
-	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 3, 0, src, 2, 2, 8));
+	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 3, 0, src, 2, 2, 8, 16));
 	TEST_ASSERT_EQUAL_INT(10, dst[(0 * 4 + 3) * 4 + 0]);
 	TEST_ASSERT_EQUAL_INT(0, dst[(0 * 4 + 0) * 4 + 0]);
 
 	/* Entirely off: a no-op success. */
 	memset(dst, 0, sizeof(dst));
-	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 100, 100, src, 2, 2, 8));
+	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, 100, 100, src, 2, 2, 8, 16));
 	for (i = 0; i < 16; i++)
 		TEST_ASSERT_EQUAL_INT(0, dst[i * 4]);
 
 	/* Bad args. */
-	TEST_ASSERT_FALSE(atlasBlitPixels(NULL, 4, 4, 0, 0, src, 2, 2, 8));
-	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 4, 4, 0, 0, NULL, 2, 2, 8));
-	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 4, 4, 0, 0, src, 2, 2, 4));
-	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 0, 4, 0, 0, src, 2, 2, 8));
+	TEST_ASSERT_FALSE(atlasBlitPixels(NULL, 4, 4, 0, 0, src, 2, 2, 8, 16));
+	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 4, 4, 0, 0, NULL, 2, 2, 8, 16));
+	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 4, 4, 0, 0, src, 2, 2, 4, 16));
+	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 0, 4, 0, 0, src, 2, 2, 8, 16));
 }
 
 /* The fallback cell is a magenta/black 8-texel checker, RGBA opaque, clipped
@@ -217,7 +217,7 @@ static void test_blit_and_fill_clip_edges(void)
 
 	memset(dst, 0, sizeof(dst));
 	memset(src, 7, sizeof(src));
-	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, -1, -1, src, 2, 2, 8));
+	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 4, 4, -1, -1, src, 2, 2, 8, 16));
 	/* (0,0) receives src texel (1,1) (the only in-bounds copy). */
 	TEST_ASSERT_EQUAL_INT(7, dst[0]);
 
@@ -232,6 +232,29 @@ static void test_blit_and_fill_clip_edges(void)
 	TEST_ASSERT_FALSE(atlasFillFallbackCell(dst, 4, 4, 0, 0, -2));
 }
 
+/* A source wider/taller than its cell is clipped to the cell, so it cannot
+ * smear into the next slot. */
+static void test_blit_clips_to_cell(void)
+{
+	uint8_t dst[8 * 8 * 4];
+	uint8_t src[4 * 4 * 4];
+	int i;
+
+	memset(dst, 0, sizeof(dst));
+	memset(src, 0, sizeof(src));
+	for (i = 0; i < 16; i++)
+		src[i * 4] = (uint8_t)(i + 1);
+	/* 4x4 source into a 2x2 cell at (0,0): only the top-left 2x2 lands. */
+	TEST_ASSERT_TRUE(atlasBlitPixels(dst, 8, 8, 0, 0, src, 4, 4, 16, 2));
+	TEST_ASSERT_EQUAL_INT(1, dst[(0 * 8 + 0) * 4]);
+	TEST_ASSERT_EQUAL_INT(2, dst[(0 * 8 + 1) * 4]);
+	TEST_ASSERT_EQUAL_INT(0, dst[(0 * 8 + 2) * 4]);	/* next cell col */
+	TEST_ASSERT_EQUAL_INT(5, dst[(1 * 8 + 0) * 4]);	/* row 1 */
+	TEST_ASSERT_EQUAL_INT(0, dst[(2 * 8 + 0) * 4]);	/* row 2 clipped */
+
+	TEST_ASSERT_FALSE(atlasBlitPixels(dst, 8, 8, 0, 0, src, 4, 4, 16, 0));
+}
+
 void run_test_atlas(void);
 
 void run_test_atlas(void)
@@ -244,4 +267,5 @@ void run_test_atlas(void)
 	RUN_TEST(test_blit_copies_and_clips);
 	RUN_TEST(test_fallback_cell_checker);
 	RUN_TEST(test_blit_and_fill_clip_edges);
+	RUN_TEST(test_blit_clips_to_cell);
 }

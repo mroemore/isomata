@@ -66,11 +66,14 @@ bool atlasSlotRect(const AtlasLayout *layout, int slot, int srcSize,
 		   AtlasRect *out);
 
 /* Copy a 4-bytes-per-pixel `srcW`x`srcH` source (row stride `srcStride`
- * bytes) into `dst` at (dstX, dstY), clipping to the destination bounds.
- * Returns false on a NULL pointer, a non-positive size, or a stride smaller
- * than srcW * 4. */
+ * bytes) into `dst` at (dstX, dstY), clipped to BOTH the destination bounds
+ * and a `cellSize`x`cellSize` cell anchored at (dstX, dstY), so a source wider
+ * or taller than its cell cannot smear into the neighbouring cells. Returns
+ * false on a NULL pointer, a non-positive size, or a stride smaller than
+ * srcW * 4. */
 bool atlasBlitPixels(uint8_t *dst, int dstW, int dstH, int dstX, int dstY,
-		     const uint8_t *src, int srcW, int srcH, int srcStride);
+		     const uint8_t *src, int srcW, int srcH, int srcStride,
+		     int cellSize);
 
 /* Fill a `size`x`size` region of `dst` at (x, y) with the generated fallback
  * pattern: an 8-texel magenta/black RGBA checker that reads as "missing

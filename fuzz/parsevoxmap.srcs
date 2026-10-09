@@ -1,8 +1,11 @@
 # Extra sources compiled alongside fuzz_parsevoxmap.c (one path per line,
 # relative to the repo root). voxmap.c references the drawlist/camera/math3d
-# tier from voxmapEmitFaces, so the whole pure render tier is linked even
-# though the harness only calls parseVoxmapText.
+# tier from voxmapEmitFaces and the material model from the legend/emission
+# path, so the whole pure render tier is linked even though the harness only
+# calls parseVoxmapText.
 src/render/voxmap.c
+src/render/materials.c
+src/render/atlas.c
 src/render/drawlist.c
 src/render/camera3d.c
 src/render/math3d.c

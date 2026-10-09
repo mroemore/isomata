@@ -24,7 +24,8 @@
  * char overrides the built-in default for that char. Digits 0..9 default to
  * height = digit with the "default" material; '.' defaults to void. A legend
  * naming a material absent from the table logs a diagnostic and falls back to
- * the "default" material.
+ * the "default" material. A legend line whose char is not a single ASCII byte
+ * (< 128) is skipped with a diagnostic (it cannot index the legend table).
  *
  * Two entry points share the parser: parseVoxmapText() takes an in-memory
  * buffer (used by the SDL tier for Android APK assets, which are not

@@ -1132,6 +1132,36 @@ static void test_emission_material_id_out_of_range(void)
 	destroyVoxmap(map);
 }
 
+/* A legend line whose char is a high byte (>= 128) must not write out of
+ * bounds: the entry is skipped and parsing continues (regression for the
+ * stack OOB in parseLegend). Both the spaced and attached forms are covered,
+ * and the high byte is never a valid cell. */
+static void test_legend_high_byte_char_skipped(void)
+{
+	MaterialTable t;
+	Voxmap *map;
+	const char *spaced = "@ \x80 2 grass\n@ g 2 grass\ngg\n";
+	const char *attached = "@\x80 2 grass\n@ g 3 grass\ng\n";
+
+	buildTestTable(&t);
+
+	map = parseVoxmapText(spaced, strlen(spaced), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapHeightAt(map, 0, 0));	/* later legend */
+	TEST_ASSERT_EQUAL_INT(2, voxmapHeightAt(map, 1, 0));
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));
+	destroyVoxmap(map);
+
+	map = parseVoxmapText(attached, strlen(attached), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(3, voxmapHeightAt(map, 0, 0));
+	destroyVoxmap(map);
+
+	/* The high byte was never registered: using it as a cell fails the load. */
+	TEST_ASSERT_NULL(parseVoxmapText("@ \x80 2 grass\n\x80\n",
+					 strlen("@ \x80 2 grass\n\x80\n"), &t));
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -1167,6 +1197,7 @@ void run_test_voxmap(void)
 	RUN_TEST(test_legend_maps_char_to_material);
 	RUN_TEST(test_legend_overrides_digit);
 	RUN_TEST(test_legend_height_zero_is_solid);
+	RUN_TEST(test_legend_high_byte_char_skipped);
 	RUN_TEST(test_legend_attached_and_spaced);
 	RUN_TEST(test_legend_unknown_material_and_bad_line);
 	RUN_TEST(test_legend_lines_not_map_rows);
