@@ -42,7 +42,7 @@ typedef struct EventBus EventBus;
 typedef struct Audio Audio;
 
 /* Design pixel size for UI text (label/menu/button styles). */
-#define APP_UI_FONT_PIXELS 32
+#define APP_UI_FONT_PIXELS 30
 
 /* Initialize SDL3 and create the window. Returns NULL on failure
  * (SDL_GetError() carries the reason; SDL_Quit state is cleaned up). */

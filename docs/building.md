@@ -97,7 +97,7 @@ toolchain sysroot's loader and libc):
 qemu-aarch64-static -L /usr/aarch64-linux-gnu \
     -E SDL_VIDEODRIVER=dummy -E SDL_AUDIODRIVER=dummy -E ISO_SMOKE_MS=300 \
     build-aarch64/isomata
-# isomata smoke: font measure "Isomata" = 100x32 (height 32, rc 0)
+# isomata smoke: font measure "Isomata" = 94x30 (height 30, rc 0)
 # isomata smoke: safe area 0,0 1280x720
 # ERROR: gpu_backend: ... No supported SDL_GPU backend found!   (tolerated)
 # audio: ready (8 voices, device 21, 44100 Hz 2 ch)

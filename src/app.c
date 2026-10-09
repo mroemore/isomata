@@ -79,7 +79,7 @@ static void smokeProbeFont(void) {
 		SDL_Log("isomata smoke: font path unresolved");
 		return;
 	}
-	UiFont *font = uiLoadFont(resolved, 32);
+	UiFont *font = uiLoadFont(resolved, APP_UI_FONT_PIXELS);
 	if (!font) {
 		SDL_Log("isomata smoke: font load failed: %s", SDL_GetError());
 		return;
