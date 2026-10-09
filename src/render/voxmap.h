@@ -203,13 +203,14 @@
  * CULLING (conservative, documented). Bottom faces, sides and a ramp's back
  * face are culled when the facing NEIGHBOUR voxel is FULL (a FULL neighbour
  * fully hides them); triangles cull against a FULL side neighbour in their own
- * direction. The surface ABOVE is special: a FULL voxel's top culls against a
- * FULL above, and a full RAMP's slope culls against a FULL above (its surface
- * reaches y + 1, meeting the neighbour's base), but a HALF's top and a
- * HALF_RAMP's slope are NEVER culled by the neighbour above — their surface is
- * at y + 0.5, so a FULL voxel above (base y + 1) leaves a 0.5 air gap that is
- * visible from a low side angle; culling would be a see-through. (The only
- * cost is a tiny from-above overdraw when the cell above is FULL, acceptable.)
+ * direction. The surface ABOVE is special: ONLY a top at full cell height (a
+ * FULL voxel's top) culls against a FULL above. A HALF's top (surface at
+ * y + 0.5) and ANY slope (a RAMP's or a HALF_RAMP's) are NEVER culled by the
+ * neighbour above: a FULL voxel above occupies [y + 1, y + 2], so it can meet
+ * a surface only at the high edge line, and everywhere below that there is an
+ * open wedge (0.5 deep for a HALF / HALF_RAMP, growing to a full 1.0 at the
+ * low edge of a full RAMP). Culling any of these would be a see-through. (The
+ * only cost is a from-above overdraw when the cell above is FULL, acceptable.)
  * Shape-vs-shape adjacencies can therefore overdraw (faces hidden inside a
  * neighbouring half/ramp are still emitted) — "visible faces only" is preserved
  * against true solids and against air, and the overdraw is only ever between

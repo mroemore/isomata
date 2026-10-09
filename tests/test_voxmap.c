@@ -2768,7 +2768,10 @@ static void test_triangle_uv_convention(void)
  * neighbour culls a HALF's side. */
 static void test_shape_culling_full_neighbour(void)
 {
-	/* Ramp at level 1, FULL at level 2 -> slope culled. */
+	/* Regression (T17 fix round): a RAMP dir N at level 1 with a FULL at
+	 * level 2 still emits its slope — the neighbour above only meets the
+	 * slope at its high edge, leaving an open wedge up to 1.0 at the low
+	 * edge. RED before the fix (the slope was culled). */
 	{
 		const char *text =
 			"@ R 1 stone shape=ramp dir=north\n"
@@ -2778,25 +2781,16 @@ static void test_shape_culling_full_neighbour(void)
 			"R\n"
 			"---\n"
 			"F\n";
+		const float slope[4][3] = {
+			{ 0, 2, 0 }, { 1, 2, 0 }, { 1, 1, 1 }, { 0, 1, 1 },
+		};
+		const float topUV[4][2] = ATLAS_UV_TOP;
 		Voxmap *map = parseText(text);
-		DrawList list;
-		Camera3D cam;
-		const float top[4][2] = ATLAS_UV_TOP;
-		int tops = 0;
-		size_t i;
+		DrawItem out;
 
 		TEST_ASSERT_NOT_NULL(map);
-		initDrawList(&list, 32);
-		shapeSetYaw(&cam, 180.0f);
-		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
-				DRAW_TINT(255, 255, 255, 255));
-		for (i = 0; i < drawListCount(&list); i++)
-			if (itemHasUV(drawListItem(&list, i), top))
-				tops++;
-		/* The FULL voxel's top at y 3 uses the TOP slot; the ramp's
-		 * slope (also TOP) must be gone, so exactly one. */
-		TEST_ASSERT_EQUAL_INT(1, tops);
-		destroyDrawList(&list);
+		TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, slope, &out));
+		TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
 		destroyVoxmap(map);
 	}
 	/* HALF at (0,1,0) beside FULL at (1,1,0): the half's +X side is culled

@@ -1706,12 +1706,12 @@ static void emitShapeFaces(const Voxmap *map, DrawList *list, int x, int y,
 			emitSide(list, x, z, backSide, fy, fy + rise, uv, alpha,
 				 opts->tint, lights, opts, debugUV);
 		}
-		/* A HALF_RAMP's slope tops out at y + 0.5, so a FULL above
-		 * leaves a gap and the slope is never culled by it. A full RAMP
-		 * reaches y + 1, meeting the neighbour's base, so it keeps the
-		 * cull (see the header). */
-		if (shape == VOXMAP_SHAPE_HALF_RAMP ||
-		    !voxmapFullAt(map, x, y + 1, z)) {
+		/* A slope is NEVER culled by the neighbour above: a FULL in the
+		 * cell above (base y + 1) can only coincide at the slope's high
+		 * edge line; everywhere below that there is an open wedge up to
+		 * a full 1.0 at the low edge, so culling would be a large
+		 * see-through (see the header). */
+		{
 			float q[4][3];
 
 			rampSlopeQuad(x, y, z, dir, rise, q);
