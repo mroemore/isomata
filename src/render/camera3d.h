@@ -23,13 +23,16 @@
  *   forward axis (the ground projection of the view direction, i.e. into
  *   the screen). At yaw 0 right is +X and forward is -Z; at yaw 90 right
  *   is -Z and forward is -X (both pinned by tests).
- * - cameraPanByDrag maps a pointer drag (virtual pixels) so the camera
- *   FOLLOWS the drag: dragging right moves the view right and dragging down
- *   moves the view toward the viewer. That is the INVERSE of the raw
- *   cameraPan sign, so it composes the drag sign on top of cameraPan:
- *   cameraPanByDrag(dx, dy) == cameraPan(dx * CAMERA_PAN_PER_PIXEL,
- *   -dy * CAMERA_PAN_PER_PIXEL) — the same yaw-0 convention the level's
- *   centring comment relies on (pan x = +X, pan y = -Z).
+ * - cameraPanByDrag maps a pointer drag (virtual pixels) so the CONTENT
+ *   follows the finger on both axes (a touch drag grabs the map): dragging
+ *   right moves the content right and dragging down moves the content down.
+ *   At yaw 0 that is the target moving -X for dx > 0 and -Z for dy > 0, so
+ *   it composes the drag sign on top of the raw cameraPan convention (which
+ *   moves the target +x, -y): cameraPanByDrag(dx, dy) ==
+ *   cameraPan(-dx * CAMERA_PAN_PER_PIXEL, +dy * CAMERA_PAN_PER_PIXEL).
+ *   (The pre-batch level code was mixed-axis — horizontal content-follows,
+ *   vertical camera-follows — which is the inconsistency the touch user
+ *   felt; this helper makes both axes content-follows.)
  *
  * Struct fields are private to camera3d.c; callers use initCamera3D and
  * the accessors. The struct is defined here only so callers can hold one
@@ -87,10 +90,10 @@ void cameraZoom(Camera3D *camera, float amount);
  * note above). */
 void cameraPan(Camera3D *camera, float x, float y);
 
-/* Ground-plane pan for a drag gesture, in VIRTUAL pixels: the camera follows
- * the drag (see the model note above). Dragging right (dxVirtual > 0) moves
- * the view right; dragging down (dyVirtual > 0) moves the view toward the
- * viewer. A NULL camera and zero deltas are no-ops. */
+/* Ground-plane pan for a drag gesture, in VIRTUAL pixels: the content
+ * follows the finger on both axes (see the model note above). Dragging right
+ * (dxVirtual > 0) moves the content right; dragging down (dyVirtual > 0)
+ * moves the content down. A NULL camera and zero deltas are no-ops. */
 void cameraPanByDrag(Camera3D *camera, int dxVirtual, int dyVirtual);
 
 /* Orthographic view-projection source matrices. A NULL camera yields the

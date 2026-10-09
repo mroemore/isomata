@@ -117,10 +117,10 @@ void cameraPanByDrag(Camera3D *camera, int dxVirtual, int dyVirtual)
 
 	if (camera == NULL || (dxVirtual == 0 && dyVirtual == 0))
 		return;
-	/* The camera follows the drag: the inverse of the raw cameraPan sign,
-	 * so at yaw 0 dragging right moves the target +X and dragging down
-	 * moves it +Z (toward the viewer). */
-	cameraPan(camera, (float)dxVirtual * k, -(float)dyVirtual * k);
+	/* The CONTENT follows the finger on both axes (touch drag = grab the
+	 * map): at yaw 0 dragging right moves the target -X (content right)
+	 * and dragging down moves the target -Z (content down). */
+	cameraPan(camera, -(float)dxVirtual * k, (float)dyVirtual * k);
 }
 
 Mat4 cameraProjection(const Camera3D *camera, float aspect)

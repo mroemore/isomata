@@ -287,13 +287,15 @@ static void test_pan_at_yaw_ninety(void)
 	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, z);
 }
 
-/* cameraPanByDrag: the camera follows the drag, the INVERSE of the raw
- * cameraPan sign. At yaw 0 dragging right (dx > 0) moves the view right
- * (target +X) and dragging down (dy > 0) moves the view toward the viewer
- * (target +Z). The raw cameraPan(x, y) moves the target (+x, -y) at yaw 0,
- * so the helper composes the drag sign on top:
- * cameraPanByDrag(dx, dy) == cameraPan(dx * K, -dy * K). */
-static void test_pan_by_drag_follows_pointer_at_yaw_zero(void)
+/* cameraPanByDrag: the CONTENT follows the finger on both axes (a touch drag
+ * grabs the map). At yaw 0 dragging right (dx > 0) moves the content right,
+ * i.e. the camera target -X; dragging down (dy > 0) moves the content down,
+ * i.e. the target -Z. The raw cameraPan(x, y) moves the target (+x, -y) at
+ * yaw 0, so the helper composes the drag sign on top:
+ * cameraPanByDrag(dx, dy) == cameraPan(-dx * K, +dy * K).
+ * The pre-batch level code was mixed-axis (horizontal content-follows,
+ * vertical camera-follows), which is the inconsistency the touch user felt. */
+static void test_pan_by_drag_content_follows_at_yaw_zero(void)
 {
 	Camera3D c = freshCamera();
 	float x = 0.0f;
@@ -302,9 +304,9 @@ static void test_pan_by_drag_follows_pointer_at_yaw_zero(void)
 	/* The mapping constant is pinned (reduced from the old 0.05). */
 	TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.04f, CAMERA_PAN_PER_PIXEL);
 
-	cameraPanByDrag(&c, 1, 0);	/* drag right -> view right (+X) */
+	cameraPanByDrag(&c, 1, 0);	/* drag right -> content right (-X) */
 	cameraTarget(&c, &x, &z);
-	TEST_ASSERT_FLOAT_WITHIN(EPS, CAMERA_PAN_PER_PIXEL, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -CAMERA_PAN_PER_PIXEL, x);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
 
 	cameraPanByDrag(&c, -1, 0);	/* drag left: undoes it */
@@ -312,10 +314,10 @@ static void test_pan_by_drag_follows_pointer_at_yaw_zero(void)
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, z);
 
-	cameraPanByDrag(&c, 0, 1);	/* drag down -> toward viewer (+Z) */
+	cameraPanByDrag(&c, 0, 1);	/* drag down -> content down (-Z) */
 	cameraTarget(&c, &x, &z);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, x);
-	TEST_ASSERT_FLOAT_WITHIN(EPS, CAMERA_PAN_PER_PIXEL, z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -CAMERA_PAN_PER_PIXEL, z);
 
 	cameraPanByDrag(&c, 0, -1);	/* drag up: undoes it */
 	cameraTarget(&c, &x, &z);
@@ -333,8 +335,8 @@ static void test_pan_by_drag_magnitude(void)
 
 	cameraPanByDrag(&c, 10, 5);
 	cameraTarget(&c, &x, &z);
-	TEST_ASSERT_FLOAT_WITHIN(EPS, 10.0f * CAMERA_PAN_PER_PIXEL, x);
-	TEST_ASSERT_FLOAT_WITHIN(EPS, 5.0f * CAMERA_PAN_PER_PIXEL, z);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -10.0f * CAMERA_PAN_PER_PIXEL, x);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -5.0f * CAMERA_PAN_PER_PIXEL, z);
 }
 
 /* The helper is exactly the raw pan with the drag sign composed on top
@@ -349,8 +351,8 @@ static void test_pan_by_drag_composes_raw_pan(void)
 	float rz = 0.0f;
 
 	cameraPanByDrag(&drag, 7, -3);
-	cameraPan(&raw, 7.0f * CAMERA_PAN_PER_PIXEL,
-		  -(-3.0f) * CAMERA_PAN_PER_PIXEL);
+	cameraPan(&raw, -7.0f * CAMERA_PAN_PER_PIXEL,
+		  -3.0f * CAMERA_PAN_PER_PIXEL);
 	cameraTarget(&drag, &dx, &dz);
 	cameraTarget(&raw, &rx, &rz);
 	TEST_ASSERT_FLOAT_WITHIN(EPS, rx, dx);
@@ -482,7 +484,7 @@ void run_test_camera(void)
 	RUN_TEST(test_zoom_multiplicative_and_clamped);
 	RUN_TEST(test_pan_at_yaw_zero);
 	RUN_TEST(test_pan_at_yaw_ninety);
-	RUN_TEST(test_pan_by_drag_follows_pointer_at_yaw_zero);
+	RUN_TEST(test_pan_by_drag_content_follows_at_yaw_zero);
 	RUN_TEST(test_pan_by_drag_magnitude);
 	RUN_TEST(test_pan_by_drag_composes_raw_pan);
 	RUN_TEST(test_pan_by_drag_noop_cases);
