@@ -30,6 +30,15 @@ typedef struct TdlFill {
 	uint32_t rgba;
 } TdlFill;
 
+typedef struct TdlImage {
+	int x;
+	int y;
+	int w;
+	int h;
+	int icon;	/* recorded UiIcon value */
+	uint32_t rgba;
+} TdlImage;
+
 typedef struct TdlText {
 	int x;
 	int y;
@@ -48,6 +57,8 @@ typedef struct TestDrawLog {
 	int nFills;
 	TdlText texts[TDL_MAX_CALLS];
 	int nTexts;
+	TdlImage images[TDL_MAX_CALLS];
+	int nImages;
 } TestDrawLog;
 
 static TestDrawLog *tdl_active;
@@ -97,9 +108,28 @@ static inline void tdl_drawText(UiDrawCtx *ctx, int x, int y, const char *text,
 	log->nTexts++;
 }
 
+static inline void tdl_drawImage(UiDrawCtx *ctx, int x, int y, int w, int h,
+				 UiIcon icon, uint32_t tint)
+{
+	TestDrawLog *log = tdlLog(ctx);
+	TdlImage *slot;
+
+	if (log == NULL || log->nImages >= TDL_MAX_CALLS)
+		return;
+	slot = &log->images[log->nImages];
+	slot->x = x;
+	slot->y = y;
+	slot->w = w;
+	slot->h = h;
+	slot->icon = (int)icon;
+	slot->rgba = tint;
+	log->nImages++;
+}
+
 static const UiDrawCtxVt tdlVt = {
 	tdl_fillRect,
 	tdl_drawText,
+	tdl_drawImage,
 };
 
 /* Activate a log for the upcoming draws and wrap it in a fresh ctx. */

@@ -89,6 +89,21 @@ typedef struct TextStyle {
 	int pixelSize;		/* design pixel size; fallback when unmeasured */
 } TextStyle;
 
+/* --- icons (the image draw seam) ----------------------------------------------
+ * A small fixed vocabulary of UI icons. The pure layer only NAMES them; the
+ * SDL tier (ui_gpu.c) maps each to a texture it loaded from assets/icons/.
+ * UI_ICON_COUNT is not a drawable icon: it is the "no icon" sentinel used to
+ * clear a button back to text mode, and the array bound. */
+
+typedef enum {
+	UI_ICON_ROTATE_CCW = 0,
+	UI_ICON_ROTATE_CW,
+	UI_ICON_RESTORE,
+	UI_ICON_BULB,
+	UI_ICON_BULB_OFF,
+	UI_ICON_COUNT,
+} UiIcon;
+
 /* --- abstract draw context ------------------------------------------------------
  * The SDL_gpu implementation arrives with the render task; headless tests
  * implement a recording ctx and assert on the recorded calls. */
@@ -101,6 +116,13 @@ struct UiDrawCtxVt {
 			 uint32_t rgba);
 	void (*drawText)(UiDrawCtx *ctx, int x, int y, const char *text,
 			 const struct TextStyle *style, uint32_t rgba);
+	/* Draw `icon` into the virtual rect (x,y,w,h), tinted by `tint`
+	 * (0xRRGGBBAA). The caller sizes the rect; the SDL tier maps the
+	 * icon to a nearest-sampled texture and scales it to fill. OPTIONAL:
+	 * a ctx that carries no icons may leave this NULL (an icon-bearing
+	 * button then skips the image and still fills its rect). */
+	void (*drawImage)(UiDrawCtx *ctx, int x, int y, int w, int h,
+			  UiIcon icon, uint32_t tint);
 };
 
 struct UiDrawCtx {
