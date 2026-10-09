@@ -20,7 +20,9 @@
  * is air. lightGridPropagateSolid() takes a caller-built volume, which is how
  * overhangs/ceilings that the ASCII heightmap cannot express are modelled.
  * Light lives only in air; a solid cell's stored value stays 0 and light never
- * crosses it.
+ * crosses it. (One deliberate exception: an emitter seeded directly inside a
+ * solid cell holds its seeded value and floods out to air neighbours — see
+ * lightGridSeedPoint.)
  *
  * PROPAGATION. Light is seeded (sky from the volume, block from the emitters),
  * then flood-filled over the 6 air neighbours. Each step is per-channel

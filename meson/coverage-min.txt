@@ -169,7 +169,7 @@ src/render/grid.c		91
 
 # T14: the pure lighting core (sky + block grids, bucket flood, sky rule,
 # point/spot emitters with a voxel-DDA line of sight, and the ambient-floored
-# per-face sampling factor). Floor at its measured branch % (262/270 = 97.0).
+# per-face sampling factor). Floor at its measured branch % (250/256 = 97.7).
 # The untaken arms are defensive/unreachable: the bucket-pool overflow guard
 # (provably cannot fire — at most 2n insertions for a 2n pool), the DDA step
 # guard plus its redundant target-reached break, and the cosA>1 / angleFall<0
