@@ -846,8 +846,14 @@ const MaterialTable *gpuBackendMaterials(GpuBackend *gpu)
 
 bool gpuBackendDebugUV(const GpuBackend *gpu, float uv[4][2])
 {
+	static const float unpopulated[4][2] = {
+		{ 0.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 0.0f },
+	};
+
 	if (gpu == NULL || uv == NULL)
 		return false;
+	if (memcmp(gpu->debugUV, unpopulated, sizeof(unpopulated)) == 0)
+		return false;	/* the white slot was never populated */
 	memcpy(uv, gpu->debugUV, sizeof(gpu->debugUV));
 	return true;
 }

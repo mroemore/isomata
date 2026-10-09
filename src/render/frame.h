@@ -44,8 +44,10 @@
 
 /* Per-frame render options. NULL (passed to buildFrameDrawList) is the flat
  * T14 path with no debug view. `smooth` selects per-corner light + AO;
- * `lightDebug` the light-only view; `debugUV` is the 4-corner UV of a white
- * atlas texel for that view (NULL falls back to the built-in spare region). */
+ * `lightDebug` the light-only view — voxel faces render with a white texel
+ * and their light colour, while sprites stay textured and flat-lit; `debugUV`
+ * is the 4-corner UV of that white atlas texel (NULL falls back to the
+ * built-in spare region). */
 typedef struct FrameOptions {
 	bool smooth;
 	bool lightDebug;
