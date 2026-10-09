@@ -113,10 +113,15 @@ src/render/voxmap.c		93
 # Tweaks Batch 3: the sprite depth bias (a billboard standing on a tile must
 # beat that tile's top face) makes the sprite-vs-voxel equal-depth tie-break
 # unreachable: a sprite's comparison depth is now always DRAW_SPRITE_DEPTH_BIAS
-# nearer than a coplanar face, so `a->kind != b->kind` at equal depth (line
-# 144) can no longer be taken. The y-position tie-break was already untaken.
-# 46/48 branches = 95.8%; the floor eases 97 -> 95, honestly.
-src/render/drawlist.c		95
+# nearer than a coplanar face, so `a->kind != b->kind` at equal depth can no
+# longer be taken.
+# Tweaks Batch 4: vertical faces now key on their base line and the tie-break
+# uses that same key point. The new selection/min-scan branches are covered by
+# the tower/sprite and permuted-corner tests, and the previously-untaken
+# y-position tie-break is now taken (identity-view test). The lone uncovered
+# arm is the unreachable kind tie-break above. 65/66 = 98.5%; the floor
+# ratchets 95 -> 98.
+src/render/drawlist.c		98
 src/render/sprites.c		100
 
 # Task 9: per-frame draw-list construction extracted from app.c (ruling #1).

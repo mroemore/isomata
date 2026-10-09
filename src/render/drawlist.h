@@ -21,23 +21,31 @@
  *   face), so a corner and its UV always line up.
  * - tint is packed RGBA: r in bits 24..31, g 16..23, b 8..15, a 0..7. Use
  *   DRAW_TINT.
- * - sortDrawList is painter's back-to-front by the camera-space depth of the
- *   quad centre (transform by cameraView; farther = more negative view z =
- *   drawn first). Sprites are biased toward the camera (their comparison
- *   depth is raised by DRAW_SPRITE_DEPTH_BIAS, see drawlist.c) so a sprite
- *   standing on a tile never flickers against that tile's top face: a
- *   billboard's centre is perpendicular to the view direction and would
- *   otherwise tie exactly with the anchor it stands on. Because the bias
- *   separates a sprite from a coplanar face, the kind tie-break below is
- *   only reached when two keys are exactly equal AFTER the bias (in practice
- *   a face and a sprite landing on the same biased depth; two faces of equal
- *   depth fall to the centre lexicographic break below); the common
- *   sprite-vs-face tie is resolved by the bias, not by kind. Ties
- *   break deterministically: depth, then kind (VOXEL before SPRITE, so a
- *   transparent billboard blends over opaque terrain at the same depth),
- *   then centre position lexicographically (x, then y, then z), then
- *   insertion order (the sort is a stable insertion sort, so equal keys keep
- *   the order they were appended in).
+ * - sortDrawList is painter's back-to-front by the camera-space depth of each
+ *   item's KEY POINT (transform by cameraView; farther = more negative view z
+ *   = drawn first). The key point is the quad centre for a top face and for a
+ *   sprite, but the BASE LINE (midpoint of the two lowest corners) for a
+ *   VERTICAL voxel face — a face whose corner heights differ. Rationale: a
+ *   tall face's centre depth is dominated by its height, which does not
+ *   interact with anything standing at ground level; the base line is the
+ *   depth at which the face meets the world, and that is what a standing
+ *   object in front of or behind the face must be compared against. Keying a
+ *   tall tower face on its centre would let it sort nearer than a sprite whose
+ *   base is genuinely in front of it, hiding the sprite at every rotation.
+ *   Sprites are biased toward the camera (their comparison depth is raised by
+ *   DRAW_SPRITE_DEPTH_BIAS, see drawlist.c) so a sprite standing on a tile
+ *   never flickers against that tile's top face: a billboard's centre is
+ *   perpendicular to the view direction and would otherwise tie exactly with
+ *   the anchor it stands on. Because the bias separates a sprite from a
+ *   coplanar face, the kind tie-break below is only reached when two keys are
+ *   exactly equal AFTER the bias (in practice a face and a sprite landing on
+ *   the same biased depth; two faces of equal depth fall to the key-point
+ *   lexicographic break below); the common sprite-vs-face tie is resolved by
+ *   the bias, not by kind. Ties break deterministically: depth, then kind
+ *   (VOXEL before SPRITE, so a transparent billboard blends over opaque
+ *   terrain at the same depth), then the key point lexicographically (x, then
+ *   y, then z), then insertion order (the sort is a stable insertion sort, so
+ *   equal keys keep the order they were appended in).
  */
 
 #include "render/camera3d.h"

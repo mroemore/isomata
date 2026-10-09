@@ -5,9 +5,9 @@
  * Storage is one malloc at init; append never allocates. The sort is a stable
  * insertion sort — O(n^2) but n is a bounded map's visible face count, and
  * stability is exactly the "insertion index" tie-break the header pins, so no
- * extra key array is needed. Depth is recomputed per comparison (a cheap
- * 4-point centre + one mat4 transform); at these sizes that is far below a
- * frame's budget.
+ * extra key array is needed. Depth is recomputed per comparison (a cheap key
+ * point — the base line for a vertical face, else the 4-point centre — plus
+ * one mat4 transform); at these sizes that is far below a frame's budget.
  */
 
 #include "render/drawlist.h"
@@ -27,6 +27,12 @@ static const float kSideUV[4][2] = ATLAS_UV_SIDE;
  * above the noise (~1e-6) and far below any real occlusion separation
  * (>= ~0.29 world units for the demo's configurations). */
 #define DRAW_SPRITE_DEPTH_BIAS 0.02f
+
+/* A voxel face is treated as VERTICAL when its corner heights differ by more
+ * than this. Real faces are axis-aligned with integer-ish corners, so a side
+ * face spans >= 1.0 and a top face exactly 0.0; the epsilon only rejects
+ * float noise, never a real face. */
+#define DRAW_FACE_VERTICAL_EPS 1e-4f
 
 void initDrawList(DrawList *list, size_t capacity)
 {
@@ -113,13 +119,80 @@ static void itemCentre(const DrawItem *item, float out[3])
 		  item->worldQuad[2][2] + item->worldQuad[3][2]) * 0.25f;
 }
 
+/* True when the quad's corners span a height range: a side face, not a top. */
+static bool faceIsVertical(const DrawItem *item)
+{
+	float minY = item->worldQuad[0][1];
+	float maxY = item->worldQuad[0][1];
+	int i;
+
+	for (i = 1; i < 4; i++) {
+		float y = item->worldQuad[i][1];
+
+		if (y < minY)
+			minY = y;
+		if (y > maxY)
+			maxY = y;
+	}
+	return (maxY - minY) > DRAW_FACE_VERTICAL_EPS;
+}
+
+/* Midpoint of the quad's TWO LOWEST corners — the base line, where a vertical
+ * face meets the surface it stands on. */
+static void itemBaseLine(const DrawItem *item, float out[3])
+{
+	int lo0 = 0;
+	int lo1 = 1;
+	float y0;
+	float y1;
+	int i;
+
+	if (item->worldQuad[lo1][1] < item->worldQuad[lo0][1]) {
+		lo0 = 1;
+		lo1 = 0;
+	}
+	y0 = item->worldQuad[lo0][1];
+	y1 = item->worldQuad[lo1][1];
+	for (i = 2; i < 4; i++) {
+		float y = item->worldQuad[i][1];
+
+		if (y < y0) {
+			lo1 = lo0;
+			y1 = y0;
+			lo0 = i;
+			y0 = y;
+		} else if (y < y1) {
+			lo1 = i;
+			y1 = y;
+		}
+	}
+	out[0] = (item->worldQuad[lo0][0] + item->worldQuad[lo1][0]) * 0.5f;
+	out[1] = (item->worldQuad[lo0][1] + item->worldQuad[lo1][1]) * 0.5f;
+	out[2] = (item->worldQuad[lo0][2] + item->worldQuad[lo1][2]) * 0.5f;
+}
+
+/* The painter key point: the point whose camera-space depth is the item's
+ * sort key. A vertical VOXEL face keys on its base line (a tall face's centre
+ * depth is dominated by its height, which does not interact with anything
+ * standing at ground level — the base line is the depth at which the face
+ * meets the world). Everything else (top faces, sprites) keys on the quad
+ * centre. Sprites are billboards whose centre already has their anchor's
+ * depth, so their bias (below) is applied to this same point. */
+static void itemKeyPoint(const DrawItem *item, float out[3])
+{
+	if (item->kind == DRAW_KIND_VOXEL && faceIsVertical(item))
+		itemBaseLine(item, out);
+	else
+		itemCentre(item, out);
+}
+
 static float itemDepth(const DrawItem *item, const Mat4 *view)
 {
 	float c[3];
 	Vec4 v;
 	float depth;
 
-	itemCentre(item, c);
+	itemKeyPoint(item, c);
 	v = mat4TransformPoint(view, (Vec3){ c[0], c[1], c[2] });
 	depth = v.z;
 	/* View-space z grows toward the camera (the camera looks down -Z), so
@@ -143,8 +216,8 @@ static bool comesAfter(const DrawItem *a, const DrawItem *b, const Mat4 *view)
 		return da > db;		/* farther (more negative view z) first */
 	if (a->kind != b->kind)
 		return a->kind > b->kind;	/* VOXEL before SPRITE */
-	itemCentre(a, ca);
-	itemCentre(b, cb);
+	itemKeyPoint(a, ca);
+	itemKeyPoint(b, cb);
 	if (ca[0] != cb[0])
 		return ca[0] > cb[0];
 	if (ca[1] != cb[1])
