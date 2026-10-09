@@ -644,9 +644,10 @@ static uint8_t materialAlpha(const MaterialTable *materials, int id)
 }
 
 static void emitFace(DrawList *list, const float quad[4][3],
-		     const float uv[4][2], uint8_t alphaMode, uint32_t tint)
+		     const float uv[4][2], uint8_t alphaMode,
+		     const uint32_t cornerTint[4])
 {
-	if (!appendVoxelFace(list, quad, uv, alphaMode, tint) &&
+	if (!appendVoxelFaceShaded(list, quad, uv, alphaMode, cornerTint) &&
 	    !g_faceOverflowReported) {
 		g_faceOverflowReported = true;
 		fprintf(stderr,
@@ -667,15 +668,18 @@ static uint8_t shadeChannel(uint8_t c, float factor)
 	return (uint8_t)(v + 0.5f);
 }
 
-/* Apply the face shade, the per-column checker boost and the sampled light
- * factor to the caller tint: RGB multiplied and clamped per channel, alpha
- * preserved. `x`/`z` are the column's grid coordinates (odd tiles are
- * brightened); `light` is the 0..255 per-channel factor (255 = full). */
+/* Apply the face shade, the per-column checker boost, the sampled light factor
+ * and an AO percent to the caller tint: RGB multiplied and clamped per channel,
+ * alpha preserved. `x`/`z` are the column's grid coordinates (odd tiles are
+ * brightened); `light` is the 0..255 per-channel factor (255 = full);
+ * `aoPercent` is the per-corner occlusion multiplier (100 = none). The flat
+ * path passes 100, an exact x1.0, so its tints are byte-identical to T14. */
 static uint32_t shadeTint(uint32_t tint, float faceShade, int x, int z,
-			  const uint8_t light[3])
+			  const uint8_t light[3], int aoPercent)
 {
 	float base = faceShade *
-		     (((x + z) & 1) ? VOXMAP_CHECKER_BOOST : 1.0f);
+		     (((x + z) & 1) ? VOXMAP_CHECKER_BOOST : 1.0f) *
+		     ((float)aoPercent / 100.0f);
 	uint8_t r = shadeChannel((uint8_t)((tint >> 24) & 0xffu),
 				 base * (float)light[0] / 255.0f);
 	uint8_t g = shadeChannel((uint8_t)((tint >> 16) & 0xffu),
@@ -686,6 +690,123 @@ static uint32_t shadeTint(uint32_t tint, float faceShade, int x, int z,
 
 	return ((uint32_t)r << 24) | ((uint32_t)g << 16) |
 	       ((uint32_t)b << 8) | (uint32_t)a;
+}
+
+/* Build the 4 corner tints for a face (canonical corner order). `light` holds
+ * the per-corner factors and `ao` the per-corner occupancy counts (both only
+ * meaningful when `smooth`); `light[0]` is the flat factor. In the debug view
+ * the tint IS the light colour (no material tint, shade, checker or AO). */
+static void faceCornerTints(uint32_t tint, float faceShade, int x, int z,
+			    const uint8_t light[4][3], const int ao[4],
+			    bool smooth, bool lightDebug, uint32_t out[4])
+{
+	int k;
+
+	if (lightDebug) {
+		for (k = 0; k < 4; k++) {
+			const uint8_t *f = smooth ? light[k] : light[0];
+
+			out[k] = DRAW_TINT(f[0], f[1], f[2], 255);
+		}
+		return;
+	}
+	if (smooth) {
+		for (k = 0; k < 4; k++)
+			out[k] = shadeTint(tint, faceShade, x, z, light[k],
+					   lightGridAoPercent(ao[k]));
+		return;
+	}
+	for (k = 0; k < 4; k++)
+		out[k] = shadeTint(tint, faceShade, x, z, light[0], 100);
+}
+
+/* Corner cells for a top face's corner `k` (0..3, canonical order): the 2x2
+ * block of columns around the corner at the face's air level `h`. The face's
+ * own air cell (x, h, z) is one of the four; *ownIndex points at it. */
+static void topCornerCells(int x, int z, int h, int k, int cells[4][3],
+			   int *ownIndex)
+{
+	int cx = x + ((k == 1 || k == 2) ? 1 : 0);
+	int cz = z + ((k == 2 || k == 3) ? 1 : 0);
+	int ox = cx - x;
+	int oz = cz - z;
+
+	cells[0][0] = cx - 1;	cells[0][1] = h;	cells[0][2] = cz - 1;
+	cells[1][0] = cx;	cells[1][1] = h;	cells[1][2] = cz - 1;
+	cells[2][0] = cx - 1;	cells[2][1] = h;	cells[2][2] = cz;
+	cells[3][0] = cx;	cells[3][1] = h;	cells[3][2] = cz;
+	*ownIndex = (1 - oz) * 2 + (1 - ox);
+}
+
+/* Corner cells for a side face's corner: the 2x2 block in the face plane on
+ * the neighbour side. `a` is the corner's coordinate along the face's
+ * horizontal axis and `y` its level; (nx, nz) is the neighbour column the face
+ * looks across. `axisX` selects x as the along axis (dirs 0/2), else z
+ * (dirs 1/3). The corner's own air cell is the block entry at (a, y) = index 3,
+ * so a solid cell there (a taller neighbour) is skipped in favour of the in-
+ * plane air neighbours. */
+static void sideCornerCells(int a, int y, int nx, int nz, bool axisX,
+			    int cells[4][3])
+{
+	int i = 0;
+	int dy;
+	int da;
+
+	for (dy = -1; dy <= 0; dy++) {
+		for (da = -1; da <= 0; da++) {
+			if (axisX) {
+				cells[i][0] = a + da;
+				cells[i][1] = y + dy;
+				cells[i][2] = nz;
+			} else {
+				cells[i][0] = nx;
+				cells[i][1] = y + dy;
+				cells[i][2] = a + da;
+			}
+			i++;
+		}
+	}
+}
+
+/* Fill the 4 per-corner light factors and AO counts for a top face. */
+static void topCorners(const LightGrid *lights, int x, int z, int height,
+		       uint8_t light[4][3], int ao[4])
+{
+	int k;
+
+	for (k = 0; k < 4; k++) {
+		int cells[4][3];
+		int own;
+
+		topCornerCells(x, z, height, k, cells, &own);
+		lightGridCornerAverage(lights, cells, own, light[k]);
+		ao[k] = lightGridCornerOcclusion(lights, cells, own);
+	}
+}
+
+/* Fill the 4 per-corner light factors and AO counts for a side face. The
+ * corner order matches the quad: bottom-start, bottom-end, top-end, top-start.
+ * The two bottom corners sample at y0 (the neighbour top), the two top corners
+ * at y1 (the face top), so the GPU interpolates the vertical gradient. */
+static void sideCorners(const LightGrid *lights, int x, int z, int dir,
+			int y0, int y1, uint8_t light[4][3], int ao[4])
+{
+	int nx = x + kSideDx[dir];
+	int nz = z + kSideDz[dir];
+	bool axisX = (dir == 0 || dir == 2);
+	int base = (axisX ? x : z) + ((dir >= 2) ? 1 : 0);
+	int step = (dir >= 2) ? -1 : 1;
+	int as[4] = { base, base + step, base + step, base };
+	int ys[4] = { y0, y0, y1, y1 };
+	int k;
+
+	for (k = 0; k < 4; k++) {
+		int cells[4][3];
+
+		sideCornerCells(as[k], ys[k], nx, nz, axisX, cells);
+		lightGridCornerAverage(lights, cells, 3, light[k]);
+		ao[k] = lightGridCornerOcclusion(lights, cells, 3);
+	}
 }
 
 /* The per-channel brightness factor at a face's adjacent air cell; a NULL
@@ -732,7 +853,8 @@ static bool sideCulled(int dir, float toCamX, float toCamZ)
 }
 
 static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][2],
-		    uint8_t alphaMode, uint32_t tint, const uint8_t light[3])
+		    uint8_t alphaMode, uint32_t tint, const LightGrid *lights,
+		    const VoxmapEmitOptions *opts, const float debugUV[4][2])
 {
 	float quad[4][3] = {
 		{ (float)x, (float)height, (float)z },
@@ -740,18 +862,32 @@ static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][
 		{ (float)(x + 1), (float)height, (float)(z + 1) },
 		{ (float)x, (float)height, (float)(z + 1) },
 	};
+	uint8_t light[4][3];
+	int ao[4] = { 0, 0, 0, 0 };
+	uint32_t cornerTint[4];
 
-	emitFace(list, quad, uv, alphaMode,
-		 shadeTint(tint, VOXMAP_SHADE_TOP, x, z, light));
+	if (opts->smooth)
+		topCorners(lights, x, z, height, light, ao);
+	else
+		sampleLight(lights, x, height, z, light[0]);
+	faceCornerTints(tint, VOXMAP_SHADE_TOP, x, z, light, ao, opts->smooth,
+			opts->lightDebug, cornerTint);
+	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
+		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
+		 cornerTint);
 }
 
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		     const float uv[4][2], uint8_t alphaMode, uint32_t tint,
-		     const uint8_t light[3])
+		     const LightGrid *lights, const VoxmapEmitOptions *opts,
+		     const float debugUV[4][2])
 {
 	float fx = (float)x;
 	float fz = (float)z;
 	float quad[4][3];
+	uint8_t light[4][3];
+	int ao[4] = { 0, 0, 0, 0 };
+	uint32_t cornerTint[4];
 
 	switch (dir) {
 	case 0:	/* +Z face at z + 1 */
@@ -779,22 +915,34 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
 		break;
 	}
-	emitFace(list, quad, uv, alphaMode,
-		 shadeTint(tint, kSideShade[dir], x, z, light));
+	if (opts->smooth)
+		sideCorners(lights, x, z, dir, y0, y1, light, ao);
+	else
+		sampleLight(lights, x + kSideDx[dir], y0, z + kSideDz[dir],
+			    light[0]);
+	faceCornerTints(tint, kSideShade[dir], x, z, light, ao, opts->smooth,
+			opts->lightDebug, cornerTint);
+	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
+		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
+		 cornerTint);
 }
 
-void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
-		     const LightGrid *lights, DrawList *list,
-		     const Camera3D *camera, uint32_t tint)
+void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
+			const LightGrid *lights, DrawList *list,
+			const Camera3D *camera,
+			const VoxmapEmitOptions *options)
 {
+	static const float kFallbackDebug[4][2] = ATLAS_UV_SPARE;
+	const float (*debugUV)[2];
 	float toCamX;
 	float toCamZ;
 	int x;
 	int z;
 	int dir;
 
-	if (map == NULL || list == NULL)
+	if (map == NULL || list == NULL || options == NULL)
 		return;
+	debugUV = options->debugUV != NULL ? options->debugUV : kFallbackDebug;
 	cameraGroundDir(cameraYawDeg(camera), &toCamX, &toCamZ);
 	for (z = 0; z < map->depth; z++) {
 		for (x = 0; x < map->width; x++) {
@@ -803,15 +951,14 @@ void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
 			int id;
 			float uv[4][2];
 			uint8_t alphaMode;
-			uint8_t light[3];
 
 			if (height < 0)
 				continue;	/* void: no column, no faces */
 			id = map->materials[idx];
 			alphaMode = materialAlpha(materials, id);
 			materialUV(materials, id, FACE_TOP, uv);
-			sampleLight(lights, x, height, z, light);
-			emitTop(list, x, z, height, uv, alphaMode, tint, light);
+			emitTop(list, x, z, height, uv, alphaMode, options->tint,
+				lights, options, debugUV);
 			for (dir = 0; dir < 4; dir++) {
 				int neighbour;
 
@@ -825,11 +972,19 @@ void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
 					continue;	/* not exposed */
 				materialUV(materials, id,
 					   materialFaceForSideDir(dir), uv);
-				sampleLight(lights, x + kSideDx[dir], neighbour,
-					    z + kSideDz[dir], light);
 				emitSide(list, x, z, dir, neighbour, height, uv,
-					 alphaMode, tint, light);
+					 alphaMode, options->tint, lights,
+					 options, debugUV);
 			}
 		}
 	}
+}
+
+void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
+		     const LightGrid *lights, DrawList *list,
+		     const Camera3D *camera, uint32_t tint)
+{
+	VoxmapEmitOptions options = { tint, false, false, NULL };
+
+	voxmapEmitFacesOpt(map, materials, lights, list, camera, &options);
 }

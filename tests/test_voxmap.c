@@ -18,6 +18,7 @@
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/lightgrid.h"
 #include "render/materials.h"
 #include "render/textures.h"
 #include "render/voxmap.h"
@@ -1391,6 +1392,332 @@ static void test_light_lines_not_map_rows(void)
 	destroyVoxmap(map);
 }
 
+/* --- 18. smooth lighting, AO, toggles and debug view (T15) ------------- */
+
+/* The first top face whose 4 corners share the plane y = height, or NULL. */
+static const DrawItem *findTopPlaneAt(const DrawList *list, float height)
+{
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+		int k;
+		bool flat = true;
+
+		for (k = 0; k < 4; k++)
+			if (item->worldQuad[k][1] != height)
+				flat = false;
+		if (flat)
+			return item;
+	}
+	return NULL;
+}
+
+/* The +Z side face whose low-corner x equals `x`, or NULL. */
+static const DrawItem *findPlusZSideAt(const DrawList *list, int x)
+{
+	const float side[4][2] = ATLAS_UV_SIDE;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+
+		if (memcmp(item->uv, side, sizeof(side)) == 0 &&
+		    sideDirOf(item) == 0 && item->worldQuad[0][0] == (float)x)
+			return item;
+	}
+	return NULL;
+}
+
+/* Smooth top-face corner light averages the 2x2 block around each corner; the
+ * flat path keeps the single T14 sample. Map "11" with a lamp over column 0:
+ * corner factors {108, 118, 118, 108}, flat sample 151. Tint 240. */
+static void test_smooth_light_corner_tints(void)
+{
+	Voxmap *map = loadTemp("vm_smooth_light.txt", "11\n");
+	LightGrid *g = lightGridCreate(2, 1, 2);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, map);
+
+	initDrawList(&list, 32);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	/* 240*108/255 = 102, 240*118/255 = 111. */
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(102, 102, 102, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(111, 111, 111, 255),
+			      (int)top->cornerTint[1]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(111, 111, 111, 255),
+			      (int)top->cornerTint[2]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(102, 102, 102, 255),
+			      (int)top->cornerTint[3]);
+	/* The uniform fallback is corner 0. */
+	TEST_ASSERT_EQUAL_INT((int)top->cornerTint[0], (int)top->tint);
+
+	/* Flat path (the T14 entry point): one sample (0,1,0) = 151 ->
+	 * 240*151/255 = 142 on every corner, byte-identical to T14. */
+	clearDrawList(&list);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(240, 240, 240, 255));
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(142, 142, 142, 255),
+			      (int)top->tint);
+	TEST_ASSERT_EQUAL_INT((int)top->tint, (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)top->tint, (int)top->cornerTint[3]);
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Smooth top-face AO: a taller neighbour darkens the two corners that touch
+ * it. Map "12": the height-1 column's top has AO {0,1,1,0} at 82% for the
+ * occluded corners (light 93 everywhere). */
+static void test_smooth_ao_corner_tints(void)
+{
+	Voxmap *map = loadTemp("vm_smooth_ao.txt", "12\n");
+	LightGrid *g = lightGridCreate(2, 1, 3);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridPropagate(g, map);	/* sky only, no lamps */
+
+	initDrawList(&list, 32);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);	/* (0,0) top at y = 1 */
+	TEST_ASSERT_NOT_NULL(top);
+	/* Unoccluded 240*93/255 = 88; occluded 240*0.82*93/255 = 72. */
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(88, 88, 88, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(72, 72, 72, 255),
+			      (int)top->cornerTint[1]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(72, 72, 72, 255),
+			      (int)top->cornerTint[2]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(88, 88, 88, 255),
+			      (int)top->cornerTint[3]);
+
+	/* Flat path: no AO, all corners 88. */
+	clearDrawList(&list);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(240, 240, 240, 255));
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(88, 88, 88, 255), (int)top->tint);
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Smooth side face: the single span samples the neighbour-side air cells at the
+ * bottom (y0) and top (y1) levels, so a wall base reads dark and its top
+ * bright. Map "12", the (0,0) +Z face (neighbour void -> y0 = 0, y1 = 1). */
+static void test_smooth_side_corner_tints(void)
+{
+	Voxmap *map = loadTemp("vm_smooth_side.txt", "12\n");
+	LightGrid *g = lightGridCreate(2, 1, 3);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *side;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridPropagate(g, map);
+
+	initDrawList(&list, 32);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	side = findPlusZSideAt(&list, 0);
+	TEST_ASSERT_NOT_NULL(side);
+	/* y0 corners: AO 2 (ground below both edges) -> 240*0.9*0.65*93/255 =
+	 * 51; y1 corners: AO 0 -> 240*0.9*93/255 = 79. */
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(51, 51, 51, 255),
+			      (int)side->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(51, 51, 51, 255),
+			      (int)side->cornerTint[1]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(79, 79, 79, 255),
+			      (int)side->cornerTint[2]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(79, 79, 79, 255),
+			      (int)side->cornerTint[3]);
+
+	/* Flat path: one sample (0,0,1) = 93 -> 240*0.9*93/255 = 79 all
+	 * corners (byte-identical to T14). */
+	clearDrawList(&list);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(240, 240, 240, 255));
+	side = findPlusZSideAt(&list, 0);
+	TEST_ASSERT_NOT_NULL(side);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(79, 79, 79, 255), (int)side->tint);
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Smooth side sampling covers every side direction (the along-axis and
+ * reversed-span arms): a single tall column emits one side at each 90-degree
+ * yaw. The base is darker than the top (contact shadow + level sampling). */
+static void test_smooth_sides_all_directions(void)
+{
+	Voxmap *map = loadTemp("vm_smooth_sides.txt", "2\n");
+	LightGrid *g = lightGridCreate(1, 1, 3);
+	Camera3D cam;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+	const int yaws[4] = { 0, 90, 180, 270 };
+	int i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridPropagate(g, map);
+
+	for (i = 0; i < 4; i++) {
+		DrawList list;
+		const DrawItem *side = NULL;
+		size_t n;
+
+		initDrawList(&list, 16);
+		initCamera3D(&cam);
+		{
+			int steps = yaws[i] / (int)CAMERA_STEP_DEG;
+
+			while (steps-- > 0) {
+				cameraRotateStep(&cam, 1);
+				updateCamera3D(&cam, CAMERA_TURN_SECONDS);
+			}
+		}
+		voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+		TEST_ASSERT_EQUAL_INT(2, (int)drawListCount(&list));
+		for (n = 0; n < drawListCount(&list); n++) {
+			const float s[4][2] = ATLAS_UV_SIDE;
+
+			if (memcmp(drawListItem(&list, n)->uv, s,
+				   sizeof(s)) == 0)
+				side = drawListItem(&list, n);
+		}
+		TEST_ASSERT_NOT_NULL(side);
+		/* Bottom corners (indices 0,1) are darker than the top (2,3). */
+		TEST_ASSERT_TRUE((int)side->cornerTint[0] <
+				 (int)side->cornerTint[2]);
+		TEST_ASSERT_TRUE((int)side->cornerTint[1] <
+				 (int)side->cornerTint[3]);
+		destroyDrawList(&list);
+	}
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Debug view: white UV + the light colour as the tint (no material/shade/AO),
+ * corner-interpolated when smooth; NULL debugUV falls back to the spare. */
+static void test_light_debug_view(void)
+{
+	Voxmap *map = loadTemp("vm_debug.txt", "11\n");
+	LightGrid *g = lightGridCreate(2, 1, 2);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+	const float debugUV[4][2] = {
+		{ 0.25f, 0.25f }, { 0.75f, 0.25f },
+		{ 0.75f, 0.75f }, { 0.25f, 0.75f }
+	};
+	const float spare[4][2] = ATLAS_UV_SPARE;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, true,
+				   debugUV };
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, map);
+
+	initDrawList(&list, 32);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_MEMORY(debugUV, top->uv, sizeof(debugUV));
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(108, 108, 108, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(118, 118, 118, 255),
+			      (int)top->cornerTint[1]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(118, 118, 118, 255),
+			      (int)top->cornerTint[2]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(108, 108, 108, 255),
+			      (int)top->cornerTint[3]);
+	/* Debug forces opaque even though the fallback material blends. */
+	TEST_ASSERT_EQUAL_INT(ALPHA_OPAQUE, top->alphaMode);
+
+	/* Debug + flat: the single sample (151) on every corner. */
+	clearDrawList(&list);
+	opts.smooth = false;
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(151, 151, 151, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(151, 151, 151, 255),
+			      (int)top->cornerTint[3]);
+
+	/* NULL debugUV falls back to the built-in spare region. */
+	clearDrawList(&list);
+	opts.debugUV = NULL;
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_MEMORY(spare, top->uv, sizeof(spare));
+
+	/* NULL options emits nothing. */
+	clearDrawList(&list);
+	voxmapEmitFacesOpt(map, NULL, g, &list, &cam, NULL);
+	TEST_ASSERT_EQUAL_INT(0, (int)drawListCount(&list));
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Smooth emission with a NULL light grid stays full-brightness (same as the
+ * flat path) and smooth with no grid is still valid. */
+static void test_smooth_null_grid_full_brightness(void)
+{
+	Voxmap *map = loadTemp("vm_smooth_null.txt", "1\n");
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, NULL, &list, &cam, &opts);
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(240, 240, 240, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)top->cornerTint[0], (int)top->cornerTint[3]);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -1445,4 +1772,10 @@ void run_test_voxmap(void)
 	RUN_TEST(test_light_bounds_and_accessors);
 	RUN_TEST(test_light_roundtrip_file_and_memory);
 	RUN_TEST(test_light_lines_not_map_rows);
+	RUN_TEST(test_smooth_light_corner_tints);
+	RUN_TEST(test_smooth_ao_corner_tints);
+	RUN_TEST(test_smooth_side_corner_tints);
+	RUN_TEST(test_smooth_sides_all_directions);
+	RUN_TEST(test_light_debug_view);
+	RUN_TEST(test_smooth_null_grid_full_brightness);
 }

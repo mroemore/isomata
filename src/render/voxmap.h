@@ -72,16 +72,33 @@
  * slot. With a NULL material table the built-in fallback regions
  * (textures.h) are used, so the emitters stay usable without a manifest.
  *
- * LIGHTING (flat per-face; the smooth per-corner pass is T15): each face
- * multiplies a per-channel brightness factor into its tint. The factor comes
- * from the air cell the face looks across (lightgrid.h::lightGridFactorAt):
- *   - a top face samples the cell directly above the column top,
- *     (x, height, z);
- *   - a side face samples the air cell immediately above the neighbour column,
- *     (x + dx, neighbourHeight, z + dz) — the cell the face's lower edge looks
- *     across (a void/OOB neighbour uses y = 0).
- * A NULL `lights` keeps every face at full brightness (factor 255), so the
- * unlit emission path is unchanged.
+ * LIGHTING: each face multiplies a per-channel brightness factor into its
+ * tint. Two paths share one composition (material tint x directional shade x
+ * checkerboard x light factor x AO):
+ *   - FLAT (VoxmapEmitOptions.smooth false) is exactly the T14 path: one
+ *     factor per face, no AO, byte-identical tints. The factor comes from the
+ *     air cell the face looks across (lightgrid.h::lightGridFactorAt):
+ *       . a top face samples the cell directly above the column top,
+ *         (x, height, z);
+ *       . a side face samples the air cell immediately above the neighbour
+ *         column, (x + dx, neighbourHeight, z + dz) — the cell the face's lower
+ *         edge looks across (a void/OOB neighbour uses y = 0).
+ *   - SMOOTH (the default, T15) samples a per-corner average and a per-corner
+ *     AO multiplier, written as the DrawItem's 4 corner tints so the GPU
+ *     interpolates a gradient across the face. Top faces average the 2x2 block
+ *     of columns above each corner at the face's air level; side faces keep the
+ *     SINGLE multi-level span (splitting it would reintroduce the T12 base-line
+ *     sort bug) and sample the corner's own air cell plus its in-plane
+ *     neighbours at the bottom level for the two bottom corners and the top
+ *     level for the two top corners — the GPU then interpolates the vertical
+ *     gradient across the quad.
+ * A NULL `lights` keeps every face at full brightness (factor 255) on both
+ * paths, so the unlit emission path is unchanged.
+ *
+ * DEBUG (VoxmapEmitOptions.lightDebug) renders the light only: every face uses
+ * a fully-white atlas UV (`debugUV`; NULL falls back to the built-in spare
+ * region) and the light factor itself as the corner tint — no material tint,
+ * shade, checkerboard or AO. Corner-interpolated on the smooth path.
  */
 
 #include "render/camera3d.h"
@@ -176,12 +193,32 @@ int voxmapLightCount(const Voxmap *map);
 /* Borrowed light at `index`, or NULL when out of range / the map is NULL. */
 const VoxmapLight *voxmapLightAt(const Voxmap *map, int index);
 
+/* Face-emission options (see the lighting/debug note). `tint` is the base
+ * material tint; `smooth` selects the per-corner light + AO pass (false is
+ * exactly the T14 flat path); `lightDebug` is the light-only view;
+ * `debugUV` is the 4-corner UV of a white atlas texel used in that view
+ * (NULL uses the built-in spare region). */
+typedef struct VoxmapEmitOptions {
+	uint32_t tint;
+	bool smooth;
+	bool lightDebug;
+	const float (*debugUV)[2];
+} VoxmapEmitOptions;
+
 /* Append every visible face of the map to `list` with the given tint, sampling
  * `materials` (NULL uses the built-in fallback regions) and `lights` (NULL
  * emits full-brightness faces; see the lighting note). Emits nothing for a
- * NULL map/list. */
+ * NULL map/list. This is the flat T14 path; use voxmapEmitFacesOpt for smooth
+ * lighting or the debug view. */
 void voxmapEmitFaces(const Voxmap *map, const MaterialTable *materials,
 		     const LightGrid *lights, DrawList *list,
 		     const Camera3D *camera, uint32_t tint);
+
+/* As voxmapEmitFaces, but with the full options (smooth lighting, debug view).
+ * A NULL `options` emits nothing. */
+void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
+			const LightGrid *lights, DrawList *list,
+			const Camera3D *camera,
+			const VoxmapEmitOptions *options);
 
 #endif /* ISOMATA_RENDER_VOXMAP_H */
