@@ -191,16 +191,19 @@ $ spot  x y z r g b dx dy dz angle [radius]
 ```
 
 The `$` grammar is shared byte-for-byte with the ASCII parser
-(`voxmapParseLightLine`, `src/render/voxmap.c:409`; pinned by the light tests in
+(`voxmapParseLightLine`, `src/render/voxmap.c:977`; pinned by the light tests in
 `test_voxmap.c`).
 
 - `(x, y, z)` is a **world** position. The seeded cell is
   `(floor x, floor y, floor z)`; the centre of cell `(cx, cy, cz)` is
   `(cx+0.5, cy+0.5, cz+0.5)`.
-- `r g b` are the light colour channels in `0..255`; values are clamped
-  (negative/NaN → 0, > 255 → 255).
-- `x y z r g b dx dy dz angle radius` are parsed with `strtof` and must be
-  fully numeric and finite.
+- `r g b` are the light colour channels in `0..255`. Each channel token is
+  parsed as a **finite** float; a finite out-of-range value is **clamped**
+  (negative → 0, > 255 → 255). A **non-finite** token (`inf`, `nan`) is not
+  clamped: it fails the parse and the whole line is skipped (see below).
+- `x y z r g b dx dy dz angle radius` are all parsed with `strtof`, and the
+  token must be consumed in full; an empty token, trailing junk, or a
+  non-finite value is a bad numeric token.
 - `radius` is a **world-unit** range:
   - **point**: optional. When present it caps the seeded channel at
     `min(channel, radius × LIGHT_ATTEN)` where `LIGHT_ATTEN = 16`
@@ -213,8 +216,8 @@ The `$` grammar is shared byte-for-byte with the ASCII parser
 - `angle` is the spot **half-angle in degrees** and must be `> 0`.
 - A line is malformed (and is **skipped** with a diagnostic — never a load
   failure) when: the token count is wrong (`point` needs 8 or 9, `spot` needs
-  12 or 13), any numeric token is bad, the direction is zero, or the angle is
-  non-positive.
+  12 or 13), any numeric token is bad or non-finite, the direction is zero, or
+  the angle is non-positive.
 - At most 64 lights are kept; extras are skipped (diagnostic,
   `overflowLights`).
 
