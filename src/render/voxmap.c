@@ -118,7 +118,8 @@ static int tokenize(char *line, char **tokens, int max)
 	return n;
 }
 
-/* The built-in legend: digits 1..9 are heights, '0' and '.' are void. */
+/* The built-in legend: digits 0..9 are solid heights (0 = a ground-level
+ * cell), '.' is void; legend chars can override any of them. */
 static void legendDefaults(int8_t h[LEGEND_CHARS], int16_t m[LEGEND_CHARS],
 			   int16_t defaultMat)
 {
