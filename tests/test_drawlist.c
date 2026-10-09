@@ -149,8 +149,11 @@ static void test_sort_far_to_near(void)
 	destroyDrawList(&list);
 }
 
-/* Equal depth: kind breaks the tie (VOXEL before SPRITE), then insertion order
- * keeps equal-kind items stable. */
+/* Same raw centre: the sprite depth bias puts the sprite after the coplanar
+ * voxel (VOXEL before SPRITE), then insertion order keeps equal-kind items
+ * stable. After the bias these keys are no longer exactly equal, so this
+ * pins the bias ordering, NOT the kind tie-break arm — that arm is only
+ * reachable for keys equal after the bias. */
 static void test_sort_equal_depth_ties(void)
 {
 	DrawList list;
@@ -171,8 +174,9 @@ static void test_sort_equal_depth_ties(void)
 	destroyDrawList(&list);
 }
 
-/* A sprite appended before a same-depth voxel is reordered behind it, so the
- * transparent billboard blends over the opaque terrain. */
+/* A sprite appended before a coplanar voxel is reordered behind it (the
+ * sprite bias moves it toward the camera), so the transparent billboard
+ * blends over the opaque terrain. */
 static void test_sort_sprite_after_voxel_at_equal_depth(void)
 {
 	DrawList list;

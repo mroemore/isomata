@@ -27,8 +27,12 @@
  *   depth is raised by DRAW_SPRITE_DEPTH_BIAS, see drawlist.c) so a sprite
  *   standing on a tile never flickers against that tile's top face: a
  *   billboard's centre is perpendicular to the view direction and would
- *   otherwise tie exactly with the anchor it stands on. Ties break
- *   deterministically: depth, then kind (VOXEL before SPRITE, so a
+ *   otherwise tie exactly with the anchor it stands on. Because the bias
+ *   separates a sprite from a coplanar face, the kind tie-break below is
+ *   only reached when two keys are exactly equal AFTER the bias (two
+ *   coplanar faces, or a face and a sprite at the same biased depth); the
+ *   common sprite-vs-face tie is resolved by the bias, not by kind. Ties
+ *   break deterministically: depth, then kind (VOXEL before SPRITE, so a
  *   transparent billboard blends over opaque terrain at the same depth),
  *   then centre position lexicographically (x, then y, then z), then
  *   insertion order (the sort is a stable insertion sort, so equal keys keep
