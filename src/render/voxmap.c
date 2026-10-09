@@ -319,6 +319,12 @@ static void parseLightLine(VoxmapLight *lights, int *count, const char *data,
 			label);
 		return;
 	}
+	if (strcmp(tokens[0], "$") != 0) {
+		fprintf(stderr,
+			"voxmap: '%s' not a light line ('%s'); skipped\n",
+			label, tokens[0]);
+		return;
+	}
 	memset(&l, 0, sizeof(l));
 	if (strcmp(tokens[1], "point") == 0) {
 		if (ntok != 8 && ntok != 9) {
@@ -841,6 +847,49 @@ void destroyVoxmap(Voxmap *map)
 	free(map->materials);
 	free(map->ground);
 	free(map);
+}
+
+bool voxmapParseLightLine(const char *text, size_t length, VoxmapLight *out)
+{
+	VoxmapLight lights[1];
+	int count = 0;
+
+	if (text == NULL || out == NULL)
+		return false;
+	parseLightLine(lights, &count, text, 0, length, "<legend>");
+	if (count == 0)
+		return false;
+	*out = lights[0];
+	return true;
+}
+
+Voxmap *voxmapBuildRaw(int width, int depth, int levels,
+		       const uint8_t *solid, const int16_t *materials,
+		       const VoxmapLight *lights, int lightCount)
+{
+	Voxmap *map;
+	size_t n;
+
+	if (width < 1 || depth < 1 || levels < 1 ||
+	    width > VOXMAP_MAX_DIM || depth > VOXMAP_MAX_DIM ||
+	    levels > VOXMAP_MAX_DIM)
+		return NULL;
+	map = allocVoxmap(width, depth, levels);
+	if (map == NULL)
+		return NULL;
+	n = (size_t)width * (size_t)depth * (size_t)levels;
+	if (solid != NULL)
+		memcpy(map->solid, solid, n);
+	if (materials != NULL)
+		memcpy(map->materials, materials, n * sizeof(*map->materials));
+	if (lights != NULL && lightCount > 0) {
+		int keep = lightCount < VOXMAP_MAX_LIGHTS ? lightCount
+							  : VOXMAP_MAX_LIGHTS;
+
+		memcpy(map->lights, lights, (size_t)keep * sizeof(*lights));
+		map->lightCount = keep;
+	}
+	return map;
 }
 
 int voxmapWidth(const Voxmap *map)

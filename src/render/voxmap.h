@@ -260,6 +260,26 @@ int voxmapLightCount(const Voxmap *map);
 /* Borrowed light at `index`, or NULL when out of range / the map is NULL. */
 const VoxmapLight *voxmapLightAt(const Voxmap *map, int index);
 
+/* Parse a single `$` light line (the same grammar the ASCII parser accepts;
+ * leading spaces/tabs are allowed, a trailing CR/space is ignored). Returns
+ * true and fills `*out` on success, false on a malformed line or NULL args (a
+ * stderr diagnostic is printed). The PNG colour-legend parser
+ * (mapsource.h::mapSourceLegendParse) calls this so BOTH map formats share
+ * exactly one light grammar. */
+bool voxmapParseLightLine(const char *text, size_t length, VoxmapLight *out);
+
+/* Build a Voxmap directly from an occupancy + per-voxel material grid in the
+ * canonical voxel order (x fastest, then y, then z: index = ((z * levels) + y)
+ * * width + x). The PNG slice assembler (mapsource.h) uses this so it never
+ * reaches into the opaque struct. `solid` (one byte per voxel, 0/1) and
+ * `materials` (one int16 per voxel, -1 = air) are copied and may be NULL for
+ * an all-air grid. `lights` (at most VOXMAP_MAX_LIGHTS entries; may be NULL
+ * when lightCount is 0) is copied. Returns NULL on an out-of-range dimension,
+ * an over-large volume, or OOM. */
+Voxmap *voxmapBuildRaw(int width, int depth, int levels,
+		       const uint8_t *solid, const int16_t *materials,
+		       const VoxmapLight *lights, int lightCount);
+
 /* Face-emission options (see the lighting/debug note). `tint` is the base
  * material tint; `smooth` selects the per-corner light + AO pass (false is
  * exactly the T14 flat path); `lightDebug` is the light-only view;

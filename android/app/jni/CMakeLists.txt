@@ -42,6 +42,7 @@ set(ISOMATA_SRC
 	../../../src/render/atlas.c
 	../../../src/render/materials.c
 	../../../src/render/voxmap.c
+	../../../src/render/mapsource.c
 	../../../src/render/lightgrid.c
 	../../../src/render/drawlist.c
 	../../../src/render/sprites.c

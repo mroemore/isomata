@@ -60,6 +60,7 @@ void run_test_camera(void);
 void run_test_atlas(void);
 void run_test_materials(void);
 void run_test_voxmap(void);
+void run_test_mapsource(void);
 void run_test_grid(void);
 void run_test_drawlist(void);
 void run_test_lightgrid(void);
@@ -90,6 +91,7 @@ int main(void)
 	run_test_atlas();
 	run_test_materials();
 	run_test_voxmap();
+	run_test_mapsource();
 	run_test_grid();
 	run_test_drawlist();
 	run_test_lightgrid();
