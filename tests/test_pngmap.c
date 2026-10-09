@@ -74,6 +74,12 @@ static void assertVoxmapsIdentical(const Voxmap *a, const Voxmap *b)
 				TEST_ASSERT_EQUAL_INT(
 					voxmapMaterialAtVoxel(a, x, y, z),
 					voxmapMaterialAtVoxel(b, x, y, z));
+				/* T17: the shape and ramp dir must match too. */
+				TEST_ASSERT_EQUAL_INT(voxmapShapeAt(a, x, y, z),
+						      voxmapShapeAt(b, x, y, z));
+				TEST_ASSERT_EQUAL_INT(
+					voxmapShapeDirAt(a, x, y, z),
+					voxmapShapeDirAt(b, x, y, z));
 			}
 		}
 	}

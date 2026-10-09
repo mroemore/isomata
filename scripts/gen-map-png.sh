@@ -36,6 +36,11 @@ function tuple(ch,   r,g,b,a) {
   else if (ch=="w") { r=160; g=82;  b=45;  a=255 }   # wood
   else if (ch=="f") { r=0;   g=0;   b=255; a=255 }   # sixface
   else if (ch=="a") { r=255; g=0;   b=255; a=255 }   # foliage
+  # T17 shapes (distinct colours = distinct material/shape/dir tuples).
+  else if (ch=="H") { r=200; g=200; b=200; a=255 }   # stone half
+  else if (ch=="R") { r=168; g=168; b=168; a=255 }   # stone ramp north
+  else if (ch=="G") { r=152; g=152; b=152; a=255 }   # stone ramp east
+  else if (ch=="r") { r=184; g=184; b=184; a=255 }   # stone half-ramp north
   else              { r=0;   g=0;   b=0;   a=0 }     # "." = air
   return sprintf("%d,%d,%d,%d", r, g, b, a)
 }
@@ -84,6 +89,10 @@ done
   echo "#A0522D wood"
   echo "#0000FF sixface"
   echo "#FF00FF foliage"
+  echo "#C8C8C8 stone shape=half"
+  echo "#A8A8A8 stone shape=ramp dir=north"
+  echo "#989898 stone shape=ramp dir=east"
+  echo "#B8B8B8 stone shape=half-ramp dir=north"
   cat "$TMP/legend-lights.txt"
 } > "$OUTDIR/legend.txt"
 

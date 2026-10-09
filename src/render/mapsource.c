@@ -138,16 +138,25 @@ int mapSourceNaturalCompare(const char *a, const char *b)
 
 /* --- colour lookup ------------------------------------------------------ */
 
-int mapSourceColorLookup(const MapSourceLegend *legend, uint32_t rgb)
+/* The colour entry for an exact RGB, or NULL. */
+static const MapSourceColor *colorEntry(const MapSourceLegend *legend,
+					uint32_t rgb)
 {
 	int i;
 
 	if (legend == NULL)
-		return -1;
+		return NULL;
 	for (i = 0; i < legend->colorCount; i++)
 		if (legend->colors[i].rgb == rgb)
-			return legend->colors[i].material;
-	return -1;
+			return &legend->colors[i];
+	return NULL;
+}
+
+int mapSourceColorLookup(const MapSourceLegend *legend, uint32_t rgb)
+{
+	const MapSourceColor *entry = colorEntry(legend, rgb);
+
+	return entry != NULL ? entry->material : -1;
 }
 
 /* --- legend parse ------------------------------------------------------- */
@@ -172,12 +181,16 @@ static int resolveMaterial(const MaterialTable *materials, const char *name,
 	return id;
 }
 
-/* Add one colour line (tokens[0] = "#RRGGBB", tokens[1] = material). */
+/* Add one colour line: tokens[0] = "#RRGGBB", tokens[1] = material, then the
+ * optional shape=/dir= attributes. `ntok` is the full token count. */
 static void addColorLine(MapSourceLegend *out, const MaterialTable *materials,
-			 char *const *tokens)
+			 char *const *tokens, int ntok)
 {
+	char prefix[MAPSOURCE_LINE_MAX];
 	uint32_t rgb;
+	uint8_t packed;
 	int id;
+	int rc;
 	int i;
 
 	if (!parseHexColor(tokens[0], &rgb)) {
@@ -189,12 +202,25 @@ static void addColorLine(MapSourceLegend *out, const MaterialTable *materials,
 	id = resolveMaterial(materials, tokens[1], out);
 	if (id < 0)
 		return;
+	snprintf(prefix, sizeof(prefix), "mapsource: colour '%s'", tokens[0]);
+	rc = voxmapParseShapeAttrs(&tokens[2], ntok - 2, prefix, &packed);
+	if (rc == VOXMAP_ATTR_BAD) {
+		fprintf(stderr,
+			"mapsource: colour line has an unrecognised token; line skipped\n");
+		out->badLines++;
+		return;
+	}
+	if (rc == VOXMAP_ATTR_SKIP) {
+		out->badLines++;
+		return;
+	}
 	for (i = 0; i < out->colorCount; i++) {
 		if (out->colors[i].rgb == rgb) {
 			fprintf(stderr,
 				"mapsource: duplicate colour #%06X; last wins\n",
 				(unsigned)rgb);
 			out->colors[i].material = (int16_t)id;
+			out->colors[i].shape = packed;
 			out->duplicateColors++;
 			return;
 		}
@@ -207,6 +233,7 @@ static void addColorLine(MapSourceLegend *out, const MaterialTable *materials,
 	}
 	out->colors[out->colorCount].rgb = rgb;
 	out->colors[out->colorCount].material = (int16_t)id;
+	out->colors[out->colorCount].shape = packed;
 	out->colorCount++;
 }
 
@@ -259,7 +286,7 @@ bool mapSourceLegendParse(const char *text, size_t length,
 		}
 		if (text[i] == '#') {
 			char line[MAPSOURCE_LINE_MAX];
-			char *tokens[4];
+			char *tokens[8];
 			size_t len = (start + rowLen) - i;
 			int ntok;
 
@@ -271,15 +298,15 @@ bool mapSourceLegendParse(const char *text, size_t length,
 			}
 			memcpy(line, text + i, len);
 			line[len] = '\0';
-			ntok = tokenize(line, tokens, 4);
-			if (ntok != 2) {
+			ntok = tokenize(line, tokens, 8);
+			if (ntok < 2 || ntok > 8) {
 				fprintf(stderr,
-					"mapsource: colour line needs '#RRGGBB material' (%d tokens); skipped\n",
+					"mapsource: colour line needs '#RRGGBB material' plus optional shape=/dir= (%d tokens); skipped\n",
 					ntok);
 				out->badLines++;
 				continue;
 			}
-			addColorLine(out, materials, tokens);
+			addColorLine(out, materials, tokens, ntok);
 			continue;
 		}
 		fprintf(stderr, "mapsource: unrecognised legend line; skipped\n");
@@ -296,6 +323,7 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 {
 	uint8_t *solid;
 	int16_t *mats;
+	uint8_t *shapes;
 	Voxmap *map;
 	int width;
 	int height;
@@ -356,9 +384,11 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 	}
 	solid = calloc(n, 1);
 	mats = malloc(n * sizeof(*mats));
-	if (solid == NULL || mats == NULL) {
+	shapes = calloc(n, 1);
+	if (solid == NULL || mats == NULL || shapes == NULL) {
 		free(solid);
 		free(mats);
+		free(shapes);
 		fprintf(stderr, "mapsource: '%s' out of memory\n",
 			mapLabel(label));
 		return NULL;
@@ -376,30 +406,32 @@ Voxmap *mapSourceAssembleSlices(const MapSourceImage *images, int count,
 					      (size_t)s) *
 						     (size_t)width +
 					     (size_t)x;
-				int mat;
+				const MapSourceColor *entry;
 
 				if (px[3] == 0)
 					continue;	/* transparent = air */
-				mat = mapSourceColorLookup(
+				entry = colorEntry(
 					legend,
 					((uint32_t)px[0] << 16) |
 						((uint32_t)px[1] << 8) |
 						(uint32_t)px[2]);
-				if (mat < 0) {
+				if (entry == NULL) {
 					unknown++;
 					continue;	/* unknown colour = air */
 				}
 				solid[idx] = 1;
-				mats[idx] = (int16_t)mat;
+				mats[idx] = entry->material;
+				shapes[idx] = entry->shape;
 				solidCount++;
 			}
 		}
 	}
 
-	map = voxmapBuildRaw(width, height, levels, solid, mats, legend->lights,
-			     legend->lightCount);
+	map = voxmapBuildRawShaped(width, height, levels, solid, mats, shapes,
+				   legend->lights, legend->lightCount);
 	free(solid);
 	free(mats);
+	free(shapes);
 	if (map == NULL) {
 		fprintf(stderr, "mapsource: '%s' voxmap build failed\n",
 			mapLabel(label));

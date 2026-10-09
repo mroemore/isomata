@@ -515,6 +515,89 @@ static void test_assemble_size_guards_and_null_label(void)
 	destroyVoxmap(map);
 }
 
+/* T17: the colour legend's optional shape=/dir= attributes; the entry carries
+ * the packed shape byte, with the same defaults as the ASCII legend. */
+static void test_legend_shape_attributes(void)
+{
+	MapSourceLegend lg;
+	const char *text =
+		"#00ff00 grass shape=ramp dir=east\n"
+		"#808080 stone shape=half\n"
+		"#0000ff sixface shape=ramp\n"
+		"#ff00ff foliage shape=half-ramp dir=west\n"
+		"#ff0000 nothing shape=banana\n"
+		"#123456 grass bogus\n";
+
+	TEST_ASSERT_TRUE(mapSourceLegendParse(text, strlen(text), NULL, &lg));
+	/* Four valid colour lines; the unknown shape value and the non-attribute
+	 * token are each a bad line. */
+	TEST_ASSERT_EQUAL_INT(4, lg.colorCount);
+	TEST_ASSERT_EQUAL_INT(2, lg.badLines);
+	TEST_ASSERT_EQUAL_INT(-1, mapSourceColorLookup(&lg, 0xff0000u));
+	TEST_ASSERT_EQUAL_INT(
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_RAMP, VOXMAP_DIR_EAST),
+		lg.colors[0].shape);
+	TEST_ASSERT_EQUAL_INT(
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF, VOXMAP_DIR_NORTH),
+		lg.colors[1].shape);
+	/* A ramp without dir defaults to north. */
+	TEST_ASSERT_EQUAL_INT(
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_RAMP, VOXMAP_DIR_NORTH),
+		lg.colors[2].shape);
+	TEST_ASSERT_EQUAL_INT(
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF_RAMP, VOXMAP_DIR_WEST),
+		lg.colors[3].shape);
+
+	/* A duplicate colour updates the shape too. */
+	TEST_ASSERT_TRUE(mapSourceLegendParse(
+		"#00ff00 grass\n#00ff00 stone shape=half dir=east\n",
+		strlen("#00ff00 grass\n#00ff00 stone shape=half dir=east\n"),
+		NULL, &lg));
+	TEST_ASSERT_EQUAL_INT(1, lg.colorCount);
+	TEST_ASSERT_EQUAL_INT(1, lg.duplicateColors);
+	TEST_ASSERT_EQUAL_INT(
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF, VOXMAP_DIR_NORTH),
+		lg.colors[0].shape);
+}
+
+/* A colour line needs 2..8 tokens; fewer or more is a bad line. */
+static void test_legend_colour_token_bounds(void)
+{
+	MapSourceLegend lg;
+	const char *text =
+		"#00ff00\n"
+		"#808080 stone a b c d e f g\n"
+		"#0000ff sixface\n";
+
+	TEST_ASSERT_TRUE(mapSourceLegendParse(text, strlen(text), NULL, &lg));
+	TEST_ASSERT_EQUAL_INT(1, lg.colorCount);	/* only sixface */
+	TEST_ASSERT_EQUAL_INT(2, lg.badLines);
+}
+
+/* Shapes flow from the legend through the assembler to the Voxmap. */
+static void test_assemble_shapes(void)
+{
+	MapSourceLegend lg;
+	MapSourceImage img;
+	uint8_t buf[8];
+	Rgba px[2] = { C_GRASS, C_RED };
+	Voxmap *map;
+	const char *legend =
+		"#00ff00 grass shape=half\n"
+		"#ff0000 default shape=ramp dir=south\n";
+
+	TEST_ASSERT_TRUE(mapSourceLegendParse(legend, strlen(legend), NULL, &lg));
+	makeImage(&img, buf, 2, 1, px);
+	map = mapSourceAssembleSlices(&img, 1, &lg, "shapes", NULL);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_HALF, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_RAMP, voxmapShapeAt(map, 1, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_SOUTH, voxmapShapeDirAt(map, 1, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+}
+
 /* --- voxmap entry points used by the glue ------------------------------ */
 
 static void test_voxmap_parse_light_line_public(void)
@@ -604,6 +687,9 @@ void run_test_mapsource(void)
 	RUN_TEST(test_assemble_attaches_lights);
 	RUN_TEST(test_assemble_malformed_inputs);
 	RUN_TEST(test_assemble_size_guards_and_null_label);
+	RUN_TEST(test_legend_shape_attributes);
+	RUN_TEST(test_legend_colour_token_bounds);
+	RUN_TEST(test_assemble_shapes);
 	RUN_TEST(test_voxmap_parse_light_line_public);
 	RUN_TEST(test_voxmap_build_raw);
 }

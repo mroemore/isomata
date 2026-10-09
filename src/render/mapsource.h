@@ -15,11 +15,19 @@
  *              colour is the authoring rule; a partial alpha is treated as
  *              solid, so do not rely on it).
  *   - legend.txt  the colour legend + optional lights:
- *       #RRGGBB <material>   map an exact RGB (case-insensitive hex) to a
- *                            material name. A duplicate colour is a diagnostic
- *                            and the LAST line wins. A malformed hex or an
- *                            unresolvable material name is a diagnostic and the
- *                            line is skipped (it never fails the load).
+ *       #RRGGBB <material> [shape=full|half|ramp|half-ramp] [dir=north|south|
+ *                            east|west]
+ *                            map an exact RGB (case-insensitive hex) to a
+ *                            material name and an optional per-voxel shape.
+ *                            Distinct colours are distinct (material, shape,
+ *                            dir) tuples; absent shape = full. An unknown
+ *                            shape/dir value skips the line (diagnostic); a
+ *                            ramp without dir defaults to north; dir on a
+ *                            non-ramp is ignored (both diagnostic). A duplicate
+ *                            colour is a diagnostic and the LAST line wins. A
+ *                            malformed hex or an unresolvable material name is
+ *                            a diagnostic and the line is skipped (it never
+ *                            fails the load).
  *       $ point ... / $ spot ...   lights, the SAME grammar as the ASCII
  *                            parser (voxmap.h::voxmapParseLightLine).
  *     An opaque pixel whose colour has no legend entry is a diagnostic and is
@@ -57,10 +65,13 @@ typedef struct MapSourceImage {
 	size_t pitch;
 } MapSourceImage;
 
-/* One colour -> material entry. `material` is a material id (0 is valid). */
+/* One colour -> (material, shape) entry. `material` is a material id (0 is
+ * valid); `shape` is the packed per-voxel shape byte (voxmap.h
+ * VOXMAP_SHAPE_PACK; 0 = FULL). */
 typedef struct MapSourceColor {
 	uint32_t rgb;		/* 0xRRGGBB */
 	int16_t material;
+	uint8_t shape;
 } MapSourceColor;
 
 /* A parsed legend.txt. Malformed lines never fail the parse; they are counted

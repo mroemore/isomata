@@ -3,6 +3,10 @@
 #A0522D wood
 #0000FF sixface
 #FF00FF foliage
+#C8C8C8 stone shape=half
+#A8A8A8 stone shape=ramp dir=north
+#989898 stone shape=ramp dir=east
+#B8B8B8 stone shape=half-ramp dir=north
 $ point 3 2 9 255 190 110 8
 $ point 9 2 12 255 0 0 10
 $ point 10 2 12 0 255 0 10
