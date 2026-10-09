@@ -62,6 +62,7 @@ void run_test_materials(void);
 void run_test_voxmap(void);
 void run_test_grid(void);
 void run_test_drawlist(void);
+void run_test_lightgrid(void);
 void run_test_sprites(void);
 void run_test_frame(void);
 void run_test_ui_bridge(void);
@@ -91,6 +92,7 @@ int main(void)
 	run_test_voxmap();
 	run_test_grid();
 	run_test_drawlist();
+	run_test_lightgrid();
 	run_test_sprites();
 	run_test_frame();
 	run_test_ui_bridge();

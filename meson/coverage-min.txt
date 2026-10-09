@@ -162,3 +162,11 @@ src/scenes/pause_scene.c	0
 # public camera API (cameraZoom clamps zoom to >= CAMERA_ZOOM_MIN). voxmap.c
 # measures 93.1% (the shading clamps add branches); its 93 floor still holds.
 src/render/grid.c		91
+
+# T14: the pure lighting core (sky + block grids, bucket flood, sky rule,
+# point/spot emitters with a voxel-DDA line of sight). Floor at its measured
+# branch % (252/258 = 97.7). The untaken arms are defensive/unreachable: the
+# bucket-pool overflow guard (provably cannot fire — at most 2n insertions for
+# a 2n pool), the DDA step guard plus its redundant target-reached break, and
+# the cosA>1 / angleFall<0 float clamps.
+src/render/lightgrid.c		97
