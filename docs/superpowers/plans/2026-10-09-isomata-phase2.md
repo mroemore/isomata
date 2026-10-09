@@ -177,6 +177,48 @@ Design:
 
 ---
 
+## Item 5 — Sub-voxel tile shapes (new, user 2026-10-09)
+
+User request: new tile types **half block**, **ramp block**, **half-block ramp**;
+represented and read from the PNG import; a rigorous spec for external drawing/
+level-editor integration; template texturemaps + screenshots of all sides.
+
+Design (controller, 2026-10-09 — to be detailed in the task briefs):
+
+- **Shape model**: every voxel gains a shape: `full` (default), `half`,
+  `ramp`, `half-ramp`; ramps carry an orientation (the 4 horizontal
+  directions; defined against the engine's axes in the spec). Geometry
+  (unit cell, y up, orientation north):
+  - `half` = bottom slab y 0..0.5 over the full 1×1 footprint.
+  - `ramp` = wedge: solid where `y <= 1 - z` (z 0 at the north edge), i.e.
+    rises to the north top edge; low edge at the south.
+  - `half-ramp` = `y <= 0.5 * (1 - z)` (half the rise).
+- **Emission**: axis-aligned faces as today; ramps add a sloped-top quad and
+  two triangular side faces (emitted as degenerate quads — one triangle, the
+  mesh emits corners 0-1-2 + 0-2-3; document the UV convention for the
+  triangle). The sloped face samples the material's TOP slot, the back face
+  its side slot. Culling stays conservative: axis-aligned faces cull against
+  a FULL neighbour (or air); shape-vs-shape adjacency may overdraw (hidden
+  inside solids) — documented, "visible faces only" preserved in the
+  dominant case.
+- **Sorting**: sloped/horizontal faces key on the quad centre, vertical on
+  the base line (unchanged rules). Run merging only merges FULL voxels.
+- **Light**: every face samples the adjacent cell (above/side/below) as
+  today; no per-corner shape special-casing beyond the face's own plane.
+- **Representation (PNG import + ASCII)**: the legend entry gains optional
+  `shape=…` and `dir=…` attributes: `#RRGGBB <material> [shape=full|half|
+  ramp|half-ramp] [dir=north|south|east|west]`; distinct colours = distinct
+  (material, shape, dir) tuples. ASCII: same attributes on `@` lines.
+  Backward compatible (absent shape = full).
+- **Spec**: `docs/tile-format-spec.md` — rigorous, for external tools:
+  coordinate system, directory/layer convention, pixel→voxel mapping, the
+  colour table (incl. shape/dir), exact geometry tables per shape+direction
+  (vertices/volume), culling + light semantics, limits, a worked example,
+  and parse pseudocode.
+- **Content**: template texturemaps (face→UV mapping sheets per shape, with
+  labelled regions an artist can paint over) + a demo map placing all three
+  shapes + in-engine screenshots from the four yaws showing every side.
+
 ## Item 3 — Entities
 
 ### User notes (captured 2026-10-09)
