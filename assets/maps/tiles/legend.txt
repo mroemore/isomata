@@ -3,4 +3,4 @@
 #989898 tile shape=ramp dir=east
 #C8C8C8 tile shape=half
 #B8B8B8 tile shape=half-ramp dir=north
-$ point 8 9 8 255 250 240 20
+$ point 8 2 8 255 235 190 20

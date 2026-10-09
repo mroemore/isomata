@@ -3,7 +3,7 @@
 @ G 1 tile shape=ramp dir=east
 @ H 1 tile half
 @ r 1 tile shape=half-ramp dir=north
-$ point 8 9 8 255 250 240 20
+$ point 8 2 8 255 235 190 20
 ssssssssssssssss
 ssssssssssssssss
 ssssssssssssssss

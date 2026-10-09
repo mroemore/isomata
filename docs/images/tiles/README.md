@@ -14,8 +14,9 @@ the **north**, `270` from the **west** (see
 
 Each tile sits on ground level 1 above a stone floor (level 0), framed at max
 zoom. The red billboards are the level scene's three sprite entities (fixed
-positions, independent of the map); the map itself carries a point light that
-warms the tiles.
+positions, independent of the map). The map carries a warm point light at
+`(8, 2, 8)` — one air layer above the ground, inside the level's light grid
+(whose height is `levels + 1`) — which warms the tiles.
 
 ## Files
 
@@ -43,8 +44,9 @@ warms the tiles.
   - yaw 000 — slope plus the **south triangle** (`SOUTH` slot, orange "S").
   - yaw 090 — the **back face** (`EAST` slot, red "E") faces the camera.
   - yaw 180 — slope plus the **north triangle** (`NORTH` slot, blue "N").
-  - yaw 270 — slope edge-on only (the back face is east, the triangles are
-    north/south; none faces west) — a green "T" wedge.
+  - yaw 270 — the **slope faces the camera nearly face-on** (its normal points
+    up-west): a full green "T" quad. The east back face is culled (dot < 0) and
+    both triangles are edge-on (dot ≈ 0); nothing else is visible.
 - **half**
   - yaw 000 / 090 / 180 / 270 — the flat **top** (`TOP`, green "T") plus the
     camera-facing 0.5-high side: south (`S`), east (`E`), north (`N`), west

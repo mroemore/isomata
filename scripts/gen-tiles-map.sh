@@ -4,10 +4,12 @@
 # assets/maps/tiles.txt.
 #
 # The specimen map is a 16x16 ground of stone (level 0) with four sub-voxel
-# tiles on top (level 1), one per shape, spaced into the four quadrants so each
-# is isolated:
-#   (4,4)  ramp north      (11,4)  ramp east
-#   (4,11) half            (11,11) half-ramp north
+# tiles on top (level 1), one per shape, spaced to the corners so each is
+# isolated:
+#   (2,2)  ramp north      (13,2)  ramp east
+#   (2,13) half            (13,13) half-ramp north
+# A warm point light at (8,2,8) sits one air layer above the ground (inside the
+# level's light grid, whose height is levels+1 = 3) and lights the specimen.
 # The tiles sample the face-labelled "tile" material (assets/textures/tile_*.png)
 # so orientation is obvious in the captures.
 #
