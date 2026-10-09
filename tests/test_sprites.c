@@ -198,10 +198,52 @@ static void test_append_sprite_uses_material(void)
 	destroyDrawList(&list);
 }
 
+/* spriteApplyLight scales RGB by the flat factor at the anchor's base cell,
+ * preserves alpha, and is a no-op with a NULL grid. */
+static void test_apply_light(void)
+{
+	LightGrid *g = lightGridCreate(1, 1, 2);
+	SpriteEntity s = { 0.5f, 1.0f, 0.5f, 1.0f, 1.0f,
+			   DRAW_TINT(200, 100, 50, 128), -1 };
+
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, NULL);	/* all air, sky-open */
+	/* Base cell (0,1,0): sky 255 + block 64 -> factor 151.
+	 * 200*151/255=118, 100*151/255=59, 50*151/255=30, alpha kept. */
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(118, 59, 30, 128),
+			      (int)spriteApplyLight(&s, g));
+	/* NULL grid leaves the tint unchanged. */
+	TEST_ASSERT_EQUAL_INT((int)s.tint, (int)spriteApplyLight(&s, NULL));
+	TEST_ASSERT_EQUAL_INT(0, (int)spriteApplyLight(NULL, g));
+
+	/* Zero-channel and full-channel saturation clamps. */
+	{
+		LightGrid *full = lightGridCreate(1, 1, 2);
+		SpriteEntity z = { 0.5f, 1.0f, 0.5f, 1.0f, 1.0f,
+				   DRAW_TINT(0, 255, 255, 255), -1 };
+		SpriteEntity sat = { 0.5f, 1.0f, 0.5f, 1.0f, 1.0f,
+				     DRAW_TINT(255, 255, 255, 255), -1 };
+
+		TEST_ASSERT_NOT_NULL(full);
+		lightGridSeedPoint(full, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f,
+				   255.0f, 0.0f);
+		lightGridPropagate(full, NULL);
+		/* Cell (0,1,0): sky gained 76 + block 255 -> factor 255. */
+		TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(0, 255, 255, 255),
+				      (int)spriteApplyLight(&z, full));
+		TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(255, 255, 255, 255),
+				      (int)spriteApplyLight(&sat, full));
+		destroyLightGrid(full);
+	}
+	destroyLightGrid(g);
+}
+
 void run_test_sprites(void);
 
 void run_test_sprites(void)
 {
+	RUN_TEST(test_apply_light);
 	RUN_TEST(test_quad_basis_yaw_zero);
 	RUN_TEST(test_quad_basis_yaw_ninety);
 	RUN_TEST(test_anchor_is_bottom_centre);

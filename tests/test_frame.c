@@ -17,6 +17,7 @@
 #include "render/camera3d.h"
 #include "render/drawlist.h"
 #include "render/frame.h"
+#include "render/lightgrid.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
 #include "render/textures.h"
@@ -137,8 +138,8 @@ static void test_null_list_refused(void)
 {
 	Camera3D camera = yaw0Camera();
 
-	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, &camera, NULL));
-	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, NULL, NULL, 0, NULL, NULL));
+	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, &camera, NULL, NULL));
+	TEST_ASSERT_FALSE(buildFrameDrawList(NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL));
 }
 
 /* With no map, the list is exactly the appended sprites. */
@@ -151,7 +152,7 @@ static void test_sprites_only(void)
 
 	initDrawList(&list, 8);
 	initDrawList(&ref, 8);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, &camera, &list, NULL));
 	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
 
 	for (i = 0; i < 3; i++)
@@ -179,7 +180,7 @@ static void test_map_and_sprites_sorted_and_composed(void)
 	initDrawList(&list, 128);
 	initDrawList(&ref, 128);
 
-	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, NULL, demoSprites, 3, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, NULL, demoSprites, 3, &camera, &list, NULL));
 
 	voxmapEmitFaces(map, NULL, NULL, &ref, &camera, FRAME_VOXEL_TINT);
 	for (i = 0; i < 3; i++)
@@ -216,7 +217,7 @@ static void test_voxel_tint_pinned(void)
 
 	TEST_ASSERT_NOT_NULL(map);
 	initDrawList(&list, 16);
-	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, NULL, NULL, 0, &camera, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, NULL, NULL, 0, &camera, &list, NULL));
 	TEST_ASSERT_TRUE(drawListCount(&list) > 0);
 	/* The lone height-1 cell emits its top face (shade 1.0) and its +Z side.
 	 * Locate the top by atlas UV rather than assuming index 0: the base-line
@@ -242,13 +243,116 @@ static void test_null_camera_and_sprites(void)
 	DrawList list;
 
 	initDrawList(&list, 8);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, NULL, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, demoSprites, 3, NULL, &list, NULL));
 	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
 
 	clearDrawList(&list);
-	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, NULL, 5, NULL, &list));
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, NULL, 5, NULL, &list, NULL));
 	TEST_ASSERT_EQUAL_INT(0, (int)drawListCount(&list));
 	destroyDrawList(&list);
+}
+
+/* The first top face whose 4 corners share the plane y = height, or NULL. */
+static const DrawItem *findTopPlaneAt(const DrawList *list, float height)
+{
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++) {
+		const DrawItem *item = drawListItem(list, i);
+		int k;
+		bool flat = true;
+
+		for (k = 0; k < 4; k++)
+			if (item->worldQuad[k][1] != height)
+				flat = false;
+		if (flat)
+			return item;
+	}
+	return NULL;
+}
+
+/* FrameOptions reach the emitter: NULL is flat (uniform tint), smooth gives
+ * per-corner tints, and the debug view swaps in the white UV. */
+static void test_frame_options_plumbed(void)
+{
+	Voxmap *map = loadTemp("frame_opts.txt", "11\n");
+	LightGrid *g = lightGridCreate(2, 1, 2);
+	DrawList list;
+	Camera3D camera = yaw0Camera();
+	FrameOptions opts = { true, false, NULL };
+	const float debugUV[4][2] = {
+		{ 0.1f, 0.1f }, { 0.9f, 0.1f }, { 0.9f, 0.9f }, { 0.1f, 0.9f }
+	};
+	const DrawItem *top;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, map);
+	initDrawList(&list, 64);
+
+	/* Flat (NULL options): the top face is uniform 142. */
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, g, NULL, 0, &camera, &list,
+					    NULL));
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(142, 142, 142, 255),
+			      (int)top->tint);
+
+	/* Smooth: corner 0 = 102, corner 1 = 111. */
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, g, NULL, 0, &camera, &list,
+					    &opts));
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(102, 102, 102, 255),
+			      (int)top->cornerTint[0]);
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(111, 111, 111, 255),
+			      (int)top->cornerTint[1]);
+
+	/* Debug: the white UV replaces the material UV. */
+	opts.lightDebug = true;
+	opts.debugUV = debugUV;
+	TEST_ASSERT_TRUE(buildFrameDrawList(map, NULL, g, NULL, 0, &camera, &list,
+					    &opts));
+	top = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_EQUAL_MEMORY(debugUV, top->uv, sizeof(debugUV));
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Sprites are lit by the flat factor at their base cell; a NULL grid leaves
+ * the tint unchanged. */
+static void test_frame_lights_sprites(void)
+{
+	LightGrid *g = lightGridCreate(3, 1, 2);
+	SpriteEntity s = { 0.5f, 1.0f, 0.5f, 1.0f, 1.0f,
+			   DRAW_TINT(200, 100, 50, 128), -1 };
+	DrawList list;
+	Camera3D camera = yaw0Camera();
+
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, NULL);	/* all air */
+	initDrawList(&list, 4);
+
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, g, &s, 1, &camera, &list,
+					    NULL));
+	TEST_ASSERT_EQUAL_INT(1, (int)drawListCount(&list));
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(118, 59, 30, 128),
+			      (int)drawListItem(&list, 0)->tint);
+	TEST_ASSERT_EQUAL_INT((int)drawListItem(&list, 0)->tint,
+			      (int)drawListItem(&list, 0)->cornerTint[2]);
+
+	/* NULL grid: the sprite keeps its own tint. */
+	TEST_ASSERT_TRUE(buildFrameDrawList(NULL, NULL, NULL, &s, 1, &camera,
+					    &list, NULL));
+	TEST_ASSERT_EQUAL_INT((int)s.tint, (int)drawListItem(&list, 0)->tint);
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
 }
 
 void run_test_frame(void);
@@ -260,4 +364,6 @@ void run_test_frame(void)
 	RUN_TEST(test_map_and_sprites_sorted_and_composed);
 	RUN_TEST(test_voxel_tint_pinned);
 	RUN_TEST(test_null_camera_and_sprites);
+	RUN_TEST(test_frame_options_plumbed);
+	RUN_TEST(test_frame_lights_sprites);
 }

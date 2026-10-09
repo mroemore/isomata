@@ -100,6 +100,8 @@ static void test_keyboard_mapping_full_table(void)
 		{ INPUT_KEY_PAGE_UP, CMD_ZOOM_IN },
 		{ INPUT_KEY_MINUS, CMD_ZOOM_OUT },
 		{ INPUT_KEY_PAGE_DOWN, CMD_ZOOM_OUT },
+		{ INPUT_KEY_T, CMD_TOGGLE_SMOOTH_LIGHT },
+		{ INPUT_KEY_F, CMD_TOGGLE_LIGHT_DEBUG },
 	};
 	size_t i;
 

@@ -99,6 +99,12 @@ static bool inputKeyFromSdlKeycode(SDL_Keycode key, InputKey *out)
 	case SDLK_R:
 		*out = INPUT_KEY_R;
 		return true;
+	case SDLK_T:
+		*out = INPUT_KEY_T;
+		return true;
+	case SDLK_F:
+		*out = INPUT_KEY_F;
+		return true;
 	default:
 		return false;
 	}

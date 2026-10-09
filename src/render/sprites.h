@@ -21,6 +21,7 @@
 
 #include "render/camera3d.h"
 #include "render/drawlist.h"
+#include "render/lightgrid.h"
 #include "render/materials.h"
 
 #include <stdbool.h>
@@ -49,5 +50,11 @@ void buildSpriteQuad(const SpriteEntity *sprite, const Camera3D *camera,
  * Returns false on a NULL sprite, a NULL list, or a full list. */
 bool appendSprite(DrawList *list, const SpriteEntity *sprite,
 		  const Camera3D *camera, const MaterialTable *materials);
+
+/* Apply the flat per-channel light factor at the sprite's base cell (the cell
+ * containing its anchor) to its tint: RGB scaled by factor/255 and rounded,
+ * alpha preserved. A NULL `sprite` returns 0; a NULL `lights` returns the
+ * sprite's tint unchanged (lighting disabled). */
+uint32_t spriteApplyLight(const SpriteEntity *sprite, const LightGrid *lights);
 
 #endif /* ISOMATA_RENDER_SPRITES_H */

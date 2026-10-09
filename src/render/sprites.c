@@ -11,6 +11,7 @@
 #include "render/sprites.h"
 #include "render/textures.h"
 
+#include <math.h>
 #include <string.h>
 
 static const float kFallbackUV[4][2] = ATLAS_UV_SPRITE;
@@ -84,6 +85,40 @@ bool appendSprite(DrawList *list, const SpriteEntity *sprite,
 		memcpy(item.uv, kFallbackUV, sizeof(item.uv));
 	}
 	item.tint = sprite->tint;
+	item.cornerTint[0] = sprite->tint;
+	item.cornerTint[1] = sprite->tint;
+	item.cornerTint[2] = sprite->tint;
+	item.cornerTint[3] = sprite->tint;
 	item.kind = DRAW_KIND_SPRITE;
 	return appendDrawItem(list, &item);
+}
+
+/* Scale one 0..255 channel by a 0..255 factor, clamped, rounded to nearest. */
+static uint8_t scaleChannel(uint32_t c, uint8_t factor)
+{
+	float v = (float)c * (float)factor / 255.0f;
+
+	if (v <= 0.0f)
+		return 0;
+	if (v >= 255.0f)
+		return 255;
+	return (uint8_t)(v + 0.5f);
+}
+
+uint32_t spriteApplyLight(const SpriteEntity *sprite, const LightGrid *lights)
+{
+	uint8_t f[3];
+	uint32_t tint;
+
+	if (sprite == NULL)
+		return 0;
+	tint = sprite->tint;
+	if (lights == NULL)
+		return tint;
+	lightGridFactorAt(lights, (int)floorf(sprite->x), (int)floorf(sprite->y),
+			  (int)floorf(sprite->z), f);
+	return DRAW_TINT(scaleChannel((tint >> 24) & 0xffu, f[0]),
+			 scaleChannel((tint >> 16) & 0xffu, f[1]),
+			 scaleChannel((tint >> 8) & 0xffu, f[2]),
+			 tint & 0xffu);
 }

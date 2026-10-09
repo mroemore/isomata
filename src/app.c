@@ -151,6 +151,19 @@ static void smokeProbeInput(App *app) {
 	ev.button.x = 40.0f;
 	ev.button.y = 20.0f;
 	SDL_PushEvent(&ev);
+
+	/* T15 toggle keys: exercise the SDLK_T / SDLK_F mapping in the SDL
+	 * input glue (the menu scene ignores the resulting commands). */
+	SDL_zero(ev);
+	ev.type = SDL_EVENT_KEY_DOWN;
+	ev.key.windowID = id;
+	ev.key.key = SDLK_T;
+	SDL_PushEvent(&ev);
+	SDL_zero(ev);
+	ev.type = SDL_EVENT_KEY_DOWN;
+	ev.key.windowID = id;
+	ev.key.key = SDLK_F;
+	SDL_PushEvent(&ev);
 }
 
 /* Refresh the window metrics the scenes read: pixel size and the safe-area

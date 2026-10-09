@@ -68,6 +68,8 @@ typedef struct LevelState {
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
 	int rotationSteps;	/* running count of applied 45-degree steps */
+	bool smoothLight;	/* T15: per-corner smooth lighting + AO (T toggles) */
+	bool lightDebug;	/* T15: light-only debug view (F toggles) */
 	Element *root;		/* UI root (a transparent container) */
 	Element *toast;		/* achievement toast */
 	Element *rotL;		/* rotate counter-clockwise */
@@ -227,6 +229,9 @@ static bool level_init(void *self, App *app)
 	int16_t spriteMaterial;
 
 	levelResetCamera(st);
+	/* T15 defaults: smooth lighting on (the classic voxel look), debug off. */
+	st->smoothLight = true;
+	st->lightDebug = false;
 	initDrawList(&st->list, LEVEL_DRAWLIST_CAPACITY);
 	/* The atlas + material table are owned by the GPU backend; in smoke
 	 * mode (no GPU) materials stay NULL and the emitters use the built-in
@@ -316,6 +321,16 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 		break;
 	case CMD_RESET:
 		levelResetCamera(st);
+		break;
+	case CMD_TOGGLE_SMOOTH_LIGHT:
+		st->smoothLight = !st->smoothLight;
+		SDL_Log("isomata: smooth lighting %s",
+			st->smoothLight ? "on" : "off (flat T14 path)");
+		break;
+	case CMD_TOGGLE_LIGHT_DEBUG:
+		st->lightDebug = !st->lightDebug;
+		SDL_Log("isomata: light debug view %s",
+			st->lightDebug ? "on" : "off");
 		break;
 	case CMD_BACK:
 		{
@@ -459,8 +474,21 @@ static void level_draw(void *self, App *app)
 		buildGridQuad(&st->camera, aspect, &grid);
 		gpuBackendDrawGrid(gpu, &gridViewProj, &grid);
 
-		buildFrameDrawList(st->map, st->materials, st->lights, st->sprites,
-				   st->spriteCount, &st->camera, &st->list);
+		{
+			FrameOptions opts = { st->smoothLight, st->lightDebug,
+					      NULL };
+			float debugUV[4][2];
+
+			/* The debug view samples a reserved white atlas cell;
+			 * without a GPU (smoke) the emitter's spare fallback
+			 * applies. */
+			if (st->lightDebug &&
+			    gpuBackendDebugUV(gpu, debugUV))
+				opts.debugUV = debugUV;
+			buildFrameDrawList(st->map, st->materials, st->lights,
+					   st->sprites, st->spriteCount,
+					   &st->camera, &st->list, &opts);
+		}
 		gpuBackendDrawList(gpu, &viewProj, &st->list);
 	}
 	levelDrawUi(st, app);

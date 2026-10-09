@@ -32,6 +32,10 @@
  *                                        SDLK_AC_BACK; the glue feeds it)
  *     Q, E                            -> CMD_ROTATE_CCW, CMD_ROTATE_CW
  *     R                               -> CMD_RESET
+ *     T                               -> CMD_TOGGLE_SMOOTH_LIGHT
+ *     F                               -> CMD_TOGGLE_LIGHT_DEBUG
+ *       (the brief's `L` for the light-debug view is already hjkl nav; `F` is
+ *        free and chosen instead)
  *     PLUS, EQUALS, PAGE_UP           -> CMD_ZOOM_IN
  *     MINUS, PAGE_DOWN                -> CMD_ZOOM_OUT
  *   A key outside [0, INPUT_KEY_COUNT) is ignored.
@@ -100,6 +104,8 @@ typedef enum {
 	CMD_ZOOM_IN,
 	CMD_ZOOM_OUT,
 	CMD_RESET,
+	CMD_TOGGLE_SMOOTH_LIGHT,
+	CMD_TOGGLE_LIGHT_DEBUG,
 	CMD_COUNT
 } Command;
 
@@ -125,6 +131,8 @@ typedef enum {
 	INPUT_KEY_PAGE_DOWN,
 	INPUT_KEY_BACK,		/* Android SDLK_AC_BACK */
 	INPUT_KEY_R,
+	INPUT_KEY_T,		/* smooth/flat lighting toggle */
+	INPUT_KEY_F,		/* light-debug view toggle (L is hjkl nav) */
 	INPUT_KEY_COUNT
 } InputKey;
 

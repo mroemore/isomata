@@ -19,7 +19,12 @@
  *   the identity view (drawlist.h's rule).
  * - Voxel faces are emitted with the frame tint scaled by each face's sampled
  *   light factor (`lights`, from lightgrid.h); a NULL `lights` keeps them at
- *   full brightness. Sprites keep their own tints.
+ *   full brightness. `options` selects smooth per-corner lighting + AO (the
+ *   default the level passes) or the flat T14 path, and the light-only debug
+ *   view; NULL `options` is the flat path with no debug (backward-compatible).
+ * - Each sprite's tint is scaled by the flat light factor at its base cell
+ *   (`lights`, NULL = unchanged) before it is appended, so a billboard in a
+ *   dark spot reads dark.
  * - Returns true once the list has been rebuilt (even if it ends up empty).
  */
 #include "render/camera3d.h"
@@ -37,8 +42,19 @@
  * the flat ground tops). The atlas texel still carries the base colour. */
 #define FRAME_VOXEL_TINT DRAW_TINT(240, 240, 240, 255)
 
+/* Per-frame render options. NULL (passed to buildFrameDrawList) is the flat
+ * T14 path with no debug view. `smooth` selects per-corner light + AO;
+ * `lightDebug` the light-only view; `debugUV` is the 4-corner UV of a white
+ * atlas texel for that view (NULL falls back to the built-in spare region). */
+typedef struct FrameOptions {
+	bool smooth;
+	bool lightDebug;
+	const float (*debugUV)[2];
+} FrameOptions;
+
 bool buildFrameDrawList(const Voxmap *map, const MaterialTable *materials,
 			const LightGrid *lights, const SpriteEntity *sprites,
-			size_t count, const Camera3D *camera, DrawList *list);
+			size_t count, const Camera3D *camera, DrawList *list,
+			const FrameOptions *options);
 
 #endif /* ISOMATA_RENDER_FRAME_H */
