@@ -4,11 +4,13 @@
  * cannot use SDL_Log).
  *
  * Storage is an occupancy + per-voxel material grid: solid[] is one byte per
- * voxel, materials[] one int16 per voxel (index order x fastest, then y, then
- * z: index = ((z * levels) + y) * width + x, matching lightgrid.c). A parallel
- * per-column ground[] byte marks the single-section height-0 degenerate (a
- * solid flat ground tile with no voxel). Single-section files assign the
- * column's material to every voxel; slice files assign per voxel.
+ * voxel, materials[] one int16 per voxel and shapes[] one packed byte per
+ * voxel (shape in bits 0-1, ramp dir in bits 2-3; index order x fastest, then
+ * y, then z: index = ((z * levels) + y) * width + x, matching lightgrid.c). A
+ * parallel per-column ground[] byte marks the single-section height-0
+ * degenerate (a solid flat ground tile with no voxel). Single-section files
+ * assign the column's material and shape to every voxel; slice files assign
+ * per voxel.
  *
  * Parsing: a legend pass collects `@` lines, a light pass collects `$` lines
  * and a separator scan flags multi-section files. A file with no `---`
@@ -41,6 +43,7 @@ struct Voxmap {
 	int levels;		/* y dimension; >= 1 */
 	uint8_t *solid;		/* width * depth * levels; 1 = solid voxel */
 	int16_t *materials;	/* width * depth * levels; -1 = air */
+	uint8_t *shapes;	/* width * depth * levels; packed shape|dir<<2 */
 	uint8_t *ground;	/* width * depth; 1 = height-0 ground tile */
 	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
 	int lightCount;
@@ -177,24 +180,110 @@ static int tokenize(char *line, char **tokens, int max)
 /* The built-in legend: digits 0..9 are solid heights (0 = a ground-level
  * cell), '.' is void; legend chars can override any of them. */
 static void legendDefaults(int8_t h[LEGEND_CHARS], int16_t m[LEGEND_CHARS],
-			   int16_t defaultMat)
+			   uint8_t shape[LEGEND_CHARS], int16_t defaultMat)
 {
 	int c;
 
 	for (c = 0; c < LEGEND_CHARS; c++) {
 		h[c] = LEGEND_INVALID;
 		m[c] = defaultMat;
+		shape[c] = VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_FULL, 0);
 	}
 	h[(unsigned char)'.'] = -1;
 	for (c = '0'; c <= '9'; c++)
 		h[c] = (int8_t)(c - '0');
 }
 
+/* Parse a shape token value ("full", "half", "ramp", "half-ramp"); false on an
+ * unknown token. */
+static bool parseShapeToken(const char *tok, int *out)
+{
+	if (strcmp(tok, "full") == 0)
+		*out = VOXMAP_SHAPE_FULL;
+	else if (strcmp(tok, "half") == 0)
+		*out = VOXMAP_SHAPE_HALF;
+	else if (strcmp(tok, "ramp") == 0)
+		*out = VOXMAP_SHAPE_RAMP;
+	else if (strcmp(tok, "half-ramp") == 0)
+		*out = VOXMAP_SHAPE_HALF_RAMP;
+	else
+		return false;
+	return true;
+}
+
+/* Parse a direction token value ("north", "south", "east", "west"); false on an
+ * unknown token. */
+static bool parseDirToken(const char *tok, int *out)
+{
+	if (strcmp(tok, "north") == 0)
+		*out = VOXMAP_DIR_NORTH;
+	else if (strcmp(tok, "east") == 0)
+		*out = VOXMAP_DIR_EAST;
+	else if (strcmp(tok, "south") == 0)
+		*out = VOXMAP_DIR_SOUTH;
+	else if (strcmp(tok, "west") == 0)
+		*out = VOXMAP_DIR_WEST;
+	else
+		return false;
+	return true;
+}
+
+int voxmapParseShapeAttrs(char *const *tokens, int count, const char *prefix,
+			  uint8_t *outPacked)
+{
+	int shape = VOXMAP_SHAPE_FULL;
+	int dir = VOXMAP_DIR_NORTH;
+	bool dirSeen = false;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		const char *t = tokens[i];
+		int v;
+
+		if (strncmp(t, "shape=", 6) == 0) {
+			if (!parseShapeToken(t + 6, &v)) {
+				fprintf(stderr,
+					"%s unknown shape '%s'; entry skipped\n",
+					prefix, t + 6);
+				return VOXMAP_ATTR_SKIP;
+			}
+			shape = v;
+		} else if (strncmp(t, "dir=", 4) == 0) {
+			if (!parseDirToken(t + 4, &v)) {
+				fprintf(stderr,
+					"%s unknown dir '%s'; entry skipped\n",
+					prefix, t + 4);
+				return VOXMAP_ATTR_SKIP;
+			}
+			dir = v;
+			dirSeen = true;
+		} else {
+			/* Not a shape/dir attribute: a malformed legend line
+			 * (the caller rejects it, preserving the old strict
+			 * "too many / junk tokens fails" behaviour). */
+			return VOXMAP_ATTR_BAD;
+		}
+	}
+	if (dirSeen && shape != VOXMAP_SHAPE_RAMP &&
+	    shape != VOXMAP_SHAPE_HALF_RAMP) {
+		fprintf(stderr, "%s dir= on a non-ramp shape; ignored\n", prefix);
+		dir = VOXMAP_DIR_NORTH;
+	}
+	if (!dirSeen && (shape == VOXMAP_SHAPE_RAMP ||
+			 shape == VOXMAP_SHAPE_HALF_RAMP)) {
+		fprintf(stderr, "%s ramp without dir=; defaulting to north\n",
+			prefix);
+		dir = VOXMAP_DIR_NORTH;
+	}
+	*outPacked = VOXMAP_SHAPE_PACK(shape, dir);
+	return VOXMAP_ATTR_OK;
+}
+
 /* Parse one `@ <char> <height> <material>` line into the legend table. */
 static bool parseLegend(const char *data, size_t start, size_t len,
 			const char *label, int8_t h[LEGEND_CHARS],
-			int16_t m[LEGEND_CHARS], const MaterialTable *materials,
-			int16_t defaultMat)
+			int16_t m[LEGEND_CHARS], uint8_t shape[LEGEND_CHARS],
+			const MaterialTable *materials, int16_t defaultMat)
 {
 	char line[LEGEND_LINE_MAX];
 	char *tokens[8];
@@ -253,6 +342,25 @@ static bool parseLegend(const char *data, size_t start, size_t len,
 		} else {
 			id = found;
 		}
+	}
+	/* Optional shape=/dir= attributes (after the material). An unknown shape
+	 * or dir value skips the entry (keep parsing); a non-attribute token is
+	 * a malformed legend line (load fails), preserving the old strict
+	 * "too many junk tokens fails" behaviour. */
+	{
+		char prefix[LEGEND_LINE_MAX];
+		uint8_t packed;
+		int rc;
+
+		snprintf(prefix, sizeof(prefix),
+			 "voxmap: '%s' legend char '%c'", label, ch);
+		rc = voxmapParseShapeAttrs(&tokens[mIdx + 1], ntok - (mIdx + 1),
+					   prefix, &packed);
+		if (rc == VOXMAP_ATTR_BAD)
+			return false;
+		if (rc == VOXMAP_ATTR_SKIP)
+			return true;	/* entry skipped, load continues */
+		shape[ch] = packed;
 	}
 	h[ch] = (int8_t)height;
 	m[ch] = (int16_t)id;
@@ -425,13 +533,14 @@ typedef struct ParseCtx {
 	size_t length;
 	int8_t legendH[LEGEND_CHARS];
 	int16_t legendM[LEGEND_CHARS];
+	uint8_t legendShape[LEGEND_CHARS];
 	int16_t defaultMat;
 	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
 	int lightCount;
 } ParseCtx;
 
 /* Allocate a zeroed map of the given dimensions with every voxel air
- * (material -1). NULL on an over-large volume or OOM. Precondition (both
+ * (material -1, shape FULL). NULL on an over-large volume or OOM. Precondition (both
  * callers validate it): width, depth, levels are all > 0 and width/depth are
  * <= VOXMAP_MAX_DIM. */
 static Voxmap *allocVoxmap(int width, int depth, int levels)
@@ -449,16 +558,20 @@ static Voxmap *allocVoxmap(int width, int depth, int levels)
 		return NULL;
 	map->solid = malloc(n);
 	map->materials = malloc(n * sizeof(*map->materials));
+	map->shapes = malloc(n);
 	map->ground = malloc((size_t)width * (size_t)depth);
-	if (map->solid == NULL || map->materials == NULL || map->ground == NULL) {
+	if (map->solid == NULL || map->materials == NULL || map->shapes == NULL ||
+	    map->ground == NULL) {
 		free(map->solid);
 		free(map->materials);
+		free(map->shapes);
 		free(map->ground);
 		free(map);
 		return NULL;
 	}
 	memset(map->solid, 0, n);
 	memset(map->materials, 0xFF, n * sizeof(*map->materials));	/* -1 */
+	memset(map->shapes, 0, n);	/* every voxel FULL (0) by default */
 	memset(map->ground, 0, (size_t)width * (size_t)depth);
 	map->width = width;
 	map->depth = depth;
@@ -578,11 +691,15 @@ static Voxmap *fillHeightmap(ParseCtx *ctx)
 				(unsigned char)ctx->text[start + (size_t)col];
 			int8_t h = ctx->legendH[c];
 			int16_t id = ctx->legendM[c];
+			uint8_t shp = ctx->legendShape[c];
 			int y;
 
 			if (h < 0)
 				continue;	/* void */
 			if (h == 0) {
+				/* No voxel to shape: the ground tile stays a
+				 * full flat top (the shape is documented as
+				 * ignored on a height-0 entry). */
 				map->ground[(size_t)row * width + col] = 1;
 				map->materials[voxelIndex(map, col, 0, row)] = id;
 				continue;
@@ -592,6 +709,7 @@ static Voxmap *fillHeightmap(ParseCtx *ctx)
 
 				map->solid[idx] = 1;
 				map->materials[idx] = id;
+				map->shapes[idx] = shp;
 			}
 		}
 		row++;
@@ -744,10 +862,14 @@ static Voxmap *fillSlices(ParseCtx *ctx)
 				if (c == ' ' || ctx->legendH[c] < 0) {
 					map->solid[idx] = 0;
 					map->materials[idx] = -1;
+					map->shapes[idx] = VOXMAP_SHAPE_PACK(
+						VOXMAP_SHAPE_FULL, 0);
 				} else {
 					map->solid[idx] = 1;
 					map->materials[idx] =
 						ctx->legendM[c];
+					map->shapes[idx] =
+						ctx->legendShape[c];
 				}
 			}
 			row++;
@@ -778,7 +900,8 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 		if (d >= 0)
 			ctx.defaultMat = (int16_t)d;
 	}
-	legendDefaults(ctx.legendH, ctx.legendM, ctx.defaultMat);
+	legendDefaults(ctx.legendH, ctx.legendM, ctx.legendShape,
+		       ctx.defaultMat);
 
 	/* Pass 0: collect legend + light lines and detect any separator. */
 	pos = 0;
@@ -797,7 +920,8 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 			continue;
 		if (isLegendLine(text, start, rowLen)) {
 			if (!parseLegend(text, start, rowLen, label,
-					 ctx.legendH, ctx.legendM, materials,
+					 ctx.legendH, ctx.legendM,
+					 ctx.legendShape, materials,
 					 ctx.defaultMat))
 				return NULL;
 		} else if (isLightLine(text, start, rowLen)) {
@@ -845,6 +969,7 @@ void destroyVoxmap(Voxmap *map)
 		return;
 	free(map->solid);
 	free(map->materials);
+	free(map->shapes);
 	free(map->ground);
 	free(map);
 }
@@ -863,9 +988,10 @@ bool voxmapParseLightLine(const char *text, size_t length, VoxmapLight *out)
 	return true;
 }
 
-Voxmap *voxmapBuildRaw(int width, int depth, int levels,
-		       const uint8_t *solid, const int16_t *materials,
-		       const VoxmapLight *lights, int lightCount)
+Voxmap *voxmapBuildRawShaped(int width, int depth, int levels,
+			     const uint8_t *solid, const int16_t *materials,
+			     const uint8_t *shapes,
+			     const VoxmapLight *lights, int lightCount)
 {
 	Voxmap *map;
 	size_t n;
@@ -882,6 +1008,8 @@ Voxmap *voxmapBuildRaw(int width, int depth, int levels,
 		memcpy(map->solid, solid, n);
 	if (materials != NULL)
 		memcpy(map->materials, materials, n * sizeof(*map->materials));
+	if (shapes != NULL)
+		memcpy(map->shapes, shapes, n);
 	if (lights != NULL && lightCount > 0) {
 		int keep = lightCount < VOXMAP_MAX_LIGHTS ? lightCount
 							  : VOXMAP_MAX_LIGHTS;
@@ -890,6 +1018,14 @@ Voxmap *voxmapBuildRaw(int width, int depth, int levels,
 		map->lightCount = keep;
 	}
 	return map;
+}
+
+Voxmap *voxmapBuildRaw(int width, int depth, int levels,
+		       const uint8_t *solid, const int16_t *materials,
+		       const VoxmapLight *lights, int lightCount)
+{
+	return voxmapBuildRawShaped(width, depth, levels, solid, materials,
+				    NULL, lights, lightCount);
 }
 
 int voxmapWidth(const Voxmap *map)
@@ -962,6 +1098,40 @@ int voxmapMaterialAtVoxel(const Voxmap *map, int x, int y, int z)
 	return map->materials[voxelIndex(map, x, y, z)];
 }
 
+int voxmapShapeAt(const Voxmap *map, int x, int y, int z)
+{
+	if (map == NULL || x < 0 || y < 0 || z < 0 || x >= map->width ||
+	    y >= map->levels || z >= map->depth)
+		return VOXMAP_SHAPE_FULL;
+	return VOXMAP_SHAPE_OF(map->shapes[voxelIndex(map, x, y, z)]);
+}
+
+int voxmapShapeDirAt(const Voxmap *map, int x, int y, int z)
+{
+	uint8_t packed;
+
+	if (map == NULL || x < 0 || y < 0 || z < 0 || x >= map->width ||
+	    y >= map->levels || z >= map->depth)
+		return -1;
+	packed = map->shapes[voxelIndex(map, x, y, z)];
+	if (VOXMAP_SHAPE_OF(packed) != VOXMAP_SHAPE_RAMP &&
+	    VOXMAP_SHAPE_OF(packed) != VOXMAP_SHAPE_HALF_RAMP)
+		return -1;
+	return VOXMAP_SHAPE_DIR_OF(packed);
+}
+
+bool voxmapFullAt(const Voxmap *map, int x, int y, int z)
+{
+	size_t idx;
+
+	if (map == NULL || x < 0 || y < 0 || z < 0 || x >= map->width ||
+	    y >= map->levels || z >= map->depth)
+		return false;
+	idx = voxelIndex(map, x, y, z);
+	return map->solid[idx] &&
+	       VOXMAP_SHAPE_OF(map->shapes[idx]) == VOXMAP_SHAPE_FULL;
+}
+
 int voxmapLightCount(const Voxmap *map)
 {
 	return map == NULL ? 0 : map->lightCount;
@@ -979,6 +1149,10 @@ const VoxmapLight *voxmapLightAt(const Voxmap *map, int index)
 /* Side directions: 0 = +Z, 1 = +X, 2 = -Z, 3 = -X. */
 static const int kSideDx[4] = { 0, 1, 0, -1 };
 static const int kSideDz[4] = { 1, 0, -1, 0 };
+
+/* A ramp direction (VOXMAP_DIR_*) mapped to its side index: EAST -> +X (1),
+ * SOUTH -> +Z (0), WEST -> -X (3), NORTH -> -Z (2). Indexed by VOXMAP_DIR_*. */
+static const int kDirToSide[4] = { 2, 1, 0, 3 };
 
 /* Built-in fallback regions (used with a NULL material table). */
 static const float kFallbackTop[4][2] = ATLAS_UV_TOP;
@@ -1227,61 +1401,110 @@ static bool sideCulled(int dir, float toCamX, float toCamZ)
 	return dot <= CAMERA_CULL_EPS;
 }
 
-static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][2],
-		    uint8_t alphaMode, uint32_t tint, const LightGrid *lights,
-		    const VoxmapEmitOptions *opts, const float debugUV[4][2])
+/* A horizontal (or tilted) face: a 4-corner quad sampling the 2x2 light block
+ * at `lightLevel` (the air level the face looks across), shaded by a single
+ * face constant. Tops, bottoms and ramp slope quads share this. */
+static void emitHorizontalShaded(DrawList *list, const float quad[4][3],
+				 int x, int z, int lightLevel, float faceShade,
+				 const float uv[4][2], uint8_t alphaMode,
+				 uint32_t tint, const LightGrid *lights,
+				 const VoxmapEmitOptions *opts,
+				 const float debugUV[4][2])
 {
-	float quad[4][3] = {
-		{ (float)x, (float)height, (float)z },
-		{ (float)(x + 1), (float)height, (float)z },
-		{ (float)(x + 1), (float)height, (float)(z + 1) },
-		{ (float)x, (float)height, (float)(z + 1) },
-	};
 	uint8_t light[4][3];
 	int ao[4] = { 0, 0, 0, 0 };
 	uint32_t cornerTint[4];
 
 	if (opts->smooth)
-		topCorners(lights, x, z, height, light, ao);
+		topCorners(lights, x, z, lightLevel, light, ao);
 	else
-		sampleLight(lights, x, height, z, light[0]);
-	faceCornerTints(tint, VOXMAP_SHADE_TOP, x, z, light, ao, opts->smooth,
+		sampleLight(lights, x, lightLevel, z, light[0]);
+	faceCornerTints(tint, faceShade, x, z, light, ao, opts->smooth,
 			opts->lightDebug, cornerTint);
 	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
 		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
 		 cornerTint);
 }
 
-/* Bottom face of the solid voxel at level `y`: the same x/z quad as the top,
- * at world y, sampling the air cell below (y - 1). Shade is the darkest face
- * (VOXMAP_SHADE_BOTTOM). */
-static void emitBottom(DrawList *list, int x, int z, int y,
-		       const float uv[4][2], uint8_t alphaMode, uint32_t tint,
-		       const LightGrid *lights, const VoxmapEmitOptions *opts,
-		       const float debugUV[4][2])
+/* Top face of a solid voxel: 1x1 at `topY` (y + 1 for FULL, y + 0.5 for HALF),
+ * sampling the air cell above the voxel at `lightLevel`. */
+static void emitTop(DrawList *list, int x, int z, float topY, int lightLevel,
+		    const float uv[4][2], uint8_t alphaMode, uint32_t tint,
+		    const LightGrid *lights, const VoxmapEmitOptions *opts,
+		    const float debugUV[4][2])
 {
 	float quad[4][3] = {
-		{ (float)x, (float)y, (float)z },
-		{ (float)(x + 1), (float)y, (float)z },
-		{ (float)(x + 1), (float)y, (float)(z + 1) },
-		{ (float)x, (float)y, (float)(z + 1) },
+		{ (float)x, topY, (float)z },
+		{ (float)(x + 1), topY, (float)z },
+		{ (float)(x + 1), topY, (float)(z + 1) },
+		{ (float)x, topY, (float)(z + 1) },
 	};
+	emitHorizontalShaded(list, quad, x, z, lightLevel, VOXMAP_SHADE_TOP, uv,
+			     alphaMode, tint, lights, opts, debugUV);
+}
+
+/* Bottom face of the solid voxel at level `y`: the same x/z quad as the top, at
+ * world `bottomY`, sampling the air cell below (lightLevel = y - 1). Shade is
+ * the darkest face (VOXMAP_SHADE_BOTTOM). */
+static void emitBottom(DrawList *list, int x, int z, float bottomY,
+		       int lightLevel, const float uv[4][2], uint8_t alphaMode,
+		       uint32_t tint, const LightGrid *lights,
+		       const VoxmapEmitOptions *opts, const float debugUV[4][2])
+{
+	float quad[4][3] = {
+		{ (float)x, bottomY, (float)z },
+		{ (float)(x + 1), bottomY, (float)z },
+		{ (float)(x + 1), bottomY, (float)(z + 1) },
+		{ (float)x, bottomY, (float)(z + 1) },
+	};
+	emitHorizontalShaded(list, quad, x, z, lightLevel, VOXMAP_SHADE_BOTTOM,
+			     uv, alphaMode, tint, lights, opts, debugUV);
+}
+
+/* A ramp's slope quad (TOP slot): light samples the cell above the voxel
+ * (lightLevel = the ramp's level + 1), like a top face. */
+static void emitSlope(DrawList *list, const float quad[4][3], int x, int z,
+		      int lightLevel, const float uv[4][2], uint8_t alphaMode,
+		      uint32_t tint, const LightGrid *lights,
+		      const VoxmapEmitOptions *opts, const float debugUV[4][2])
+{
+	emitHorizontalShaded(list, quad, x, z, lightLevel, VOXMAP_SHADE_TOP, uv,
+			     alphaMode, tint, lights, opts, debugUV);
+}
+
+/* A ramp's triangular side, emitted as the degenerate quad [A, B, C, C]. The
+ * light is a single flat sample of the side neighbour at the voxel's level,
+ * copied to every corner (the brief's "triangles sample the side neighbour");
+ * the shade is that direction's directional shade. */
+static void emitTri(DrawList *list, const float quad[4][3], int x, int y, int z,
+		    int sideDir, const float uv[4][2], uint8_t alphaMode,
+		    uint32_t tint, const LightGrid *lights,
+		    const VoxmapEmitOptions *opts, const float debugUV[4][2])
+{
 	uint8_t light[4][3];
 	int ao[4] = { 0, 0, 0, 0 };
 	uint32_t cornerTint[4];
+	int k;
 
-	if (opts->smooth)
-		topCorners(lights, x, z, y - 1, light, ao);
-	else
-		sampleLight(lights, x, y - 1, z, light[0]);
-	faceCornerTints(tint, VOXMAP_SHADE_BOTTOM, x, z, light, ao,
-			opts->smooth, opts->lightDebug, cornerTint);
+	sampleLight(lights, x + kSideDx[sideDir], y, z + kSideDz[sideDir],
+		    light[0]);
+	for (k = 1; k < 4; k++) {
+		light[k][0] = light[0][0];
+		light[k][1] = light[0][1];
+		light[k][2] = light[0][2];
+	}
+	faceCornerTints(tint, kSideShade[sideDir], x, z, light, ao, opts->smooth,
+			opts->lightDebug, cornerTint);
 	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
 		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
 		 cornerTint);
 }
 
-static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
+/* A vertical side face spanning world [y0, y1] (floats: a HALF side is 0.5 high,
+ * a ramp back face is `rise` high). Light samples the side neighbour at the
+ * floor of each height (a 0.5-high face samples one level, a full face keeps
+ * the two-level span). */
+static void emitSide(DrawList *list, int x, int z, int dir, float y0, float y1,
 		     const float uv[4][2], uint8_t alphaMode, uint32_t tint,
 		     const LightGrid *lights, const VoxmapEmitOptions *opts,
 		     const float debugUV[4][2])
@@ -1292,43 +1515,225 @@ static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 	uint8_t light[4][3];
 	int ao[4] = { 0, 0, 0, 0 };
 	uint32_t cornerTint[4];
+	int ly0 = (int)floorf(y0);
+	int ly1 = (int)floorf(y1);
 
 	switch (dir) {
 	case 0:	/* +Z face at z + 1 */
-		quad[0][0] = fx;	quad[0][1] = (float)y0;	quad[0][2] = fz + 1.0f;
-		quad[1][0] = fx + 1.0f;	quad[1][1] = (float)y0;	quad[1][2] = fz + 1.0f;
-		quad[2][0] = fx + 1.0f;	quad[2][1] = (float)y1;	quad[2][2] = fz + 1.0f;
-		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
+		quad[0][0] = fx;	quad[0][1] = y0;	quad[0][2] = fz + 1.0f;
+		quad[1][0] = fx + 1.0f;	quad[1][1] = y0;	quad[1][2] = fz + 1.0f;
+		quad[2][0] = fx + 1.0f;	quad[2][1] = y1;	quad[2][2] = fz + 1.0f;
+		quad[3][0] = fx;	quad[3][1] = y1;	quad[3][2] = fz + 1.0f;
 		break;
 	case 1:	/* +X face at x + 1 */
-		quad[0][0] = fx + 1.0f;	quad[0][1] = (float)y0;	quad[0][2] = fz;
-		quad[1][0] = fx + 1.0f;	quad[1][1] = (float)y0;	quad[1][2] = fz + 1.0f;
-		quad[2][0] = fx + 1.0f;	quad[2][1] = (float)y1;	quad[2][2] = fz + 1.0f;
-		quad[3][0] = fx + 1.0f;	quad[3][1] = (float)y1;	quad[3][2] = fz;
+		quad[0][0] = fx + 1.0f;	quad[0][1] = y0;	quad[0][2] = fz;
+		quad[1][0] = fx + 1.0f;	quad[1][1] = y0;	quad[1][2] = fz + 1.0f;
+		quad[2][0] = fx + 1.0f;	quad[2][1] = y1;	quad[2][2] = fz + 1.0f;
+		quad[3][0] = fx + 1.0f;	quad[3][1] = y1;	quad[3][2] = fz;
 		break;
 	case 2:	/* -Z face at z */
-		quad[0][0] = fx + 1.0f;	quad[0][1] = (float)y0;	quad[0][2] = fz;
-		quad[1][0] = fx;	quad[1][1] = (float)y0;	quad[1][2] = fz;
-		quad[2][0] = fx;	quad[2][1] = (float)y1;	quad[2][2] = fz;
-		quad[3][0] = fx + 1.0f;	quad[3][1] = (float)y1;	quad[3][2] = fz;
+		quad[0][0] = fx + 1.0f;	quad[0][1] = y0;	quad[0][2] = fz;
+		quad[1][0] = fx;	quad[1][1] = y0;	quad[1][2] = fz;
+		quad[2][0] = fx;	quad[2][1] = y1;	quad[2][2] = fz;
+		quad[3][0] = fx + 1.0f;	quad[3][1] = y1;	quad[3][2] = fz;
 		break;
 	default: /* 3: -X face at x */
-		quad[0][0] = fx;	quad[0][1] = (float)y0;	quad[0][2] = fz + 1.0f;
-		quad[1][0] = fx;	quad[1][1] = (float)y0;	quad[1][2] = fz;
-		quad[2][0] = fx;	quad[2][1] = (float)y1;	quad[2][2] = fz;
-		quad[3][0] = fx;	quad[3][1] = (float)y1;	quad[3][2] = fz + 1.0f;
+		quad[0][0] = fx;	quad[0][1] = y0;	quad[0][2] = fz + 1.0f;
+		quad[1][0] = fx;	quad[1][1] = y0;	quad[1][2] = fz;
+		quad[2][0] = fx;	quad[2][1] = y1;	quad[2][2] = fz;
+		quad[3][0] = fx;	quad[3][1] = y1;	quad[3][2] = fz + 1.0f;
 		break;
 	}
 	if (opts->smooth)
-		sideCorners(lights, x, z, dir, y0, y1, light, ao);
+		sideCorners(lights, x, z, dir, ly0, ly1, light, ao);
 	else
-		sampleLight(lights, x + kSideDx[dir], y0, z + kSideDz[dir],
+		sampleLight(lights, x + kSideDx[dir], ly0, z + kSideDz[dir],
 			    light[0]);
 	faceCornerTints(tint, kSideShade[dir], x, z, light, ao, opts->smooth,
 			opts->lightDebug, cornerTint);
 	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
 		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
 		 cornerTint);
+}
+
+/* One ramp triangle's geometry: the emitted degenerate quad is [a, b, c, c]. */
+typedef struct RampTri {
+	int sideDir;	/* VOXMAP side index (0 +Z, 1 +X, 2 -Z, 3 -X) */
+	float a[3];
+	float b[3];
+	float c[3];
+} RampTri;
+
+/* The two triangular side faces of a ramp: the planes parallel to its rise.
+ * `dir` is the rise direction, `rise` the tall-edge height above y. */
+static void rampTriangles(int x, int y, int z, int dir, float rise,
+			  RampTri out[2])
+{
+	float fx = (float)x;
+	float fy = (float)y;
+	float fz = (float)z;
+	float h = fy + rise;
+
+	switch (dir) {
+	case VOXMAP_DIR_NORTH:	/* tall at z: triangles at x0 / x1 */
+		out[0] = (RampTri){ 3, { fx, fy, fz }, { fx, h, fz },
+				    { fx, fy, fz + 1.0f } };
+		out[1] = (RampTri){ 1, { fx + 1.0f, fy, fz },
+				    { fx + 1.0f, h, fz },
+				    { fx + 1.0f, fy, fz + 1.0f } };
+		break;
+	case VOXMAP_DIR_SOUTH:	/* tall at z+1 */
+		out[0] = (RampTri){ 3, { fx, fy, fz + 1.0f },
+				    { fx, h, fz + 1.0f }, { fx, fy, fz } };
+		out[1] = (RampTri){ 1, { fx + 1.0f, fy, fz + 1.0f },
+				    { fx + 1.0f, h, fz + 1.0f },
+				    { fx + 1.0f, fy, fz } };
+		break;
+	case VOXMAP_DIR_WEST:	/* tall at x0: triangles at z0 / z1 */
+		out[0] = (RampTri){ 2, { fx, fy, fz }, { fx, h, fz },
+				    { fx + 1.0f, fy, fz } };
+		out[1] = (RampTri){ 0, { fx, fy, fz + 1.0f },
+				    { fx, h, fz + 1.0f },
+				    { fx + 1.0f, fy, fz + 1.0f } };
+		break;
+	default:		/* EAST: tall at x+1 */
+		out[0] = (RampTri){ 2, { fx + 1.0f, fy, fz },
+				    { fx + 1.0f, h, fz }, { fx, fy, fz } };
+		out[1] = (RampTri){ 0, { fx + 1.0f, fy, fz + 1.0f },
+				    { fx + 1.0f, h, fz + 1.0f },
+				    { fx, fy, fz + 1.0f } };
+		break;
+	}
+}
+
+/* The slope quad (TOP slot): walk the tall edge's two corners, then the low
+ * edge's two (see the header's exact per-direction table). */
+static void rampSlopeQuad(int x, int y, int z, int dir, float rise,
+			  float q[4][3])
+{
+	float x0 = (float)x;
+	float x1 = (float)(x + 1);
+	float z0 = (float)z;
+	float z1 = (float)(z + 1);
+	float yl = (float)y;
+	float yh = yl + rise;
+
+	switch (dir) {
+	case VOXMAP_DIR_NORTH:	/* tall at z0, low at z1 */
+		q[0][0] = x0;	q[0][1] = yh;	q[0][2] = z0;
+		q[1][0] = x1;	q[1][1] = yh;	q[1][2] = z0;
+		q[2][0] = x1;	q[2][1] = yl;	q[2][2] = z1;
+		q[3][0] = x0;	q[3][1] = yl;	q[3][2] = z1;
+		break;
+	case VOXMAP_DIR_SOUTH:	/* tall at z1 */
+		q[0][0] = x0;	q[0][1] = yl;	q[0][2] = z0;
+		q[1][0] = x1;	q[1][1] = yl;	q[1][2] = z0;
+		q[2][0] = x1;	q[2][1] = yh;	q[2][2] = z1;
+		q[3][0] = x0;	q[3][1] = yh;	q[3][2] = z1;
+		break;
+	case VOXMAP_DIR_WEST:	/* tall at x0 */
+		q[0][0] = x0;	q[0][1] = yh;	q[0][2] = z0;
+		q[1][0] = x0;	q[1][1] = yh;	q[1][2] = z1;
+		q[2][0] = x1;	q[2][1] = yl;	q[2][2] = z1;
+		q[3][0] = x1;	q[3][1] = yl;	q[3][2] = z0;
+		break;
+	default:		/* EAST: tall at x1 */
+		q[0][0] = x1;	q[0][1] = yh;	q[0][2] = z0;
+		q[1][0] = x1;	q[1][1] = yh;	q[1][2] = z1;
+		q[2][0] = x0;	q[2][1] = yl;	q[2][2] = z1;
+		q[3][0] = x0;	q[3][1] = yl;	q[3][2] = z0;
+		break;
+	}
+}
+
+/* Emit the non-FULL shape's faces for the voxel (x, y, z) of material `id`.
+ * Culling and the UV convention are documented in the header. */
+static void emitShapeFaces(const Voxmap *map, DrawList *list, int x, int y,
+			   int z, int id, int shape, int dir,
+			   const MaterialTable *materials,
+			   const LightGrid *lights,
+			   const VoxmapEmitOptions *opts,
+			   const float debugUV[4][2], float toCamX, float toCamZ)
+{
+	uint8_t alpha = materialAlpha(materials, id);
+	float fy = (float)y;
+	float uv[4][2];
+
+	if (shape == VOXMAP_SHAPE_HALF) {
+		int d;
+
+		if (!voxmapFullAt(map, x, y + 1, z)) {
+			materialUV(materials, id, FACE_TOP, uv);
+			emitTop(list, x, z, fy + 0.5f, y + 1, uv, alpha,
+				opts->tint, lights, opts, debugUV);
+		}
+		if (y > 0 && !voxmapFullAt(map, x, y - 1, z)) {
+			materialUV(materials, id, FACE_BOTTOM, uv);
+			emitBottom(list, x, z, fy, y - 1, uv, alpha, opts->tint,
+				   lights, opts, debugUV);
+		}
+		for (d = 0; d < 4; d++) {
+			if (sideCulled(d, toCamX, toCamZ) ||
+			    voxmapFullAt(map, x + kSideDx[d], y,
+					 z + kSideDz[d]))
+				continue;
+			materialUV(materials, id, materialFaceForSideDir(d), uv);
+			emitSide(list, x, z, d, fy, fy + 0.5f, uv, alpha,
+				 opts->tint, lights, opts, debugUV);
+		}
+		return;
+	}
+
+	/* RAMP / HALF_RAMP. */
+	{
+		float rise = (shape == VOXMAP_SHAPE_RAMP) ? 1.0f : 0.5f;
+		int backSide = kDirToSide[dir];
+		RampTri tri[2];
+		int k;
+
+		if (y > 0 && !voxmapFullAt(map, x, y - 1, z)) {
+			materialUV(materials, id, FACE_BOTTOM, uv);
+			emitBottom(list, x, z, fy, y - 1, uv, alpha, opts->tint,
+				   lights, opts, debugUV);
+		}
+		if (!voxmapFullAt(map, x + kSideDx[backSide], y,
+				  z + kSideDz[backSide]) &&
+		    !sideCulled(backSide, toCamX, toCamZ)) {
+			materialUV(materials, id, materialFaceForSideDir(backSide),
+				   uv);
+			emitSide(list, x, z, backSide, fy, fy + rise, uv, alpha,
+				 opts->tint, lights, opts, debugUV);
+		}
+		if (!voxmapFullAt(map, x, y + 1, z)) {
+			float q[4][3];
+
+			rampSlopeQuad(x, y, z, dir, rise, q);
+			materialUV(materials, id, FACE_TOP, uv);
+			emitSlope(list, q, x, z, y + 1, uv, alpha, opts->tint,
+				  lights, opts, debugUV);
+		}
+		rampTriangles(x, y, z, dir, rise, tri);
+		for (k = 0; k < 2; k++) {
+			float q[4][3];
+
+			if (sideCulled(tri[k].sideDir, toCamX, toCamZ) ||
+			    voxmapFullAt(map, x + kSideDx[tri[k].sideDir], y,
+					 z + kSideDz[tri[k].sideDir]))
+				continue;
+			memcpy(q[0], tri[k].a, sizeof(q[0]));
+			memcpy(q[1], tri[k].b, sizeof(q[1]));
+			memcpy(q[2], tri[k].c, sizeof(q[2]));
+			memcpy(q[3], tri[k].c, sizeof(q[3]));
+			materialUV(materials, id,
+				   materialFaceForSideDir(tri[k].sideDir), uv);
+			/* The degenerate corner mirrors the real third corner so
+			 * the zero-area half contributes no UV area. */
+			uv[3][0] = uv[2][0];
+			uv[3][1] = uv[2][1];
+			emitTri(list, q, x, y, z, tri[k].sideDir, uv, alpha,
+				opts->tint, lights, opts, debugUV);
+		}
+	}
 }
 
 void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
@@ -1359,35 +1764,49 @@ void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
 				float uv[4][2];
 
 				materialUV(materials, id, FACE_TOP, uv);
-				emitTop(list, x, z, 0, uv,
+				emitTop(list, x, z, 0.0f, 0, uv,
 					materialAlpha(materials, id), options->tint,
 					lights, options, debugUV);
 			}
-			/* Tops + bottoms, ascending level. */
+			/* Tops + bottoms + shape faces, ascending level. */
 			for (y = 0; y < map->levels; y++) {
 				size_t idx = voxelIndex(map, x, y, z);
 				int id;
+				int shape;
 				float uv[4][2];
 
 				if (!map->solid[idx])
 					continue;
 				id = map->materials[idx];
-				if (!voxmapSolidAt(map, x, y + 1, z)) {
+				shape = VOXMAP_SHAPE_OF(map->shapes[idx]);
+				if (shape != VOXMAP_SHAPE_FULL) {
+					emitShapeFaces(map, list, x, y, z, id,
+						       shape,
+						       VOXMAP_SHAPE_DIR_OF(
+							       map->shapes[idx]),
+						       materials, lights,
+						       options, debugUV,
+						       toCamX, toCamZ);
+					continue;
+				}
+				if (!voxmapFullAt(map, x, y + 1, z)) {
 					materialUV(materials, id, FACE_TOP, uv);
-					emitTop(list, x, z, y + 1, uv,
+					emitTop(list, x, z, (float)(y + 1),
+						y + 1, uv,
 						materialAlpha(materials, id),
 						options->tint, lights, options,
 						debugUV);
 				}
-				if (y > 0 && !voxmapSolidAt(map, x, y - 1, z)) {
+				if (y > 0 && !voxmapFullAt(map, x, y - 1, z)) {
 					materialUV(materials, id, FACE_BOTTOM, uv);
-					emitBottom(list, x, z, y, uv,
-						   materialAlpha(materials, id),
+					emitBottom(list, x, z, (float)y, y - 1,
+						   uv, materialAlpha(materials, id),
 						   options->tint, lights, options,
 						   debugUV);
 				}
 			}
-			/* Sides: one quad per exposed vertical run. */
+			/* Sides: one quad per exposed run of consecutive FULL
+			 * voxels (a shape breaks a run; see the header). */
 			for (dir = 0; dir < 4; dir++) {
 				if (sideCulled(dir, toCamX, toCamZ))
 					continue;
@@ -1397,8 +1816,8 @@ void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
 					int id;
 					float uv[4][2];
 
-					if (!voxmapSolidAt(map, x, y, z) ||
-					    voxmapSolidAt(map,
+					if (!voxmapFullAt(map, x, y, z) ||
+					    voxmapFullAt(map,
 							  x + kSideDx[dir], y,
 							  z + kSideDz[dir])) {
 						y++;
@@ -1407,15 +1826,16 @@ void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
 					start = y;
 					id = voxmapMaterialAtVoxel(map, x, y, z);
 					while (y < map->levels &&
-					       voxmapSolidAt(map, x, y, z) &&
-					       !voxmapSolidAt(map,
+					       voxmapFullAt(map, x, y, z) &&
+					       !voxmapFullAt(map,
 							      x + kSideDx[dir], y,
 							      z + kSideDz[dir]))
 						y++;
 					materialUV(materials, id,
 						   materialFaceForSideDir(dir),
 						   uv);
-					emitSide(list, x, z, dir, start, y, uv,
+					emitSide(list, x, z, dir,
+						 (float)start, (float)y, uv,
 						 materialAlpha(materials, id),
 						 options->tint, lights, options,
 						 debugUV);

@@ -618,6 +618,35 @@ static void test_voxel_face_shaded_corner_tints(void)
 	destroyDrawList(&list);
 }
 
+/* T17: a ramp's slope quad has corner heights that differ, so the existing
+ * classifier treats it as VERTICAL and keys it on its two-lowest-corner base
+ * line (its ground line), not its centre. At yaw 0 the slope at grid (7,2,9)
+ * (centre (7.5,2.5,9.5) -> closeness 9.19; base (7.5,2,10) -> 9.31) is placed
+ * against a sprite at (7.5,2,9.85) (9.21 with bias): on the base-line key the
+ * slope (9.31) is nearer and draws last (occludes); on a centre key it would
+ * draw first. The sprite must therefore be item 0. */
+static void test_sort_slope_keys_on_base_line(void)
+{
+	DrawList list;
+	Camera3D camera = cameraAtYaw(0.0f);
+	const float slope[4][3] = {
+		{ 7.0f, 3.0f, 9.0f }, { 8.0f, 3.0f, 9.0f },
+		{ 8.0f, 2.0f, 10.0f }, { 7.0f, 2.0f, 10.0f },
+	};
+	SpriteEntity sprite = { 7.5f, 2.0f, 9.85f, 1.2f, 1.8f,
+				DRAW_TINT(255, 255, 255, 255), -1 };
+
+	initDrawList(&list, 4);
+	TEST_ASSERT_TRUE(appendVoxelFace(&list, slope, kTopUV, ALPHA_OPAQUE,
+					 DRAW_TINT(240, 240, 240, 255)));
+	TEST_ASSERT_TRUE(appendSprite(&list, &sprite, &camera, NULL));
+	sortDrawList(&list, &camera);
+
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 0)->kind);
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_VOXEL, drawListItem(&list, 1)->kind);
+	destroyDrawList(&list);
+}
+
 void run_test_drawlist(void);
 
 void run_test_drawlist(void)
@@ -642,4 +671,5 @@ void run_test_drawlist(void)
 	RUN_TEST(test_sort_tower_face_base_line_keeps_ground_tile_in_front);
 	RUN_TEST(test_sort_wall_face_base_line_sprite_in_front_and_on_top);
 	RUN_TEST(test_sort_base_line_picks_two_lowest_corners);
+	RUN_TEST(test_sort_slope_keys_on_base_line);
 }

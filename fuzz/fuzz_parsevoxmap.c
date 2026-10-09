@@ -23,13 +23,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (map != NULL) {
 		int w = voxmapWidth(map);
 		int d = voxmapDepth(map);
+		int l = voxmapLevels(map);
 		int x;
 		int y;
+		int z;
 
 		for (y = 0; y < d; y++)
 			for (x = 0; x < w; x++)
 				(void)voxmapHeightAt(map, x, y);
 		(void)voxmapIsVoid(map, 0, 0);
+		/* Walk the shape queries across the whole volume too (T17). */
+		for (z = 0; z < d; z++)
+			for (y = 0; y < l; y++)
+				for (x = 0; x < w; x++) {
+					(void)voxmapShapeAt(map, x, y, z);
+					(void)voxmapShapeDirAt(map, x, y, z);
+					(void)voxmapFullAt(map, x, y, z);
+				}
 		destroyVoxmap(map);
 	}
 	return 0;

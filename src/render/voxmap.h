@@ -94,7 +94,10 @@
  * voxmapMaterialAt: their second argument is the Z column coordinate. The new
  * 3D queries take (x, y, z) in world order.
  *
- * FACE GENERATION. Emission culls against the six neighbours:
+ * FACE GENERATION. For a FULL voxel, emission culls against the six
+ * neighbours (the SHAPES note below adds shape faces and culls ONLY against a
+ * FULL neighbour — equivalent for the all-FULL maps this file has always
+ * carried, so their output is byte-identical):
  *   - TOP: a solid voxel whose above-neighbour is air emits a 1x1 top face at
  *     world y + 1. A height-0 ground tile emits its top at y = 0.
  *   - BOTTOM: a solid voxel at level y >= 1 whose below-neighbour is air emits
@@ -147,6 +150,73 @@
  * a fully-white atlas UV (`debugUV`; NULL falls back to the built-in spare
  * region) and the light factor itself as the corner tint — no material tint,
  * shade, checkerboard or AO. Corner-interpolated on the smooth path.
+ *
+ * SHAPES. Every voxel carries a shape: FULL (the default, a 1x1x1 cube), HALF
+ * (bottom slab), RAMP or HALF_RAMP (a wedge). A ramp/half-ramp carries a
+ * direction: the horizontal side the slope RISES toward (the tallest edge's
+ * side). Engine axes: north = -z (the map's top row is z 0), south = +z,
+ * east = +x, west = -x, y up. In unit cell [x, x+1] x [z, z+1], level y
+ * occupying [y, y+1], with x_local = x - x0 and z_local = z - z0 measured from
+ * the cell's west / north edge:
+ *   HALF       solid <= y_local <= 0.5 (bottom slab over the full footprint)
+ *   RAMP    N  solid <= y_local <= 1 - z_local   (tall at north, slope down S)
+ *           S  solid <= y_local <= z_local       (tall at south)
+ *           W  solid <= y_local <= 1 - x_local   (tall at west)
+ *           E  solid <= y_local <= x_local       (tall at east)
+ *   HALF_RAMP  the same wedges with the rise halved: <= 0.5 * (1 - z_local),
+ *              etc.
+ * Shape is a rendering/query property only: voxmapSolidAt stays true for every
+ * non-air shape, so occupancy and the light grid are unchanged. A height-0
+ * heightmap ground tile has no voxel, so a shape on a height-0 legend entry
+ * has no effect: the tile stays a full flat top at y = 0 (documented; pinned by
+ * test_voxmap). In a heightmap a legend shape applies to EVERY voxel of the
+ * column (a height-h column of ramps is a stack of ramps; a single ramp plus
+ * flat cells makes a staircase), and in slice mode the shape applies per voxel.
+ *
+ * SHAPE FACES (emission). FULL keeps the existing faces. HALF emits a 1x1 top
+ * at y + 0.5 (TOP slot), a 1x1 bottom at y (see the bottom rule), and four
+ * 0.5-high sides (side slots). A RAMP dir N emits a 1x1 bottom at y, a full
+ * 1x1 vertical back face at the tall edge (z0, side slot), the slope quad
+ * (x, y+1, z0) -> (x+1, y+1, z0) -> (x+1, y, z0+1) -> (x, y, z0+1) (TOP slot),
+ * and two triangular side faces emitted as degenerate quads `[A, B, C, C]`
+ * (triangles 0-1-2 + zero-area 0-2-3): west = (x, y, z0), (x, y+1, z0),
+ * (x, y, z0+1); east = (x+1, y, z0), (x+1, y+1, z0), (x+1, y, z0+1). A
+ * HALF_RAMP N is the same with the back face 0.5 high (y..y+0.5) and the slope
+ * (x, y+0.5, z0) -> ... -> (x, y, z0+1); its triangles are 0.5 high at the
+ * north edge tapering to 0. Every other direction is the mirror of the above
+ * (the exact corner tables are pinned per shape x dir by test_voxmap).
+ *
+ * Triangle UV CONVENTION: a triangle reuses the direction's oriented 4-corner
+ * side UV exactly as the vertical side face does, with uv[3] set equal to uv[2]
+ * (the degenerate corner mirrors the real third corner). The rendered triangle
+ * (corners 0-1-2) therefore samples the (bottom-left, bottom-right, top-right)
+ * half of that side texture; the second triangle is zero-area and contributes
+ * no fragments (the GPU splits every quad into corners 0-1-2 and 0-2-3). The
+ * slope quad maps its four corners to the TOP slot's standard oriented 4-corner
+ * UV in order.
+ *
+ * CULLING (conservative, documented). Axis-aligned faces (top/bottom/sides) and
+ * the back face are culled when the facing NEIGHBOUR voxel is FULL (a FULL
+ * neighbour fully hides them); the slope quad is culled when the cell above is
+ * FULL; triangles cull against a FULL side neighbour in their own direction.
+ * Shape-vs-shape adjacencies can therefore overdraw (faces hidden inside a
+ * neighbouring half/ramp are still emitted) — "visible faces only" is preserved
+ * against true solids and against air, and the overdraw is only ever between
+ * two shapes, always sorted behind the surface that occludes it. A shaper's
+ * side face is also camera-culled by the existing dot test (the back face and
+ * the triangles use their own outward normal), so a shape's hidden sides are
+ * dropped at an axis-aligned yaw exactly as a full voxel's are.
+ *
+ * RUN MERGING merges only consecutive FULL voxels (as today); a shape emits its
+ * own faces and breaks a run. SORT needs no new code: the existing classifier
+ * keys any quad whose corner heights differ (a slope, a triangle, a 0.5-high
+ * half side, a vertical run) on its two-lowest-corner base line, and a flat top
+ * / bottom on its centre — the intended behaviour (a slope keys on its ground
+ * line). LIGHT samples the same adjacent cell per face: top / slope the cell
+ * above, bottom the cell below, sides / back face / triangles the side
+ * neighbour; the sample level is the voxel's own level, so a 0.5-high half side
+ * and a triangle sample at their base level and a full-height back face keeps
+ * the two-level span.
  */
 
 #include "render/camera3d.h"
@@ -254,6 +324,56 @@ bool voxmapSolidAt(const Voxmap *map, int x, int y, int z);
  * NULL. */
 int voxmapMaterialAtVoxel(const Voxmap *map, int x, int y, int z);
 
+/* Per-voxel shape (see the SHAPES note). FULL is the default an absent legend
+ * attribute yields, so every existing map is unchanged. */
+#define VOXMAP_SHAPE_FULL 0
+#define VOXMAP_SHAPE_HALF 1
+#define VOXMAP_SHAPE_RAMP 2
+#define VOXMAP_SHAPE_HALF_RAMP 3
+
+/* Ramp direction: the side the slope rises toward (the tallest edge's side).
+ * north = -z, south = +z, east = +x, west = -x. */
+#define VOXMAP_DIR_NORTH 0
+#define VOXMAP_DIR_EAST 1
+#define VOXMAP_DIR_SOUTH 2
+#define VOXMAP_DIR_WEST 3
+
+/* Pack / unpack the per-voxel shape byte: bits 0-1 shape, bits 2-3 dir (dir is
+ * meaningful only for a ramp / half-ramp). */
+#define VOXMAP_SHAPE_PACK(shape, dir) \
+	((uint8_t)(((shape) & 3u) | (((dir) & 3u) << 2)))
+#define VOXMAP_SHAPE_OF(packed) ((packed) & 3u)
+#define VOXMAP_SHAPE_DIR_OF(packed) (((packed) >> 2) & 3u)
+
+/* Result of voxmapParseShapeAttrs. */
+#define VOXMAP_ATTR_OK 0	/* every attribute parsed */
+#define VOXMAP_ATTR_SKIP 1	/* unknown shape/dir value: skip the entry */
+#define VOXMAP_ATTR_BAD (-1)	/* not a shape=/dir= attribute at all */
+
+/* Parse the optional `shape=…` / `dir=…` attribute tokens shared by the ASCII
+ * legend and the PNG colour legend, and write the packed shape byte to
+ * `*outPacked`. Applies the documented defaults: absent shape = FULL; a ramp
+ * without dir defaults to NORTH (diagnostic); dir on a non-ramp is ignored
+ * (diagnostic). Returns VOXMAP_ATTR_OK, VOXMAP_ATTR_SKIP (a shape/dir value was
+ * unknown: a diagnostic was printed and the whole legend entry must be
+ * skipped), or VOXMAP_ATTR_BAD (a token that is neither attribute: a malformed
+ * line). `prefix` heads the diagnostics (e.g. "voxmap: 'path' legend char 'g'"). */
+int voxmapParseShapeAttrs(char *const *tokens, int count, const char *prefix,
+			  uint8_t *outPacked);
+
+/* Shape of the voxel at world (x, y, z); VOXMAP_SHAPE_FULL for air, out of
+ * bounds or a NULL map (full is the implicit default). */
+int voxmapShapeAt(const Voxmap *map, int x, int y, int z);
+
+/* Direction (0..3) of a RAMP / HALF_RAMP voxel; -1 for every other shape, air,
+ * out of bounds or a NULL map. */
+int voxmapShapeDirAt(const Voxmap *map, int x, int y, int z);
+
+/* True when the voxel at world (x, y, z) is solid AND its shape is FULL. The
+ * face emitter culls an axis-aligned face only against a FULL neighbour (see
+ * the SHAPES note); false for a shape, air, out of bounds or a NULL map. */
+bool voxmapFullAt(const Voxmap *map, int x, int y, int z);
+
 /* Parsed `$` light count (0 for a NULL map). */
 int voxmapLightCount(const Voxmap *map);
 
@@ -279,6 +399,15 @@ bool voxmapParseLightLine(const char *text, size_t length, VoxmapLight *out);
 Voxmap *voxmapBuildRaw(int width, int depth, int levels,
 		       const uint8_t *solid, const int16_t *materials,
 		       const VoxmapLight *lights, int lightCount);
+
+/* As voxmapBuildRaw but with a per-voxel shape byte (`shapes`, one byte per
+ * voxel in the same canonical order; NULL means every voxel is FULL). The PNG
+ * slice assembler (mapsource.h) uses this so it never reaches into the opaque
+ * struct. */
+Voxmap *voxmapBuildRawShaped(int width, int depth, int levels,
+			     const uint8_t *solid, const int16_t *materials,
+			     const uint8_t *shapes,
+			     const VoxmapLight *lights, int lightCount);
 
 /* Face-emission options (see the lighting/debug note). `tint` is the base
  * material tint; `smooth` selects the per-corner light + AO pass (false is

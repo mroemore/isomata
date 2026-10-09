@@ -218,3 +218,13 @@ src/render/grid.c		91
 # occupancy tests cover roof shadow / doorway shaft / interior lamp, measured
 # 97.4 (floor unchanged at 97).
 src/render/lightgrid.c		97
+
+# T17: sub-voxel shapes (half/ramp/half-ramp) add the shape model + queries,
+# the shape-specific faces (slope, degenerate-quad triangles, half sides) with
+# float heights, the shape=/dir= legend attributes in BOTH formats, and the
+# per-voxel shape grid the PNG assembler builds. voxmap.c measures 96.9%
+# (719/742; the residual untaken arms are the pre-existing file-I/O failure
+# returns plus short-circuit operand edges of the new bounds guards) and
+# mapsource.c 98.5% (the three untaken arms remain the natural-comparer
+# compound-condition edges documented above). Both floors still hold at their
+# previous values.

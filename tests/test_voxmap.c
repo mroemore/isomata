@@ -2256,16 +2256,12 @@ static void test_directive_leading_whitespace(void)
 	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));
 	destroyVoxmap(map);
 
-	map = parseVoxmapText("\t$ point 0.5 0.5 0.5 255 0 0\n1\n",
-			      strlen("\t$ point 0.5 0.5 0.5 255 0 0\n1\n"),
-			      NULL);
+	map = parseVoxmapText("\t$ point 0.5 0.5 0.5 255 0 0\n1\n", strlen("\t$ point 0.5 0.5 0.5 255 0 0\n1\n"), NULL);
 	TEST_ASSERT_NOT_NULL(map);
 	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
 	destroyVoxmap(map);
 
-	map = parseVoxmapText("  $ point 0.5 0.5 0.5 255 0 0\n1\n",
-			      strlen("  $ point 0.5 0.5 0.5 255 0 0\n1\n"),
-			      NULL);
+	map = parseVoxmapText("  $ point 0.5 0.5 0.5 255 0 0\n1\n", strlen("  $ point 0.5 0.5 0.5 255 0 0\n1\n"), NULL);
 	TEST_ASSERT_NOT_NULL(map);
 	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
 	destroyVoxmap(map);
@@ -2399,6 +2395,831 @@ static void test_smooth_bottom_face(void)
 	destroyVoxmap(map);
 }
 
+/* --- T17 sub-voxel shapes ---------------------------------------------- */
+
+/* Put the camera at a 45-degree-multiple yaw (a rest step). */
+static void shapeSetYaw(Camera3D *cam, float yawDeg)
+{
+	int steps = (int)lroundf(yawDeg / CAMERA_STEP_DEG);
+
+	initCamera3D(cam);
+	while (steps-- > 0) {
+		cameraRotateStep(cam, 1);
+		updateCamera3D(cam, CAMERA_TURN_SECONDS);
+	}
+}
+
+static bool quadMatches(const DrawItem *item, const float q[4][3])
+{
+	int k;
+	int c;
+
+	for (k = 0; k < 4; k++)
+		for (c = 0; c < 3; c++)
+			if (fabsf(item->worldQuad[k][c] - q[k][c]) > EPS)
+				return false;
+	return true;
+}
+
+/* Emit `map` at `yawDeg` and copy the FIRST item whose quad matches `q` into
+ * `*out`. Returns false when no face has that exact geometry. */
+static bool emitFindQuad(Voxmap *map, float yawDeg, const float q[4][3],
+			 DrawItem *out)
+{
+	DrawList list;
+	Camera3D cam;
+	bool found = false;
+	size_t i;
+
+	initDrawList(&list, 32);
+	shapeSetYaw(&cam, yawDeg);
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	for (i = 0; i < drawListCount(&list); i++) {
+		if (quadMatches(drawListItem(&list, i), q)) {
+			*out = *drawListItem(&list, i);
+			found = true;
+			break;
+		}
+	}
+	destroyDrawList(&list);
+	return found;
+}
+
+/* A two-level slice map: level 0 is air, level 1 is `row` (a 1-wide voxel with
+ * the legend's shape). */
+static Voxmap *shapeSlice1(const char *legend, const char *row)
+{
+	static char buf[512];
+
+	snprintf(buf, sizeof(buf), "%s.\n---\n%s\n", legend, row);
+	return parseText(buf);
+}
+
+/* A single shape in a 1x1 column: query defaults + bounds. */
+static void test_shape_query_defaults_and_bounds(void)
+{
+	Voxmap *map = loadTemp("vm_shape_def.txt", "1\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 0));
+	TEST_ASSERT_TRUE(voxmapFullAt(map, 0, 0, 0));
+	/* Air / out of bounds / NULL: FULL (0) and no dir / not full. */
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 1, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 5, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 5, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 1, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(NULL, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(NULL, 0, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(NULL, 0, 0, 0));
+	destroyVoxmap(map);
+}
+
+/* In a heightmap a legend shape applies to EVERY voxel of the column. */
+static void test_heightmap_shape_applies_to_column(void)
+{
+	Voxmap *map = parseText(
+		"@ r 3 stone shape=ramp dir=west\n"
+		"r\n");
+	int y;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	for (y = 0; y < 3; y++) {
+		TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_RAMP,
+				      voxmapShapeAt(map, 0, y, 0));
+		TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_WEST,
+				      voxmapShapeDirAt(map, 0, y, 0));
+		TEST_ASSERT_FALSE(voxmapFullAt(map, 0, y, 0));
+	}
+	destroyVoxmap(map);
+}
+
+/* A shaped height-0 legend entry is ignored: there is no voxel to shape, so the
+ * ground tile stays a full flat top at y = 0. */
+static void test_height_zero_shape_ignored(void)
+{
+	Voxmap *map = parseText(
+		"@ r 0 stone shape=ramp dir=north\n"
+		"r\n");
+	DrawList list;
+	Camera3D cam;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(0, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 0, 0));	/* ground: no voxel */
+	initDrawList(&list, 8);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	TEST_ASSERT_EQUAL_INT(1, (int)drawListCount(&list));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, drawListItem(&list, 0)->worldQuad[0][1]);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* In slice mode the shape applies per voxel. */
+static void test_slice_shape_per_voxel(void)
+{
+	Voxmap *map = parseText(
+		"@ h 1 stone shape=half\n"
+		"@ e 1 stone shape=ramp dir=east\n"
+		".\n"
+		"---\n"
+		"h\n"
+		"---\n"
+		"e\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_HALF, voxmapShapeAt(map, 0, 1, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 1, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_RAMP, voxmapShapeAt(map, 0, 2, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_EAST, voxmapShapeDirAt(map, 0, 2, 0));
+	destroyVoxmap(map);
+}
+
+/* HALF: a bottom slab. At yaw 0 (camera +Z) the emitted faces are the 1x1 top
+ * at y + 0.5, the 1x1 bottom at y, and the +Z side 0.5 high. */
+static void test_half_exact_corners(void)
+{
+	const float top[4][3] = {
+		{ 0, 1.5f, 0 }, { 1, 1.5f, 0 }, { 1, 1.5f, 1 }, { 0, 1.5f, 1 },
+	};
+	const float bottom[4][3] = {
+		{ 0, 1, 0 }, { 1, 1, 0 }, { 1, 1, 1 }, { 0, 1, 1 },
+	};
+	const float plusZ[4][3] = {
+		{ 0, 1, 1 }, { 1, 1, 1 }, { 1, 1.5f, 1 }, { 0, 1.5f, 1 },
+	};
+	Voxmap *map = shapeSlice1("@ H 1 stone shape=half\n", "H");
+	DrawItem out;
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	const float spareUV[4][2] = ATLAS_UV_SPARE;
+	const float sideUV[4][2] = ATLAS_UV_SIDE;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, top, &out));
+	TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
+	TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, bottom, &out));
+	TEST_ASSERT_TRUE(itemHasUV(&out, spareUV));
+	TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, plusZ, &out));
+	TEST_ASSERT_TRUE(itemHasUV(&out, sideUV));
+	destroyVoxmap(map);
+}
+
+/* One row of the ramp expected-corner tables: the rise direction, the slope
+ * (always emitted), the tall-edge back face and its yaw, and the two triangles
+ * with the yaws at which each is camera-facing. */
+typedef struct RampCase {
+	int dir;
+	float slope[4][3];
+	float back[4][3];
+	float backYaw;
+	float tri0[4][3];	/* VOXMAP_DIR_N/S: west (x0); W/E: north (z0) */
+	float tri0Yaw;
+	float tri1[4][3];	/* N/S: east (x1); W/E: south (z1) */
+	float tri1Yaw;
+} RampCase;
+
+/* Check one ramp family (ramp or half-ramp) across all four directions; the
+ * expected quads are literal, `rise` only drives nothing (kept for the doc). */
+static void checkRampCase(const char *legend, const RampCase *c)
+{
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	const float sideUV[4][2] = ATLAS_UV_SIDE;
+	char full[256];
+	Voxmap *map;
+	DrawItem out;
+
+	/* "@ X 1 ..." -> the row is the legend's char (index 2). */
+	snprintf(full, sizeof(full), "%s.\n---\n%c\n", legend, legend[2]);
+	map = parseText(full);
+	TEST_ASSERT_NOT_NULL(map);
+	/* Slope (TOP slot) is never camera-culled. */
+	TEST_ASSERT_TRUE(emitFindQuad(map, 0.0f, c->slope, &out));
+	TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
+	/* Back face at its camera-facing yaw. */
+	TEST_ASSERT_TRUE(emitFindQuad(map, c->backYaw, c->back, &out));
+	TEST_ASSERT_TRUE(itemHasUV(&out, sideUV));
+	/* Triangles at their camera-facing yaws: the first three UV corners
+	 * are the side slot, the degenerate corner mirrors the third. */
+	TEST_ASSERT_TRUE(emitFindQuad(map, c->tri0Yaw, c->tri0, &out));
+	TEST_ASSERT_EQUAL_MEMORY(sideUV, out.uv, 3 * 2 * sizeof(float));
+	TEST_ASSERT_EQUAL_MEMORY(&out.uv[2], &out.uv[3], 2 * sizeof(float));
+	TEST_ASSERT_TRUE(emitFindQuad(map, c->tri1Yaw, c->tri1, &out));
+	TEST_ASSERT_EQUAL_MEMORY(sideUV, out.uv, 3 * 2 * sizeof(float));
+	destroyVoxmap(map);
+}
+
+/* RAMP dir N: slope (x,y+1,z0)->(x+1,y+1,z0)->(x+1,y,z0+1)->(x,y,z0+1); back
+ * is the full 1x1 north face; west/east triangles are the degenerate quads. */
+static void test_ramp_dir_north_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_NORTH,
+		{ { 0, 2, 0 }, { 1, 2, 0 }, { 1, 1, 1 }, { 0, 1, 1 } },
+		{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 2, 0 }, { 1, 2, 0 } }, 180.0f,
+		{ { 0, 1, 0 }, { 0, 2, 0 }, { 0, 1, 1 }, { 0, 1, 1 } }, 270.0f,
+		{ { 1, 1, 0 }, { 1, 2, 0 }, { 1, 1, 1 }, { 1, 1, 1 } }, 90.0f,
+	};
+	checkRampCase("@ R 1 stone shape=ramp dir=north\n", &c);
+}
+
+static void test_ramp_dir_south_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_SOUTH,
+		{ { 0, 1, 0 }, { 1, 1, 0 }, { 1, 2, 1 }, { 0, 2, 1 } },
+		{ { 0, 1, 1 }, { 1, 1, 1 }, { 1, 2, 1 }, { 0, 2, 1 } }, 0.0f,
+		{ { 0, 1, 1 }, { 0, 2, 1 }, { 0, 1, 0 }, { 0, 1, 0 } }, 270.0f,
+		{ { 1, 1, 1 }, { 1, 2, 1 }, { 1, 1, 0 }, { 1, 1, 0 } }, 90.0f,
+	};
+	checkRampCase("@ R 1 stone shape=ramp dir=south\n", &c);
+}
+
+static void test_ramp_dir_west_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_WEST,
+		{ { 0, 2, 0 }, { 0, 2, 1 }, { 1, 1, 1 }, { 1, 1, 0 } },
+		{ { 0, 1, 1 }, { 0, 1, 0 }, { 0, 2, 0 }, { 0, 2, 1 } }, 270.0f,
+		{ { 0, 1, 0 }, { 0, 2, 0 }, { 1, 1, 0 }, { 1, 1, 0 } }, 180.0f,
+		{ { 0, 1, 1 }, { 0, 2, 1 }, { 1, 1, 1 }, { 1, 1, 1 } }, 0.0f,
+	};
+	checkRampCase("@ R 1 stone shape=ramp dir=west\n", &c);
+}
+
+static void test_ramp_dir_east_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_EAST,
+		{ { 1, 2, 0 }, { 1, 2, 1 }, { 0, 1, 1 }, { 0, 1, 0 } },
+		{ { 1, 1, 0 }, { 1, 1, 1 }, { 1, 2, 1 }, { 1, 2, 0 } }, 90.0f,
+		{ { 1, 1, 0 }, { 1, 2, 0 }, { 0, 1, 0 }, { 0, 1, 0 } }, 180.0f,
+		{ { 1, 1, 1 }, { 1, 2, 1 }, { 0, 1, 1 }, { 0, 1, 1 } }, 0.0f,
+	};
+	checkRampCase("@ R 1 stone shape=ramp dir=east\n", &c);
+}
+
+/* HALF_RAMP dir N: the back face is 0.5 high (y..y+0.5) and the slope drops
+ * from y+0.5; triangles taper to 0 at the north edge. */
+static void test_half_ramp_dir_north_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_NORTH,
+		{ { 0, 1.5f, 0 }, { 1, 1.5f, 0 }, { 1, 1, 1 }, { 0, 1, 1 } },
+		{ { 1, 1, 0 }, { 0, 1, 0 }, { 0, 1.5f, 0 }, { 1, 1.5f, 0 } },
+		180.0f,
+		{ { 0, 1, 0 }, { 0, 1.5f, 0 }, { 0, 1, 1 }, { 0, 1, 1 } },
+		270.0f,
+		{ { 1, 1, 0 }, { 1, 1.5f, 0 }, { 1, 1, 1 }, { 1, 1, 1 } },
+		90.0f,
+	};
+	checkRampCase("@ r 1 stone shape=half-ramp dir=north\n", &c);
+}
+
+static void test_half_ramp_dir_south_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_SOUTH,
+		{ { 0, 1, 0 }, { 1, 1, 0 }, { 1, 1.5f, 1 }, { 0, 1.5f, 1 } },
+		{ { 0, 1, 1 }, { 1, 1, 1 }, { 1, 1.5f, 1 }, { 0, 1.5f, 1 } },
+		0.0f,
+		{ { 0, 1, 1 }, { 0, 1.5f, 1 }, { 0, 1, 0 }, { 0, 1, 0 } },
+		270.0f,
+		{ { 1, 1, 1 }, { 1, 1.5f, 1 }, { 1, 1, 0 }, { 1, 1, 0 } },
+		90.0f,
+	};
+	checkRampCase("@ r 1 stone shape=half-ramp dir=south\n", &c);
+}
+
+static void test_half_ramp_dir_west_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_WEST,
+		{ { 0, 1.5f, 0 }, { 0, 1.5f, 1 }, { 1, 1, 1 }, { 1, 1, 0 } },
+		{ { 0, 1, 1 }, { 0, 1, 0 }, { 0, 1.5f, 0 }, { 0, 1.5f, 1 } },
+		270.0f,
+		{ { 0, 1, 0 }, { 0, 1.5f, 0 }, { 1, 1, 0 }, { 1, 1, 0 } },
+		180.0f,
+		{ { 0, 1, 1 }, { 0, 1.5f, 1 }, { 1, 1, 1 }, { 1, 1, 1 } },
+		0.0f,
+	};
+	checkRampCase("@ r 1 stone shape=half-ramp dir=west\n", &c);
+}
+
+static void test_half_ramp_dir_east_exact_corners(void)
+{
+	static const RampCase c = {
+		VOXMAP_DIR_EAST,
+		{ { 1, 1.5f, 0 }, { 1, 1.5f, 1 }, { 0, 1, 1 }, { 0, 1, 0 } },
+		{ { 1, 1, 0 }, { 1, 1, 1 }, { 1, 1.5f, 1 }, { 1, 1.5f, 0 } },
+		90.0f,
+		{ { 1, 1, 0 }, { 1, 1.5f, 0 }, { 0, 1, 0 }, { 0, 1, 0 } },
+		180.0f,
+		{ { 1, 1, 1 }, { 1, 1.5f, 1 }, { 0, 1, 1 }, { 0, 1, 1 } },
+		0.0f,
+	};
+	checkRampCase("@ r 1 stone shape=half-ramp dir=east\n", &c);
+}
+
+/* The degenerate quad's UV: the triangle's first three corners carry the side
+ * UV quad and uv[3] mirrors uv[2] (the degenerate corner), so the zero-area
+ * half has no UV area. The rendered triangle samples that side slot. */
+static void test_triangle_uv_convention(void)
+{
+	Voxmap *map = shapeSlice1("@ R 1 stone shape=ramp dir=north\n", "R");
+	DrawList list;
+	Camera3D cam;
+	const float tri[4][3] = {
+		{ 0, 1, 0 }, { 0, 2, 0 }, { 0, 1, 1 }, { 0, 1, 1 },
+	};
+	bool found = false;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	shapeSetYaw(&cam, 270.0f);	/* west triangle is camera-facing */
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *it = drawListItem(&list, i);
+
+		if (!quadMatches(it, tri))
+			continue;
+		found = true;
+		{
+			const float side[4][2] = ATLAS_UV_SIDE;
+
+			TEST_ASSERT_EQUAL_MEMORY(side, it->uv, 3 * 2 * sizeof(float));
+		}
+		TEST_ASSERT_EQUAL_MEMORY(&it->uv[2], &it->uv[3],
+					 2 * sizeof(float));
+	}
+	TEST_ASSERT_TRUE(found);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* Conservative culling: a FULL voxel above a ramp culls its slope; a FULL side
+ * neighbour culls a HALF's side. */
+static void test_shape_culling_full_neighbour(void)
+{
+	/* Ramp at level 1, FULL at level 2 -> slope culled. */
+	{
+		const char *text =
+			"@ R 1 stone shape=ramp dir=north\n"
+			"@ F 1 stone\n"
+			".\n"
+			"---\n"
+			"R\n"
+			"---\n"
+			"F\n";
+		Voxmap *map = parseText(text);
+		DrawList list;
+		Camera3D cam;
+		const float top[4][2] = ATLAS_UV_TOP;
+		int tops = 0;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 32);
+		shapeSetYaw(&cam, 180.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (itemHasUV(drawListItem(&list, i), top))
+				tops++;
+		/* The FULL voxel's top at y 3 uses the TOP slot; the ramp's
+		 * slope (also TOP) must be gone, so exactly one. */
+		TEST_ASSERT_EQUAL_INT(1, tops);
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+	/* HALF at (0,1,0) beside FULL at (1,1,0): the half's +X side is culled
+	 * at yaw 90, the full's is emitted. */
+	{
+		const char *text =
+			"@ H 1 stone shape=half\n"
+			"@ F 1 stone\n"
+			"..\n"
+			"---\n"
+			"HF\n";
+		Voxmap *map = parseText(text);
+		DrawList list;
+		Camera3D cam;
+		const float side[4][2] = ATLAS_UV_SIDE;
+		int sideX0 = 0;
+		int sides = 0;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 32);
+		shapeSetYaw(&cam, 90.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		for (i = 0; i < drawListCount(&list); i++) {
+			const DrawItem *it = drawListItem(&list, i);
+
+			if (!itemHasUV(it, side))
+				continue;
+			sides++;
+			if (it->worldQuad[0][0] == 0.0f &&
+			    it->worldQuad[0][2] == 0.0f)
+				sideX0++;
+		}
+		TEST_ASSERT_EQUAL_INT(1, sides);
+		TEST_ASSERT_EQUAL_INT(0, sideX0);
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+}
+
+/* Run merging only merges consecutive FULL voxels: a HALF between two FULL
+ * voxels breaks the +Z run into two 1-high runs plus the half's own side. */
+static void test_shape_run_merge_breaks_on_shape(void)
+{
+	const char *text =
+		"@ H 1 stone shape=half\n"
+		"@ F 1 stone\n"
+		"F\n"
+		"---\n"
+		"H\n"
+		"---\n"
+		"F\n";
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	const float side[4][2] = ATLAS_UV_SIDE;
+	int sides = 0;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 32);
+	shapeSetYaw(&cam, 0.0f);
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *it = drawListItem(&list, i);
+
+		if (!itemHasUV(it, side))
+			continue;
+		sides++;
+		/* Never a merged run taller than one voxel (the shape breaks
+		 * it): every emitted side spans <= 1.0. */
+		TEST_ASSERT_TRUE(it->worldQuad[2][1] - it->worldQuad[0][1] <=
+				 1.0f + EPS);
+	}
+	TEST_ASSERT_EQUAL_INT(3, sides);	/* [0,1), [1,1.5), [2,3) */
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* Light sampling: a slope and a half top sample the cell ABOVE the voxel
+ * (level y + 1). Seed that cell and check the exact flat tint. */
+static void test_shape_light_samples_cell_above(void)
+{
+	Voxmap *map = shapeSlice1("@ R 1 stone shape=ramp dir=north\n", "R");
+	LightGrid *g = lightGridCreate(1, 1, 3);
+	DrawList list;
+	Camera3D cam;
+	uint8_t f[3];
+	const DrawItem *slope = NULL;
+	uint32_t expect;
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 2.5f, 0.5f, 200.0f, 200.0f, 200.0f, 0.0f);
+	lightGridPropagate(g, map);
+	lightGridFactorAt(g, 0, 2, 0, f);
+
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(240, 240, 240, 240));
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *it = drawListItem(&list, i);
+
+		if (itemHasUV(it, topUV))
+			slope = it;
+	}
+	TEST_ASSERT_NOT_NULL(slope);
+	expect = DRAW_TINT(
+		(uint8_t)((240.0f * (float)f[0] / 255.0f) + 0.5f),
+		(uint8_t)((240.0f * (float)f[1] / 255.0f) + 0.5f),
+		(uint8_t)((240.0f * (float)f[2] / 255.0f) + 0.5f), 240);
+	TEST_ASSERT_EQUAL_INT((int)expect, (int)slope->tint);
+
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* ASCII legend shape=/dir= attributes: valid values, the two documented
+ * defaults (ramp without dir -> north; dir on a non-ramp -> ignored). */
+static void test_legend_shape_attributes_ascii(void)
+{
+	Voxmap *map;
+
+	map = parseText("@ g 1 grass shape=ramp dir=south\ng\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_RAMP, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_SOUTH, voxmapShapeDirAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	/* ramp without dir -> north (diagnostic). */
+	map = parseText("@ g 1 grass shape=ramp\ng\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_NORTH, voxmapShapeDirAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	/* dir on a non-ramp -> ignored (diagnostic); shape still applies. */
+	map = parseText("@ g 1 grass shape=half dir=east\ng\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_HALF, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	/* Attributes are order-independent and may precede the material. */
+	map = parseText("@ g 1 shape=ramp dir=west grass\ng\n");
+	TEST_ASSERT_NULL(map);	/* material must come third: malformed */
+	destroyVoxmap(map);
+}
+
+/* Legend validation: an unknown shape/dir VALUE skips the entry (load
+ * continues and the char keeps its built-in meaning), while a non-attribute
+ * token is a malformed line (load fails). */
+static void test_legend_shape_malformed(void)
+{
+	Voxmap *map;
+
+	/* Unknown shape value on '1' (a built-in digit): entry skipped, the
+	 * digit still parses as height 1 with the default material. */
+	map = parseText("@ 1 1 grass shape=banana\n1\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	map = parseText("@ 1 1 grass shape=ramp dir=sideways\n1\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	/* A non-attribute token is a malformed legend line. */
+	TEST_ASSERT_NULL(parseText("@ g 1 grass bogus\ng\n"));
+	TEST_ASSERT_NULL(parseText("@ g 1 grass shape=half extra\ng\n"));
+}
+
+/* voxmapBuildRawShaped copies the shape bytes; a NULL shape grid is all FULL. */
+static void test_build_raw_shaped(void)
+{
+	uint8_t solid[1] = { 1 };
+	int16_t mats[1] = { 3 };
+	uint8_t shapes[1] = { VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF_RAMP,
+						VOXMAP_DIR_EAST) };
+	Voxmap *map = voxmapBuildRawShaped(1, 1, 1, solid, mats, shapes, NULL, 0);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_HALF_RAMP, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_EAST, voxmapShapeDirAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+
+	map = voxmapBuildRawShaped(1, 1, 1, solid, mats, NULL, NULL, 0);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 0));
+	TEST_ASSERT_TRUE(voxmapFullAt(map, 0, 0, 0));
+	destroyVoxmap(map);
+}
+
+/* Extra culling arms: shape bottoms culled by a FULL below / absent at level 0;
+ * a ramp back face and a triangle culled by a FULL neighbour; a half top
+ * culled by a FULL above. */
+static void test_shape_culling_extra(void)
+{
+	const float spare[4][2] = ATLAS_UV_SPARE;
+	const float topUV[4][2] = ATLAS_UV_TOP;
+
+	/* HALF at level 0: no bottom (world floor). */
+	{
+		Voxmap *map = parseText(
+			"@ H 1 stone shape=half\nH\n---\n.\n");
+		DrawList list;
+		Camera3D cam;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 16);
+		shapeSetYaw(&cam, 0.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		{
+			size_t i;
+
+			for (i = 0; i < drawListCount(&list); i++)
+				TEST_ASSERT_FALSE(
+					itemHasUV(drawListItem(&list, i), spare));
+		}
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+	/* HALF at level 1 over FULL: bottom culled. */
+	{
+		Voxmap *map = parseText(
+			"@ H 1 stone shape=half\n@ F 1 stone\nF\n---\nH\n");
+		DrawList list;
+		Camera3D cam;
+		int bottoms = 0;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 16);
+		shapeSetYaw(&cam, 0.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (itemHasUV(drawListItem(&list, i), spare))
+				bottoms++;
+		TEST_ASSERT_EQUAL_INT(0, bottoms);
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+	/* RAMP back face culled by a FULL neighbour in the rise direction: a
+	 * ramp at (0,1,1) dir N, with a FULL voxel at (0,1,0) (north). */
+	{
+		const float back[4][3] = {
+			{ 1, 1, 1 }, { 0, 1, 1 }, { 0, 2, 1 }, { 1, 2, 1 },
+		};
+		Voxmap *withFull = parseText(
+			"@ R 1 stone shape=ramp dir=north\n@ F 1 stone\n..\n..\n---\nF.\nR.\n");
+		Voxmap *without = parseText(
+			"@ R 1 stone shape=ramp dir=north\n..\n..\n---\n..\nR.\n");
+		DrawItem out;
+
+		TEST_ASSERT_NOT_NULL(withFull);
+		TEST_ASSERT_NOT_NULL(without);
+		/* Without a neighbour the back face (dir N at z1) is emitted. */
+		TEST_ASSERT_TRUE(emitFindQuad(without, 180.0f, back, &out));
+		/* With a FULL voxel directly north it is culled. */
+		TEST_ASSERT_FALSE(emitFindQuad(withFull, 180.0f, back, &out));
+		destroyVoxmap(withFull);
+		destroyVoxmap(without);
+	}
+	/* A ramp's east triangle culled by a FULL east neighbour: ramp at
+	 * (0,1,0) dir N, FULL at (1,1,0). */
+	{
+		const float eastTri[4][3] = {
+			{ 1, 1, 0 }, { 1, 2, 0 }, { 1, 1, 1 }, { 1, 1, 1 },
+		};
+		Voxmap *withFull = parseText(
+			"@ R 1 stone shape=ramp dir=north\n@ F 1 stone\n..\n---\nRF\n");
+		Voxmap *without = parseText(
+			"@ R 1 stone shape=ramp dir=north\n..\n---\nR.\n");
+		DrawItem out;
+
+		TEST_ASSERT_NOT_NULL(withFull);
+		TEST_ASSERT_NOT_NULL(without);
+		TEST_ASSERT_TRUE(emitFindQuad(without, 90.0f, eastTri, &out));
+		TEST_ASSERT_FALSE(emitFindQuad(withFull, 90.0f, eastTri, &out));
+		destroyVoxmap(withFull);
+		destroyVoxmap(without);
+	}
+	/* HALF top culled by a FULL above. */
+	{
+		const float halfTop[4][3] = {
+			{ 0, 1.5f, 0 }, { 1, 1.5f, 0 }, { 1, 1.5f, 1 },
+			{ 0, 1.5f, 1 },
+		};
+		Voxmap *map = parseText(
+			"@ H 1 stone shape=half\n@ F 1 stone\n.\n---\nH\n---\nF\n");
+		DrawItem out;
+
+		TEST_ASSERT_NOT_NULL(map);
+		TEST_ASSERT_FALSE(emitFindQuad(map, 0.0f, halfTop, &out));
+		destroyVoxmap(map);
+	}
+	(void)topUV;
+}
+
+/* Query guard edges: each out-of-range axis, NULL, and a non-ramp dir. */
+static void test_shape_query_guard_edges(void)
+{
+	Voxmap *map = parseText(
+		"@ H 1 stone shape=half\n@ R 1 stone shape=ramp dir=south\nH\nR\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	/* (0,0,0) is a HALF: dir query returns -1 (non-ramp). */
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_DIR_SOUTH, voxmapShapeDirAt(map, 0, 0, 1));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, -1, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, -1, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, -1));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 9, 0, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 9, 0));
+	TEST_ASSERT_EQUAL_INT(VOXMAP_SHAPE_FULL, voxmapShapeAt(map, 0, 0, 9));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, -1, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, -1, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, -1));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 9, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 9, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapShapeDirAt(map, 0, 0, 9));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, -1, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, -1, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 0, -1));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 9, 0, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 9, 0));
+	TEST_ASSERT_FALSE(voxmapFullAt(map, 0, 0, 9));
+	destroyVoxmap(map);
+}
+
+/* A ramp's bottom is culled by a FULL below and absent at level 0. */
+static void test_ramp_bottom_culling(void)
+{
+	const float spare[4][2] = ATLAS_UV_SPARE;
+	/* Ramp at level 1 over a FULL at level 0: no bottom. */
+	{
+		Voxmap *map = parseText(
+			"@ R 1 stone shape=ramp dir=north\n@ F 1 stone\nF\n---\nR\n");
+		DrawList list;
+		Camera3D cam;
+		int bottoms = 0;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 16);
+		shapeSetYaw(&cam, 0.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (itemHasUV(drawListItem(&list, i), spare))
+				bottoms++;
+		TEST_ASSERT_EQUAL_INT(0, bottoms);
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+	/* Ramp at level 0: no bottom (world floor). */
+	{
+		Voxmap *map = parseText(
+			"@ R 1 stone shape=ramp dir=north\nR\n---\n.\n");
+		DrawList list;
+		Camera3D cam;
+		int bottoms = 0;
+		size_t i;
+
+		TEST_ASSERT_NOT_NULL(map);
+		initDrawList(&list, 16);
+		shapeSetYaw(&cam, 0.0f);
+		voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+				DRAW_TINT(255, 255, 255, 255));
+		for (i = 0; i < drawListCount(&list); i++)
+			if (itemHasUV(drawListItem(&list, i), spare))
+				bottoms++;
+		TEST_ASSERT_EQUAL_INT(0, bottoms);
+		destroyDrawList(&list);
+		destroyVoxmap(map);
+	}
+}
+
+/* A ramp triangle in the light-debug view uses the white debug UV and the
+ * opaque alpha mode (the 1496/1497 arms). */
+static void test_triangle_debug_view(void)
+{
+	Voxmap *map = shapeSlice1("@ R 1 stone shape=ramp dir=north\n", "R");
+	const float westTri[4][3] = {
+		{ 0, 1, 0 }, { 0, 2, 0 }, { 0, 1, 1 }, { 0, 1, 1 },
+	};
+	const float debugUV[4][2] = {
+		{ 0.25f, 0.25f }, { 0.75f, 0.25f },
+		{ 0.75f, 0.75f }, { 0.25f, 0.75f },
+	};
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, true,
+				   debugUV };
+	DrawList list;
+	Camera3D cam;
+	bool found = false;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 32);
+	shapeSetYaw(&cam, 270.0f);
+	voxmapEmitFacesOpt(map, NULL, NULL, &list, &cam, &opts);
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *it = drawListItem(&list, i);
+
+		if (!quadMatches(it, westTri))
+			continue;
+		found = true;
+		TEST_ASSERT_TRUE(itemHasUV(it, debugUV));
+		TEST_ASSERT_EQUAL_INT(ALPHA_OPAQUE, it->alphaMode);
+	}
+	TEST_ASSERT_TRUE(found);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -2479,4 +3300,28 @@ void run_test_voxmap(void)
 	RUN_TEST(test_directive_leading_whitespace);
 	RUN_TEST(test_legend_many_tokens);
 	RUN_TEST(test_debug_bottom_face);
+	RUN_TEST(test_shape_query_defaults_and_bounds);
+	RUN_TEST(test_heightmap_shape_applies_to_column);
+	RUN_TEST(test_height_zero_shape_ignored);
+	RUN_TEST(test_slice_shape_per_voxel);
+	RUN_TEST(test_half_exact_corners);
+	RUN_TEST(test_ramp_dir_north_exact_corners);
+	RUN_TEST(test_ramp_dir_south_exact_corners);
+	RUN_TEST(test_ramp_dir_west_exact_corners);
+	RUN_TEST(test_ramp_dir_east_exact_corners);
+	RUN_TEST(test_half_ramp_dir_north_exact_corners);
+	RUN_TEST(test_half_ramp_dir_south_exact_corners);
+	RUN_TEST(test_half_ramp_dir_west_exact_corners);
+	RUN_TEST(test_half_ramp_dir_east_exact_corners);
+	RUN_TEST(test_triangle_uv_convention);
+	RUN_TEST(test_shape_culling_full_neighbour);
+	RUN_TEST(test_shape_run_merge_breaks_on_shape);
+	RUN_TEST(test_shape_light_samples_cell_above);
+	RUN_TEST(test_legend_shape_attributes_ascii);
+	RUN_TEST(test_legend_shape_malformed);
+	RUN_TEST(test_build_raw_shaped);
+	RUN_TEST(test_shape_culling_extra);
+	RUN_TEST(test_shape_query_guard_edges);
+	RUN_TEST(test_ramp_bottom_culling);
+	RUN_TEST(test_triangle_debug_view);
 }
