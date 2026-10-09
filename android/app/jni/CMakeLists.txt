@@ -26,6 +26,7 @@ set(ISOMATA_SRC
 	../../../src/input/input_sdl.c
 	../../../src/audio/audio.c
 	../../../src/render/gpu_backend.c
+	../../../src/render/map_loader.c
 	../../../src/ui/ui_font.c
 	../../../src/ui/ui_gpu.c
 	../../../src/scenes/menu_scene.c
