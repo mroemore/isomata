@@ -1,20 +1,20 @@
 /*
- * Voxmap (see voxmap.h for the format and query contract). Pure: file I/O and
- * a small malloc, no SDL. Diagnostics go to stderr (a pure module cannot use
- * SDL_Log).
+ * Voxmap (see voxmap.h for the model, format and query contract). Pure: file
+ * I/O and a small malloc, no SDL. Diagnostics go to stderr (a pure module
+ * cannot use SDL_Log).
  *
- * Two entry points share one parser: parseVoxmapText() parses an in-memory
- * buffer (the SDL tier uses it for APK assets, which are not filesystem
- * files), and loadVoxmap() is the desktop/test convenience that reads a file
- * and parses it. The parser never assumes NUL termination — every scan is
- * bounded by the caller's length — so a slice of a larger buffer is safe.
+ * Storage is an occupancy + per-voxel material grid: solid[] is one byte per
+ * voxel, materials[] one int16 per voxel (index order x fastest, then y, then
+ * z: index = ((z * levels) + y) * width + x, matching lightgrid.c). A parallel
+ * per-column ground[] byte marks the single-section height-0 degenerate (a
+ * solid flat ground tile with no voxel). Single-section files assign the
+ * column's material to every voxel; slice files assign per voxel.
  *
- * Parsing is three passes over the whole buffer: a legend pass collects the
- * `@ <char> <height> <material>` lines into a char -> (height, material)
- * table, a validation pass pins width/depth and rejects unknown cells, and a
- * fill pass writes the cell grid and its parallel material ids. Rows are split
- * on '\n'; a trailing '\r' and trailing spaces/tabs are stripped, and blank
- * and legend lines are skipped, so CRLF files and trailing newlines are fine.
+ * Parsing: a legend pass collects `@` lines, a light pass collects `$` lines
+ * and a separator scan flags multi-section files. A file with no `---`
+ * separator is a heightmap (the original format); one with a separator is a
+ * stack of slices. Both never assume NUL termination — every scan is bounded
+ * by the caller's length.
  */
 
 #include "render/voxmap.h"
@@ -38,11 +38,20 @@
 struct Voxmap {
 	int width;
 	int depth;
-	int8_t *cells;		/* width * depth; -1 = void, 0..9 = height */
-	int16_t *materials;	/* width * depth; material id, -1 = void */
+	int levels;		/* y dimension; >= 1 */
+	uint8_t *solid;		/* width * depth * levels; 1 = solid voxel */
+	int16_t *materials;	/* width * depth * levels; -1 = air */
+	uint8_t *ground;	/* width * depth; 1 = height-0 ground tile */
 	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
 	int lightCount;
 };
+
+/* x fastest, then y, then z. */
+static size_t voxelIndex(const Voxmap *map, int x, int y, int z)
+{
+	return ((size_t)z * (size_t)map->levels + (size_t)y) *
+	       (size_t)map->width + (size_t)x;
+}
 
 /* Read the whole file into a NUL-terminated malloc buffer, or NULL. */
 static char *readWholeFile(const char *path, size_t *outSize)
@@ -90,6 +99,15 @@ static size_t trimmedLength(const char *data, size_t start, size_t end)
 	return end - start;
 }
 
+/* Slice-mode row length: strip only a trailing '\r'. A trailing space is a
+ * real air cell in slice mode, so it must not be trimmed. */
+static size_t sliceRowLength(const char *data, size_t start, size_t end)
+{
+	while (end > start && data[end - 1] == '\r')
+		end--;
+	return end - start;
+}
+
 /* True when the line's first non-space/tab character is '@'. */
 static bool isLegendLine(const char *data, size_t start, size_t len)
 {
@@ -117,6 +135,23 @@ static bool isLightLine(const char *data, size_t start, size_t len)
 static bool isDirectiveLine(const char *data, size_t start, size_t len)
 {
 	return isLegendLine(data, start, len) || isLightLine(data, start, len);
+}
+
+/* True when the line's trimmed content is exactly "---" (a section
+ * separator). Surrounding spaces/tabs/\r are ignored. */
+static bool isSeparatorLine(const char *data, size_t start, size_t len)
+{
+	size_t i = start;
+	size_t end = start + len;
+
+	while (i < end && (data[i] == ' ' || data[i] == '\t' ||
+			   data[i] == '\r'))
+		i++;
+	while (end > i && (data[end - 1] == ' ' || data[end - 1] == '\t' ||
+			   data[end - 1] == '\r'))
+		end--;
+	return end - i == 3 && data[i] == '-' && data[i + 1] == '-' &&
+	       data[i + 2] == '-';
 }
 
 /* Split a bounded line copy on spaces/tabs. Returns the token count. */
@@ -377,31 +412,370 @@ static void parseLightLine(VoxmapLight *lights, int *count, const char *data,
 	addLight(lights, count, &l);
 }
 
-/* Parse `length` bytes of heightmap text (see voxmap.h). */
-static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
-			   const MaterialTable *materials)
+/* Parsed state shared by the heightmap and slice fillers. */
+typedef struct ParseCtx {
+	const char *label;
+	const char *text;
+	size_t length;
+	int8_t legendH[LEGEND_CHARS];
+	int16_t legendM[LEGEND_CHARS];
+	int16_t defaultMat;
+	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
+	int lightCount;
+} ParseCtx;
+
+/* Allocate a zeroed map of the given dimensions with every voxel air
+ * (material -1). NULL on an over-large volume or OOM. Precondition (both
+ * callers validate it): width, depth, levels are all > 0 and width/depth are
+ * <= VOXMAP_MAX_DIM. */
+static Voxmap *allocVoxmap(int width, int depth, int levels)
+{
+	Voxmap *map;
+	size_t n;
+
+	if (levels > VOXMAP_MAX_DIM)
+		return NULL;
+	if ((size_t)width * (size_t)depth * (size_t)levels > VOXMAP_MAX_CELLS)
+		return NULL;
+	n = (size_t)width * (size_t)depth * (size_t)levels;
+	map = calloc(1, sizeof(*map));
+	if (map == NULL)
+		return NULL;
+	map->solid = malloc(n);
+	map->materials = malloc(n * sizeof(*map->materials));
+	map->ground = malloc((size_t)width * (size_t)depth);
+	if (map->solid == NULL || map->materials == NULL || map->ground == NULL) {
+		free(map->solid);
+		free(map->materials);
+		free(map->ground);
+		free(map);
+		return NULL;
+	}
+	memset(map->solid, 0, n);
+	memset(map->materials, 0xFF, n * sizeof(*map->materials));	/* -1 */
+	memset(map->ground, 0, (size_t)width * (size_t)depth);
+	map->width = width;
+	map->depth = depth;
+	map->levels = levels;
+	return map;
+}
+
+/* Copy the parsed lights onto the map. */
+static void attachLights(Voxmap *map, const ParseCtx *ctx)
+{
+	if (ctx->lightCount > 0)
+		memcpy(map->lights, ctx->lights,
+		       (size_t)ctx->lightCount * sizeof(*ctx->lights));
+	map->lightCount = ctx->lightCount;
+}
+
+/* Heightmap (single-section) fill. A height-h column is solid voxels 0..h-1;
+ * a height-0 cell sets the ground tile flag (no voxel) and still carries its
+ * material at level 0 for the top-face query. */
+static Voxmap *fillHeightmap(ParseCtx *ctx)
 {
 	Voxmap *map;
 	int width = -1;
 	int depth = 0;
-	size_t pos = 0;
-	int8_t legendH[LEGEND_CHARS];
-	int16_t legendM[LEGEND_CHARS];
-	int16_t defaultMat = 0;
-	VoxmapLight lights[VOXMAP_MAX_LIGHTS];
-	int lightCount = 0;
+	int maxH = 0;
+	size_t pos;
+	int row;
+	int levels;
+
+	/* Pass 1: validate rows, pin width, count depth, find max height. */
+	pos = 0;
+	while (pos < ctx->length) {
+		size_t start = pos;
+		size_t end;
+		size_t rowLen;
+		size_t i;
+
+		while (pos < ctx->length && ctx->text[pos] != '\n')
+			pos++;
+		end = pos;
+		if (pos < ctx->length)
+			pos++;
+		rowLen = trimmedLength(ctx->text, start, end);
+		if (rowLen == 0 ||
+		    isDirectiveLine(ctx->text, start, rowLen))
+			continue;
+		if (width < 0) {
+			if (rowLen > VOXMAP_MAX_DIM) {
+				fprintf(stderr,
+					"voxmap: '%s' row too wide (%zu > %d)\n",
+					ctx->label, rowLen, VOXMAP_MAX_DIM);
+				return NULL;
+			}
+			width = (int)rowLen;
+		} else if ((int)rowLen != width) {
+			fprintf(stderr,
+				"voxmap: '%s' ragged row %d (%zu chars, expected %d)\n",
+				ctx->label, depth + 1, rowLen, width);
+			return NULL;
+		}
+		for (i = start; i < start + rowLen; i++) {
+			unsigned char c = (unsigned char)ctx->text[i];
+			int8_t h;
+
+			if (c >= LEGEND_CHARS ||
+			    (h = ctx->legendH[c]) == LEGEND_INVALID) {
+				fprintf(stderr,
+					"voxmap: '%s' invalid cell '%c' at row %d\n",
+					ctx->label,
+					(c >= 32 && c < 127) ? c : '?',
+					depth + 1);
+				return NULL;
+			}
+			if (h > maxH)
+				maxH = h;
+		}
+		depth++;
+		if (depth > VOXMAP_MAX_DIM) {
+			fprintf(stderr, "voxmap: '%s' too many rows (> %d)\n",
+				ctx->label, VOXMAP_MAX_DIM);
+			return NULL;
+		}
+	}
+	if (width <= 0 || depth <= 0) {
+		fprintf(stderr, "voxmap: '%s' is empty\n", ctx->label);
+		return NULL;
+	}
+	levels = maxH > 0 ? maxH : 1;
+	map = allocVoxmap(width, depth, levels);
+	if (map == NULL) {
+		fprintf(stderr,
+			"voxmap: '%s' map too large (%dx%dx%d cells)\n",
+			ctx->label, width, depth, levels);
+		return NULL;
+	}
+
+	/* Pass 2: fill the occupancy grid and its per-voxel materials. */
+	pos = 0;
+	row = 0;
+	while (pos < ctx->length && row < depth) {
+		size_t start = pos;
+		size_t end;
+		size_t rowLen;
+		int col;
+
+		while (pos < ctx->length && ctx->text[pos] != '\n')
+			pos++;
+		end = pos;
+		if (pos < ctx->length)
+			pos++;
+		rowLen = trimmedLength(ctx->text, start, end);
+		if (rowLen == 0 ||
+		    isDirectiveLine(ctx->text, start, rowLen))
+			continue;
+		for (col = 0; col < width; col++) {
+			unsigned char c =
+				(unsigned char)ctx->text[start + (size_t)col];
+			int8_t h = ctx->legendH[c];
+			int16_t id = ctx->legendM[c];
+			int y;
+
+			if (h < 0)
+				continue;	/* void */
+			if (h == 0) {
+				map->ground[(size_t)row * width + col] = 1;
+				map->materials[voxelIndex(map, col, 0, row)] = id;
+				continue;
+			}
+			for (y = 0; y < h; y++) {
+				size_t idx = voxelIndex(map, col, y, row);
+
+				map->solid[idx] = 1;
+				map->materials[idx] = id;
+			}
+		}
+		row++;
+	}
+	return map;
+}
+
+/* Slice (multi-section) fill. Section s is level y = s; a cell char is solid
+ * with its legend material unless it is air ('.', a void legend char, or a
+ * space). All sections must share one width/depth. */
+static Voxmap *fillSlices(ParseCtx *ctx)
+{
+	Voxmap *map;
+	int width = -1;
+	int depth = -1;
+	int levels = 0;
+	int curDepth = 0;
+	size_t pos;
+	int section;
+
+	/* Pass 1: validate sections, pin width/depth/levels. */
+	pos = 0;
+	while (pos < ctx->length) {
+		size_t start = pos;
+		size_t end;
+		size_t rowLen;
+		size_t i;
+
+		while (pos < ctx->length && ctx->text[pos] != '\n')
+			pos++;
+		end = pos;
+		if (pos < ctx->length)
+			pos++;
+		rowLen = sliceRowLength(ctx->text, start, end);
+		if (rowLen == 0)
+			continue;	/* empty line */
+		if (isDirectiveLine(ctx->text, start, rowLen))
+			continue;
+		if (isSeparatorLine(ctx->text, start, end - start)) {
+			if (curDepth == 0) {
+				fprintf(stderr,
+					"voxmap: '%s' empty map section (level %d)\n",
+					ctx->label, levels);
+				return NULL;
+			}
+			if (depth < 0)
+				depth = curDepth;
+			else if (curDepth != depth) {
+				fprintf(stderr,
+					"voxmap: '%s' sections differ in depth (%d vs %d)\n",
+					ctx->label, curDepth, depth);
+				return NULL;
+			}
+			levels++;
+			curDepth = 0;
+			continue;
+		}
+		if (width < 0) {
+			if (rowLen > VOXMAP_MAX_DIM) {
+				fprintf(stderr,
+					"voxmap: '%s' section row too wide (%zu > %d)\n",
+					ctx->label, rowLen, VOXMAP_MAX_DIM);
+				return NULL;
+			}
+			width = (int)rowLen;
+		} else if ((int)rowLen != width) {
+			fprintf(stderr,
+				"voxmap: '%s' ragged section row %d (%zu chars, expected %d)\n",
+				ctx->label, curDepth + 1, rowLen, width);
+			return NULL;
+		}
+		for (i = start; i < start + rowLen; i++) {
+			unsigned char c = (unsigned char)ctx->text[i];
+
+			if (c == ' ')
+				continue;	/* air */
+			if (c >= LEGEND_CHARS ||
+			    ctx->legendH[c] == LEGEND_INVALID) {
+				fprintf(stderr,
+					"voxmap: '%s' invalid slice cell '%c' at level %d row %d\n",
+					ctx->label,
+					(c >= 32 && c < 127) ? c : '?',
+					levels, curDepth + 1);
+				return NULL;
+			}
+		}
+		curDepth++;
+		if (curDepth > VOXMAP_MAX_DIM) {
+			fprintf(stderr,
+				"voxmap: '%s' section too deep (> %d)\n",
+				ctx->label, VOXMAP_MAX_DIM);
+			return NULL;
+		}
+	}
+	if (curDepth == 0) {
+		fprintf(stderr,
+			"voxmap: '%s' empty trailing map section\n", ctx->label);
+		return NULL;
+	}
+	/* depth is set by the first separator (fillSlices only runs when one
+	 * exists), so the last section only needs the equality check. */
+	if (curDepth != depth) {
+		fprintf(stderr,
+			"voxmap: '%s' sections differ in depth (%d vs %d)\n",
+			ctx->label, curDepth, depth);
+		return NULL;
+	}
+	levels++;
+	map = allocVoxmap(width, depth, levels);
+	if (map == NULL) {
+		fprintf(stderr,
+			"voxmap: '%s' map too large (%dx%dx%d cells)\n",
+			ctx->label, width, depth, levels);
+		return NULL;
+	}
+
+	/* Pass 2: fill per level. */
+	pos = 0;
+	section = 0;
+	{
+		int row = 0;
+
+		while (pos < ctx->length && section < levels) {
+			size_t start = pos;
+			size_t end;
+			size_t rowLen;
+			int col;
+
+			while (pos < ctx->length && ctx->text[pos] != '\n')
+				pos++;
+			end = pos;
+			if (pos < ctx->length)
+				pos++;
+			rowLen = sliceRowLength(ctx->text, start, end);
+			if (rowLen == 0)
+				continue;
+			if (isDirectiveLine(ctx->text, start, rowLen))
+				continue;
+			if (isSeparatorLine(ctx->text, start, end - start)) {
+				section++;
+				row = 0;
+				continue;
+			}
+			for (col = 0; col < width; col++) {
+				unsigned char c =
+					(unsigned char)ctx->text[start +
+								(size_t)col];
+				size_t idx = voxelIndex(map, col, section, row);
+
+				if (c == ' ' || ctx->legendH[c] < 0) {
+					map->solid[idx] = 0;
+					map->materials[idx] = -1;
+				} else {
+					map->solid[idx] = 1;
+					map->materials[idx] =
+						ctx->legendM[c];
+				}
+			}
+			row++;
+		}
+	}
+	return map;
+}
+
+/* Parse `length` bytes of voxel-map text (see voxmap.h). */
+static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
+			   const MaterialTable *materials)
+{
+	ParseCtx ctx;
+	Voxmap *map;
+	size_t pos;
+	bool hasSeparator = false;
 
 	if (text == NULL)
 		return NULL;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.label = label;
+	ctx.text = text;
+	ctx.length = length;
+	ctx.defaultMat = 0;
 	if (materials != NULL) {
 		int d = materialIdByName(materials, "default");
 
 		if (d >= 0)
-			defaultMat = (int16_t)d;
+			ctx.defaultMat = (int16_t)d;
 	}
-	legendDefaults(legendH, legendM, defaultMat);
+	legendDefaults(ctx.legendH, ctx.legendM, ctx.defaultMat);
 
-	/* Pass 0: collect legend lines. */
+	/* Pass 0: collect legend + light lines and detect any separator. */
+	pos = 0;
 	while (pos < length) {
 		size_t start = pos;
 		size_t end;
@@ -416,120 +790,22 @@ static Voxmap *parseVoxmap(const char *text, size_t length, const char *label,
 		if (rowLen == 0)
 			continue;
 		if (isLegendLine(text, start, rowLen)) {
-			if (!parseLegend(text, start, rowLen, label, legendH,
-					 legendM, materials, defaultMat))
+			if (!parseLegend(text, start, rowLen, label,
+					 ctx.legendH, ctx.legendM, materials,
+					 ctx.defaultMat))
 				return NULL;
 		} else if (isLightLine(text, start, rowLen)) {
-			parseLightLine(lights, &lightCount, text, start, rowLen,
-				       label);
+			parseLightLine(ctx.lights, &ctx.lightCount, text, start,
+				       rowLen, label);
+		} else if (isSeparatorLine(text, start, end - start)) {
+			hasSeparator = true;
 		}
 	}
 
-	/* Pass 1: validate map rows, pin width, count depth. */
-	pos = 0;
-	while (pos < length) {
-		size_t start = pos;
-		size_t end;
-		size_t rowLen;
-		size_t i;
-
-		while (pos < length && text[pos] != '\n')
-			pos++;
-		end = pos;
-		if (pos < length)
-			pos++;			/* skip '\n' */
-		rowLen = trimmedLength(text, start, end);
-		if (rowLen == 0 || isDirectiveLine(text, start, rowLen))
-			continue;
-		if (width < 0) {
-			if (rowLen > VOXMAP_MAX_DIM) {
-				fprintf(stderr,
-					"voxmap: '%s' row too wide (%zu > %d)\n",
-					label, rowLen, VOXMAP_MAX_DIM);
-				return NULL;
-			}
-			width = (int)rowLen;
-		} else if ((int)rowLen != width) {
-			fprintf(stderr,
-				"voxmap: '%s' ragged row %d (%zu chars, expected %d)\n",
-				label, depth + 1, rowLen, width);
-			return NULL;
-		}
-		for (i = start; i < start + rowLen; i++) {
-			unsigned char c = (unsigned char)text[i];
-
-			if (c >= LEGEND_CHARS || legendH[c] == LEGEND_INVALID) {
-				fprintf(stderr,
-					"voxmap: '%s' invalid cell '%c' at row %d\n",
-					label, (c >= 32 && c < 127) ? c : '?',
-					depth + 1);
-				return NULL;
-			}
-		}
-		depth++;
-		if (depth > VOXMAP_MAX_DIM) {
-			fprintf(stderr, "voxmap: '%s' too many rows (> %d)\n",
-				label, VOXMAP_MAX_DIM);
-			return NULL;
-		}
-	}
-	if (width <= 0 || depth <= 0) {
-		fprintf(stderr, "voxmap: '%s' is empty\n", label);
-		return NULL;
-	}
-
-	map = calloc(1, sizeof(*map));
+	map = hasSeparator ? fillSlices(&ctx) : fillHeightmap(&ctx);
 	if (map == NULL)
 		return NULL;
-	map->cells = malloc((size_t)width * (size_t)depth);
-	map->materials = malloc((size_t)width * (size_t)depth *
-				sizeof(*map->materials));
-	if (map->cells == NULL || map->materials == NULL) {
-		free(map->cells);
-		free(map->materials);
-		free(map);
-		return NULL;
-	}
-	map->width = width;
-	map->depth = depth;
-	if (lightCount > 0)
-		memcpy(map->lights, lights,
-		       (size_t)lightCount * sizeof(*lights));
-	map->lightCount = lightCount;
-
-	/* Pass 2: fill the grid and its material ids. */
-	{
-		int row = 0;
-
-		pos = 0;
-		while (pos < length && row < depth) {
-			size_t start = pos;
-			size_t end;
-			int col;
-
-			while (pos < length && text[pos] != '\n')
-				pos++;
-			end = pos;
-			if (pos < length)
-				pos++;
-			if (trimmedLength(text, start, end) == 0 ||
-			    isDirectiveLine(text, start,
-					    trimmedLength(text, start, end)))
-				continue;
-			for (col = 0; col < width; col++) {
-				unsigned char c =
-					(unsigned char)text[start + (size_t)col];
-				int8_t h = legendH[c];
-				size_t idx = (size_t)row * width + col;
-
-				map->cells[idx] = h;
-				map->materials[idx] =
-					(h < 0) ? -1 : legendM[c];
-			}
-			row++;
-		}
-	}
-
+	attachLights(map, &ctx);
 	return map;
 }
 
@@ -561,8 +837,9 @@ void destroyVoxmap(Voxmap *map)
 {
 	if (map == NULL)
 		return;
-	free(map->cells);
+	free(map->solid);
 	free(map->materials);
+	free(map->ground);
 	free(map);
 }
 
@@ -576,23 +853,64 @@ int voxmapDepth(const Voxmap *map)
 	return map == NULL ? 0 : map->depth;
 }
 
-int voxmapHeightAt(const Voxmap *map, int x, int y)
+int voxmapLevels(const Voxmap *map)
 {
-	if (map == NULL || x < 0 || y < 0 || x >= map->width || y >= map->depth)
-		return -1;
-	return map->cells[(size_t)y * map->width + x];
+	return map == NULL ? 0 : map->levels;
 }
 
-bool voxmapIsVoid(const Voxmap *map, int x, int y)
+int voxmapHeightAt(const Voxmap *map, int x, int z)
 {
-	return voxmapHeightAt(map, x, y) < 0;
+	int y;
+
+	if (map == NULL || x < 0 || z < 0 || x >= map->width ||
+	    z >= map->depth)
+		return -1;
+	for (y = map->levels - 1; y >= 0; y--) {
+		if (map->solid[voxelIndex(map, x, y, z)])
+			return y + 1;
+	}
+	if (map->ground[(size_t)z * map->width + x])
+		return 0;
+	return -1;
 }
 
-int voxmapMaterialAt(const Voxmap *map, int x, int y)
+bool voxmapIsVoid(const Voxmap *map, int x, int z)
 {
-	if (map == NULL || x < 0 || y < 0 || x >= map->width || y >= map->depth)
+	return voxmapHeightAt(map, x, z) < 0;
+}
+
+int voxmapMaterialAt(const Voxmap *map, int x, int z)
+{
+	int y;
+
+	if (map == NULL || x < 0 || z < 0 || x >= map->width ||
+	    z >= map->depth)
 		return -1;
-	return map->materials[(size_t)y * map->width + x];
+	for (y = map->levels - 1; y >= 0; y--) {
+		size_t idx = voxelIndex(map, x, y, z);
+
+		if (map->solid[idx])
+			return map->materials[idx];
+	}
+	if (map->ground[(size_t)z * map->width + x])
+		return map->materials[voxelIndex(map, x, 0, z)];
+	return -1;
+}
+
+bool voxmapSolidAt(const Voxmap *map, int x, int y, int z)
+{
+	if (map == NULL || x < 0 || y < 0 || z < 0 || x >= map->width ||
+	    y >= map->levels || z >= map->depth)
+		return false;
+	return map->solid[voxelIndex(map, x, y, z)] != 0;
+}
+
+int voxmapMaterialAtVoxel(const Voxmap *map, int x, int y, int z)
+{
+	if (map == NULL || x < 0 || y < 0 || z < 0 || x >= map->width ||
+	    y >= map->levels || z >= map->depth)
+		return -1;
+	return map->materials[voxelIndex(map, x, y, z)];
 }
 
 int voxmapLightCount(const Voxmap *map)
@@ -616,6 +934,7 @@ static const int kSideDz[4] = { 1, 0, -1, 0 };
 /* Built-in fallback regions (used with a NULL material table). */
 static const float kFallbackTop[4][2] = ATLAS_UV_TOP;
 static const float kFallbackSide[4][2] = ATLAS_UV_SIDE;
+static const float kFallbackBottom[4][2] = ATLAS_UV_SPARE;
 
 /* One-time overflow diagnostic: appendVoxelFace returns false when the draw
  * list is full, and the face is silently dropped by design (a bounded list
@@ -629,11 +948,16 @@ static bool g_faceOverflowReported = false;
 static void materialUV(const MaterialTable *materials, int id, FaceId face,
 		       float uv[4][2])
 {
-	if (materials != NULL && (size_t)id < materials->count)
+	if (materials != NULL && (size_t)id < materials->count) {
 		materialFaceUV(&materials->items[id].rect[face], face, uv);
+		return;
+	}
+	if (face == FACE_TOP)
+		memcpy(uv, kFallbackTop, sizeof(kFallbackTop));
+	else if (face == FACE_BOTTOM)
+		memcpy(uv, kFallbackBottom, sizeof(kFallbackBottom));
 	else
-		memcpy(uv, (face == FACE_TOP) ? kFallbackTop : kFallbackSide,
-		       sizeof(kFallbackTop));
+		memcpy(uv, kFallbackSide, sizeof(kFallbackTop));
 }
 
 static uint8_t materialAlpha(const MaterialTable *materials, int id)
@@ -720,9 +1044,10 @@ static void faceCornerTints(uint32_t tint, float faceShade, int x, int z,
 		out[k] = shadeTint(tint, faceShade, x, z, light[0], 100);
 }
 
-/* Corner cells for a top face's corner `k` (0..3, canonical order): the 2x2
- * block of columns around the corner at the face's air level `h`. The face's
- * own air cell (x, h, z) is one of the four; *ownIndex points at it. */
+/* Corner cells for a horizontal face's corner `k` (0..3, canonical order):
+ * the 2x2 block of columns around the corner at the face's air level `h`. The
+ * face's own air cell (x, h, z) is one of the four; *ownIndex points at it.
+ * Used by top faces (h = top level) and bottom faces (h = below level). */
 static void topCornerCells(int x, int z, int h, int k, int cells[4][3],
 			   int *ownIndex)
 {
@@ -768,8 +1093,9 @@ static void sideCornerCells(int a, int y, int nx, int nz, bool axisX,
 	}
 }
 
-/* Fill the 4 per-corner light factors and AO counts for a top face. */
-static void topCorners(const LightGrid *lights, int x, int z, int height,
+/* Fill the 4 per-corner light factors and AO counts for a horizontal face at
+ * air level `h`. */
+static void topCorners(const LightGrid *lights, int x, int z, int h,
 		       uint8_t light[4][3], int ao[4])
 {
 	int k;
@@ -778,7 +1104,7 @@ static void topCorners(const LightGrid *lights, int x, int z, int height,
 		int cells[4][3];
 		int own;
 
-		topCornerCells(x, z, height, k, cells, &own);
+		topCornerCells(x, z, h, k, cells, &own);
 		lightGridCornerAverage(lights, cells, own, light[k]);
 		ao[k] = lightGridCornerOcclusion(lights, cells, own);
 	}
@@ -786,8 +1112,8 @@ static void topCorners(const LightGrid *lights, int x, int z, int height,
 
 /* Fill the 4 per-corner light factors and AO counts for a side face. The
  * corner order matches the quad: bottom-start, bottom-end, top-end, top-start.
- * The two bottom corners sample at y0 (the neighbour top), the two top corners
- * at y1 (the face top), so the GPU interpolates the vertical gradient. */
+ * The two bottom corners sample at y0 (the run bottom), the two top corners
+ * at y1 (the run top), so the GPU interpolates the vertical gradient. */
 static void sideCorners(const LightGrid *lights, int x, int z, int dir,
 			int y0, int y1, uint8_t light[4][3], int ao[4])
 {
@@ -877,6 +1203,35 @@ static void emitTop(DrawList *list, int x, int z, int height, const float uv[4][
 		 cornerTint);
 }
 
+/* Bottom face of the solid voxel at level `y`: the same x/z quad as the top,
+ * at world y, sampling the air cell below (y - 1). Shade is the darkest face
+ * (VOXMAP_SHADE_BOTTOM). */
+static void emitBottom(DrawList *list, int x, int z, int y,
+		       const float uv[4][2], uint8_t alphaMode, uint32_t tint,
+		       const LightGrid *lights, const VoxmapEmitOptions *opts,
+		       const float debugUV[4][2])
+{
+	float quad[4][3] = {
+		{ (float)x, (float)y, (float)z },
+		{ (float)(x + 1), (float)y, (float)z },
+		{ (float)(x + 1), (float)y, (float)(z + 1) },
+		{ (float)x, (float)y, (float)(z + 1) },
+	};
+	uint8_t light[4][3];
+	int ao[4] = { 0, 0, 0, 0 };
+	uint32_t cornerTint[4];
+
+	if (opts->smooth)
+		topCorners(lights, x, z, y - 1, light, ao);
+	else
+		sampleLight(lights, x, y - 1, z, light[0]);
+	faceCornerTints(tint, VOXMAP_SHADE_BOTTOM, x, z, light, ao,
+			opts->smooth, opts->lightDebug, cornerTint);
+	emitFace(list, quad, opts->lightDebug ? debugUV : uv,
+		 opts->lightDebug ? (uint8_t)ALPHA_OPAQUE : alphaMode,
+		 cornerTint);
+}
+
 static void emitSide(DrawList *list, int x, int z, int dir, int y0, int y1,
 		     const float uv[4][2], uint8_t alphaMode, uint32_t tint,
 		     const LightGrid *lights, const VoxmapEmitOptions *opts,
@@ -938,7 +1293,6 @@ void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
 	float toCamZ;
 	int x;
 	int z;
-	int dir;
 
 	if (map == NULL || list == NULL || options == NULL)
 		return;
@@ -946,35 +1300,77 @@ void voxmapEmitFacesOpt(const Voxmap *map, const MaterialTable *materials,
 	cameraGroundDir(cameraYawDeg(camera), &toCamX, &toCamZ);
 	for (z = 0; z < map->depth; z++) {
 		for (x = 0; x < map->width; x++) {
-			size_t idx = (size_t)z * map->width + x;
-			int height = map->cells[idx];
-			int id;
-			float uv[4][2];
-			uint8_t alphaMode;
+			int y;
+			int dir;
 
-			if (height < 0)
-				continue;	/* void: no column, no faces */
-			id = map->materials[idx];
-			alphaMode = materialAlpha(materials, id);
-			materialUV(materials, id, FACE_TOP, uv);
-			emitTop(list, x, z, height, uv, alphaMode, options->tint,
-				lights, options, debugUV);
+			/* The height-0 ground tile has no voxel but still
+			 * emits its top face at y = 0. */
+			if (map->ground[(size_t)z * map->width + x]) {
+				int id = map->materials[voxelIndex(map, x, 0, z)];
+				float uv[4][2];
+
+				materialUV(materials, id, FACE_TOP, uv);
+				emitTop(list, x, z, 0, uv,
+					materialAlpha(materials, id), options->tint,
+					lights, options, debugUV);
+			}
+			/* Tops + bottoms, ascending level. */
+			for (y = 0; y < map->levels; y++) {
+				size_t idx = voxelIndex(map, x, y, z);
+				int id;
+				float uv[4][2];
+
+				if (!map->solid[idx])
+					continue;
+				id = map->materials[idx];
+				if (!voxmapSolidAt(map, x, y + 1, z)) {
+					materialUV(materials, id, FACE_TOP, uv);
+					emitTop(list, x, z, y + 1, uv,
+						materialAlpha(materials, id),
+						options->tint, lights, options,
+						debugUV);
+				}
+				if (y > 0 && !voxmapSolidAt(map, x, y - 1, z)) {
+					materialUV(materials, id, FACE_BOTTOM, uv);
+					emitBottom(list, x, z, y, uv,
+						   materialAlpha(materials, id),
+						   options->tint, lights, options,
+						   debugUV);
+				}
+			}
+			/* Sides: one quad per exposed vertical run. */
 			for (dir = 0; dir < 4; dir++) {
-				int neighbour;
-
 				if (sideCulled(dir, toCamX, toCamZ))
-					continue;	/* cull away-facing sides */
-				neighbour = voxmapHeightAt(
-					map, x + kSideDx[dir], z + kSideDz[dir]);
-				if (neighbour < 0)
-					neighbour = 0;	/* void/OOB = ground */
-				if (neighbour >= height)
-					continue;	/* not exposed */
-				materialUV(materials, id,
-					   materialFaceForSideDir(dir), uv);
-				emitSide(list, x, z, dir, neighbour, height, uv,
-					 alphaMode, options->tint, lights,
-					 options, debugUV);
+					continue;
+				y = 0;
+				while (y < map->levels) {
+					int start;
+					int id;
+					float uv[4][2];
+
+					if (!voxmapSolidAt(map, x, y, z) ||
+					    voxmapSolidAt(map,
+							  x + kSideDx[dir], y,
+							  z + kSideDz[dir])) {
+						y++;
+						continue;
+					}
+					start = y;
+					id = voxmapMaterialAtVoxel(map, x, y, z);
+					while (y < map->levels &&
+					       voxmapSolidAt(map, x, y, z) &&
+					       !voxmapSolidAt(map,
+							      x + kSideDx[dir], y,
+							      z + kSideDz[dir]))
+						y++;
+					materialUV(materials, id,
+						   materialFaceForSideDir(dir),
+						   uv);
+					emitSide(list, x, z, dir, start, y, uv,
+						 materialAlpha(materials, id),
+						 options->tint, lights, options,
+						 debugUV);
+				}
 			}
 		}
 	}

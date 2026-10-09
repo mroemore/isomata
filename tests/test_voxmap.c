@@ -25,6 +25,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -1718,6 +1719,686 @@ static void test_smooth_null_grid_full_brightness(void)
 	destroyVoxmap(map);
 }
 
+/* --- T13a: 3D occupancy, slice sections, runs + bottoms ---------------- */
+
+static Voxmap *parseText(const char *text)
+{
+	return parseVoxmapText(text, strlen(text), NULL);
+}
+
+static bool itemHasUV(const DrawItem *item, const float uv[4][2])
+{
+	return memcmp(item->uv, uv, 4 * 2 * sizeof(float)) == 0;
+}
+
+static int countUV(const DrawList *list, const float uv[4][2])
+{
+	int n = 0;
+	size_t i;
+
+	for (i = 0; i < drawListCount(list); i++)
+		if (itemHasUV(drawListItem(list, i), uv))
+			n++;
+	return n;
+}
+
+/* A multi-section file (2x2, 3 levels): a solid floor, a level with a
+ * doorway gap, and a solid roof. Section order is ascending (first = y 0). */
+static void test_slice_parse_and_queries(void)
+{
+	const char *text =
+		"11\n"
+		"11\n"
+		"---\n"
+		"1.\n"
+		"11\n"
+		"---\n"
+		"11\n"
+		"11\n";
+	Voxmap *map = parseText(text);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	/* y 0: floor, all solid. */
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 0, 0));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 1, 0, 1));
+	/* y 1: (1,0) is the doorway (air), the rest solid. */
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 1, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 1, 1, 0));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 1, 1));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 1, 1, 1));
+	/* y 2: roof, all solid. */
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 1, 2, 0));
+	/* heightAt = topmost solid level + 1. Column (1,0) has a gap at y 1 but
+	 * is solid at y 2, so its top surface is y 3. */
+	TEST_ASSERT_EQUAL_INT(3, voxmapHeightAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(3, voxmapHeightAt(map, 1, 0));
+	/* The doorway cell is solid at no level, so it is air. */
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAtVoxel(map, 1, 1, 0) + 1);
+	/* Bounds: y out of range / NULL are false / -1. */
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, 3, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, -1, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 0, 3, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(NULL, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(NULL, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapLevels(NULL));
+	destroyVoxmap(map);
+}
+
+/* Slice mode assigns per-voxel materials (the legend height is ignored). */
+static void test_slice_per_voxel_materials(void)
+{
+	MaterialTable t;
+	const char *text =
+		"@ g 5 grass\n"
+		"g1\n"
+		"---\n"
+		"1g\n";
+	Voxmap *map;
+
+	buildTestTable(&t);
+	map = parseVoxmapText(text, strlen(text), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	/* Level 0: (0,0) grass, (1,0) digit -> default. Level 1: reversed. */
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAtVoxel(map, 0, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAtVoxel(map, 1, 0, 0));
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAtVoxel(map, 0, 1, 0));
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAtVoxel(map, 1, 1, 0));
+	/* The column material query reads the topmost solid voxel. */
+	TEST_ASSERT_EQUAL_INT(0, voxmapMaterialAt(map, 0, 0));
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 1, 0));
+	destroyVoxmap(map);
+}
+
+/* A space is air in slice mode, and a trailing space is a real cell (only a
+ * trailing CR is stripped). */
+static void test_slice_space_is_air(void)
+{
+	const char *text =
+		"1 \n"
+		"11\n"
+		"---\n"
+		"..\n"
+		"..\n";
+	Voxmap *map = parseText(text);
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapWidth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 0, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 1, 0, 0));	/* the space */
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 0, 1));
+	destroyVoxmap(map);
+}
+
+/* Malformed section files are diagnostics, never crashes. */
+static void test_slice_malformed_sections(void)
+{
+	TEST_ASSERT_NULL(parseText("---\n11\n"));		/* leading sep */
+	TEST_ASSERT_NULL(parseText("11\n---\n"));		/* trailing sep */
+	TEST_ASSERT_NULL(parseText("11\n---\n---\n11\n"));	/* empty section */
+	TEST_ASSERT_NULL(parseText("11\n11\n---\n1\n"));	/* depth differs */
+	TEST_ASSERT_NULL(parseText("11\n1\n---\n11\n11\n"));	/* ragged */
+	TEST_ASSERT_NULL(parseText("11\n---\n111\n"));		/* width differs */
+	TEST_ASSERT_NULL(parseText("1x\n---\n11\n"));		/* bad cell */
+	TEST_ASSERT_NULL(parseText("11\n---\n1x\n"));		/* bad cell y1 */
+	/* A single-section file with no separator is a heightmap: a space is an
+	 * invalid cell (though a TRAILING space is stripped as before). */
+	TEST_ASSERT_NULL(parseText("1 1\n"));
+}
+
+/* The strongest backward-compat pin: a single-section heightmap and the slice
+ * stack that encodes the same occupancy produce byte-identical draw lists. */
+static void test_heightmap_and_slice_emission_identical(void)
+{
+	/* Heightmap: row z0 = heights 1,2; row z1 = 1,1. */
+	Voxmap *heightmap = parseText("12\n11\n");
+	/* The same occupancy as slices: y0 all solid; y1 only (1,0). */
+	Voxmap *slices = parseText("11\n11\n---\n.1\n..\n");
+	DrawList a;
+	DrawList b;
+	Camera3D cam;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(heightmap);
+	TEST_ASSERT_NOT_NULL(slices);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(heightmap));
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(slices));
+	initDrawList(&a, 64);
+	initDrawList(&b, 64);
+	initCamera3D(&cam);
+	voxmapEmitFaces(heightmap, NULL, NULL, &a, &cam,
+			DRAW_TINT(200, 200, 200, 255));
+	voxmapEmitFaces(slices, NULL, NULL, &b, &cam,
+			DRAW_TINT(200, 200, 200, 255));
+	TEST_ASSERT_EQUAL_INT((int)drawListCount(&a), (int)drawListCount(&b));
+	for (i = 0; i < drawListCount(&a); i++) {
+		const DrawItem *ia = drawListItem(&a, i);
+		const DrawItem *ib = drawListItem(&b, i);
+
+		TEST_ASSERT_EQUAL_MEMORY(ia->worldQuad, ib->worldQuad,
+					 sizeof(ia->worldQuad));
+		TEST_ASSERT_EQUAL_MEMORY(ia->uv, ib->uv, sizeof(ia->uv));
+		TEST_ASSERT_EQUAL_INT((int)ia->tint, (int)ib->tint);
+	}
+	destroyDrawList(&a);
+	destroyDrawList(&b);
+	destroyVoxmap(heightmap);
+	destroyVoxmap(slices);
+}
+
+/* A floating slab: a top face, a NEW bottom face, and the exposed side runs. */
+static void test_float_slab_top_bottom_sides(void)
+{
+	const char *text =
+		".\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"1\n"
+		"---\n"
+		".\n";
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	const float sideUV[4][2] = ATLAS_UV_SIDE;
+	const float bottomUV[4][2] = ATLAS_UV_SPARE;
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *top;
+	const DrawItem *bottom;
+	const DrawItem *side;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(4, voxmapLevels(map));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 2, 0));
+	initDrawList(&list, 16);
+	initCamera3D(&cam);		/* yaw 0: only the +Z side is exposed */
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	/* top (y 3) + bottom (y 2) + one +Z side spanning [2, 3). */
+	TEST_ASSERT_EQUAL_INT(3, (int)drawListCount(&list));
+	TEST_ASSERT_EQUAL_INT(1, countUV(&list, topUV));
+	TEST_ASSERT_EQUAL_INT(1, countUV(&list, bottomUV));
+	TEST_ASSERT_EQUAL_INT(1, countUV(&list, sideUV));
+
+	top = findTopPlaneAt(&list, 3.0f);
+	TEST_ASSERT_NOT_NULL(top);
+	TEST_ASSERT_TRUE(itemHasUV(top, topUV));
+
+	bottom = NULL;
+	side = NULL;
+	{
+		size_t i;
+
+		for (i = 0; i < drawListCount(&list); i++) {
+			const DrawItem *item = drawListItem(&list, i);
+
+			if (itemHasUV(item, bottomUV))
+				bottom = item;
+			if (itemHasUV(item, sideUV))
+				side = item;
+		}
+	}
+	TEST_ASSERT_NOT_NULL(bottom);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, bottom->worldQuad[0][1]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, bottom->worldQuad[2][1]);
+	TEST_ASSERT_NOT_NULL(side);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, side->worldQuad[0][1]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 3.0f, side->worldQuad[2][1]);
+
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* A wall with a doorway gap: the +Z side splits into a run below the gap and a
+ * run above it. */
+static void test_doorway_side_runs(void)
+{
+	const char *text =
+		"1\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"1\n";
+	const float topUV[4][2] = ATLAS_UV_TOP;
+	const float sideUV[4][2] = ATLAS_UV_SIDE;
+	const float bottomUV[4][2] = ATLAS_UV_SPARE;
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	int lower = 0;
+	int upper = 0;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+	/* 2 tops (y1 over the gap block, y3 slab top) + 1 bottom (y2) + 2 +Z
+	 * side runs ([0,1) and [2,3)). */
+	TEST_ASSERT_EQUAL_INT(5, (int)drawListCount(&list));
+	TEST_ASSERT_EQUAL_INT(2, countUV(&list, topUV));
+	TEST_ASSERT_EQUAL_INT(1, countUV(&list, bottomUV));
+	TEST_ASSERT_EQUAL_INT(2, countUV(&list, sideUV));
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *item = drawListItem(&list, i);
+
+		if (!itemHasUV(item, sideUV))
+			continue;
+		if (item->worldQuad[0][1] == 0.0f &&
+		    item->worldQuad[2][1] == 1.0f)
+			lower++;
+		if (item->worldQuad[0][1] == 2.0f &&
+		    item->worldQuad[2][1] == 3.0f)
+			upper++;
+	}
+	TEST_ASSERT_EQUAL_INT(1, lower);
+	TEST_ASSERT_EQUAL_INT(1, upper);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* An interior cavity emits its walls, floor and ceiling: the centre column has
+ * a top at y 1 (cavity floor) and a bottom at y 2 (cavity ceiling), and the
+ * surrounding wall emits an inward-facing side run. */
+static void test_interior_cavity_faces(void)
+{
+	const char *text =
+		"111\n111\n111\n"
+		"---\n"
+		"111\n1.1\n111\n"
+		"---\n"
+		"111\n111\n111\n";
+	const float sideUV[4][2] = ATLAS_UV_SIDE;
+	const float bottomUV[4][2] = ATLAS_UV_SPARE;
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *floorTop;
+	const DrawItem *ceilingBottom = NULL;
+	const DrawItem *wall = NULL;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(3, voxmapLevels(map));
+	initDrawList(&list, 128);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, NULL, &list, &cam,
+			DRAW_TINT(255, 255, 255, 255));
+
+	/* The cavity floor is the top of the (1,0,1) voxel at y 1. */
+	floorTop = findTopPlaneAt(&list, 1.0f);
+	TEST_ASSERT_NOT_NULL(floorTop);
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *item = drawListItem(&list, i);
+
+		if (itemHasUV(item, bottomUV) &&
+		    item->worldQuad[0][1] == 2.0f)
+			ceilingBottom = item;
+		/* The +Z-facing cavity wall: z = 1, spanning y [1, 2). */
+		if (itemHasUV(item, sideUV) &&
+		    item->worldQuad[0][2] == 1.0f &&
+		    item->worldQuad[0][1] == 1.0f &&
+		    item->worldQuad[2][1] == 2.0f)
+			wall = item;
+	}
+	TEST_ASSERT_NOT_NULL(ceilingBottom);
+	TEST_ASSERT_NOT_NULL(wall);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* Bottom-face UV (the material's bottom slot) and shade (the darkest face). */
+static void test_bottom_face_uv_shade(void)
+{
+	MaterialTable t;
+	const char *text =
+		"@ g 0 grass\n"
+		".\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"g\n"
+		"---\n"
+		".\n";
+	float expectBottom[4][2];
+	Voxmap *map;
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *bottom = NULL;
+	size_t i;
+
+	buildTestTable(&t);
+	map = parseVoxmapText(text, strlen(text), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(4, voxmapLevels(map));
+	TEST_ASSERT_TRUE(voxmapSolidAt(map, 0, 2, 0));
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, &t, NULL, &list, &cam, DRAW_TINT(200, 200, 200, 255));
+	materialFaceUV(&t.items[1].rect[FACE_BOTTOM], FACE_BOTTOM, expectBottom);
+	for (i = 0; i < drawListCount(&list); i++)
+		if (itemHasUV(drawListItem(&list, i), expectBottom))
+			bottom = drawListItem(&list, i);
+	TEST_ASSERT_NOT_NULL(bottom);
+	/* The slab voxel is at level 2: its bottom face is at world y 2. */
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, bottom->worldQuad[0][1]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, bottom->worldQuad[2][1]);
+	/* Darkest face: 200 * 0.55 = 110 (even column, no checker). */
+	TEST_ASSERT_EQUAL_INT(110, (int)((bottom->tint >> 24) & 0xffu));
+	TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(110, 110, 110, 255),
+			      (int)bottom->tint);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* The bottom face samples the air cell BELOW the voxel (y - 1), not the cell
+ * at its own level: a lamp below lights the underside differently. */
+static void test_bottom_face_light_sampling(void)
+{
+	const char *text =
+		".\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"1\n"
+		"---\n"
+		".\n";
+	const float bottomUV[4][2] = ATLAS_UV_SPARE;
+	Voxmap *map = parseText(text);
+	LightGrid *g = lightGridCreate(1, 1, 4);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *bottom = NULL;
+	uint8_t below[3];
+	uint8_t own[3];
+	int expectedBelow;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_NOT_NULL(g);
+	/* A weak lamp at the ground: level 1 reads brighter than level 2. */
+	lightGridSeedPoint(g, 0.5f, 0.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagate(g, map);
+	lightGridFactorAt(g, 0, 1, 0, below);
+	lightGridFactorAt(g, 0, 2, 0, own);
+	TEST_ASSERT_TRUE(below[0] != own[0]);	/* the two cells differ */
+
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFaces(map, NULL, g, &list, &cam,
+			DRAW_TINT(200, 200, 200, 255));
+	for (i = 0; i < drawListCount(&list); i++)
+		if (itemHasUV(drawListItem(&list, i), bottomUV))
+			bottom = drawListItem(&list, i);
+	TEST_ASSERT_NOT_NULL(bottom);
+	/* 200 * 0.55 * factor/255, rounded. */
+	expectedBelow = (int)(200.0f * VOXMAP_SHADE_BOTTOM *
+			      (float)below[0] / 255.0f + 0.5f);
+	TEST_ASSERT_EQUAL_INT(expectedBelow, (int)((bottom->tint >> 24) & 0xffu));
+	destroyDrawList(&list);
+	destroyLightGrid(g);
+	destroyVoxmap(map);
+}
+
+/* Build a slice file: one section of `rows` rows of `w` '1's, then a
+ * separator and a single "1" row. Caller frees. */
+static char *buildWideSlice(int w, int rows)
+{
+	size_t n = (size_t)rows * ((size_t)w + 1) + 8;
+	char *buf = malloc(n);
+	size_t p = 0;
+	int r;
+	int x;
+
+	for (r = 0; r < rows; r++) {
+		for (x = 0; x < w; x++)
+			buf[p++] = '1';
+		buf[p++] = '\n';
+	}
+	buf[p++] = '-'; buf[p++] = '-'; buf[p++] = '-'; buf[p++] = '\n';
+	buf[p++] = '1'; buf[p++] = '\n';
+	buf[p] = '\0';
+	return buf;
+}
+
+/* Build a slice file with `sections` sections of `d` rows of `w` '1's. */
+static char *buildBigSlice(int w, int d, int sections)
+{
+	size_t n = (size_t)sections * ((size_t)d * ((size_t)w + 1) + 4) + 1;
+	char *buf = malloc(n);
+	size_t p = 0;
+	int s;
+	int r;
+	int x;
+
+	for (s = 0; s < sections; s++) {
+		if (s > 0) {
+			buf[p++] = '-'; buf[p++] = '-'; buf[p++] = '-';
+			buf[p++] = '\n';
+		}
+		for (r = 0; r < d; r++) {
+			for (x = 0; x < w; x++)
+				buf[p++] = '1';
+			buf[p++] = '\n';
+		}
+	}
+	buf[p] = '\0';
+	return buf;
+}
+
+/* Blank lines inside and between sections are ignored; a CRLF slice file and
+ * a missing trailing newline both parse. */
+static void test_slice_whitespace_and_crlf(void)
+{
+	Voxmap *map = parseText("1\n\n1\n---\n1\n1\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapDepth(map));
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	destroyVoxmap(map);
+
+	map = parseText("1\r\n1\r\n---\r\n1\r\n1\r\n");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	destroyVoxmap(map);
+
+	/* No trailing newline on the last section row. */
+	map = parseText("1\n1\n---\n1\n1");
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	destroyVoxmap(map);
+}
+
+/* A middle section whose depth differs from the first is rejected. */
+static void test_slice_middle_depth_mismatch(void)
+{
+	TEST_ASSERT_NULL(parseText("11\n11\n---\n11\n---\n11\n11\n"));
+}
+
+/* Separator lines tolerate surrounding whitespace; a dash line that is not
+ * exactly three dashes is not a separator (and is then an invalid cell). */
+static void test_separator_line_variants(void)
+{
+	Voxmap *map = parseText("1\n \t---  \t\n1\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(2, voxmapLevels(map));
+	destroyVoxmap(map);
+
+	TEST_ASSERT_NULL(parseText("1--\n"));	/* 3 chars, not all '-' */
+	TEST_ASSERT_NULL(parseText("-1-\n"));
+	TEST_ASSERT_NULL(parseText("----\n"));	/* too long */
+}
+
+/* Directive lines with leading tabs are still recognised. */
+static void test_directive_leading_whitespace(void)
+{
+	MaterialTable t;
+	Voxmap *map;
+
+	buildTestTable(&t);
+	map = parseVoxmapText("\t@ g 1 grass\ng\n",
+			      strlen("\t@ g 1 grass\ng\n"), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));
+	destroyVoxmap(map);
+
+	/* Leading spaces too (the other whitespace arm). */
+	map = parseVoxmapText("  @ g 1 grass\ng\n",
+			      strlen("  @ g 1 grass\ng\n"), &t);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(1, voxmapMaterialAt(map, 0, 0));
+	destroyVoxmap(map);
+
+	map = parseVoxmapText("\t$ point 0.5 0.5 0.5 255 0 0\n1\n",
+			      strlen("\t$ point 0.5 0.5 0.5 255 0 0\n1\n"),
+			      NULL);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
+	destroyVoxmap(map);
+
+	map = parseVoxmapText("  $ point 0.5 0.5 0.5 255 0 0\n1\n",
+			      strlen("  $ point 0.5 0.5 0.5 255 0 0\n1\n"),
+			      NULL);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_EQUAL_INT(1, voxmapLightCount(map));
+	destroyVoxmap(map);
+}
+
+/* A legend line with more tokens than the table accepts is malformed. */
+static void test_legend_many_tokens(void)
+{
+	TEST_ASSERT_NULL(parseText("@ g 1 grass a b c d e f\n1\n"));
+}
+
+/* The debug view renders a bottom face too (white UV, opaque, light tint). */
+static void test_debug_bottom_face(void)
+{
+	const char *text =
+		".\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"1\n"
+		"---\n"
+		".\n";
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	VoxmapEmitOptions opts = { DRAW_TINT(1, 2, 3, 4), true, true, NULL };
+	const DrawItem *bottom = NULL;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, NULL, &list, &cam, &opts);
+	for (i = 0; i < drawListCount(&list); i++) {
+		const DrawItem *item = drawListItem(&list, i);
+
+		if (item->worldQuad[0][1] == 2.0f &&
+		    item->worldQuad[2][1] == 2.0f)
+			bottom = item;
+	}
+	TEST_ASSERT_NOT_NULL(bottom);
+	TEST_ASSERT_EQUAL_INT(ALPHA_OPAQUE, bottom->alphaMode);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
+/* A slice row wider than VOXMAP_MAX_DIM, a section deeper than it, and a
+ * volume over VOXMAP_MAX_CELLS all fail cleanly. */
+static void test_slice_size_guards(void)
+{
+	char *wide = buildWideSlice(VOXMAP_MAX_DIM + 1, 1);
+	char *deep = buildWideSlice(1, VOXMAP_MAX_DIM + 1);
+	char *big = buildBigSlice(256, 256, 17);
+	char *levels = buildBigSlice(1, 1, VOXMAP_MAX_DIM + 1);
+
+	TEST_ASSERT_NULL(parseVoxmapText(wide, strlen(wide), NULL));
+	TEST_ASSERT_NULL(parseVoxmapText(deep, strlen(deep), NULL));
+	TEST_ASSERT_NULL(parseVoxmapText(big, strlen(big), NULL));
+	TEST_ASSERT_NULL(parseVoxmapText(levels, strlen(levels), NULL));
+	free(wide);
+	free(deep);
+	free(big);
+	free(levels);
+}
+
+/* A high byte and a non-printable control byte are both invalid slice cells
+ * (diagnostics, not crashes). */
+static void test_slice_nonprintable_cells(void)
+{
+	TEST_ASSERT_NULL(parseText("\x01\n---\n1\n"));
+	TEST_ASSERT_NULL(parseText("\x80\n---\n1\n"));
+}
+
+/* Bounds for the 3D voxel queries: every out-of-range axis, plus NULL. */
+static void test_voxel_query_bounds(void)
+{
+	Voxmap *map = parseText("11\n11\n---\n1.\n11\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, -1, 0, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, -1, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, 0, -1));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 2, 0, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, 2, 0));
+	TEST_ASSERT_FALSE(voxmapSolidAt(map, 0, 0, 2));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, -1, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 0, -1, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 0, 0, -1));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 2, 0, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 0, 2, 0));
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 0, 0, 2));
+	/* An air voxel reads -1 even in bounds. */
+	TEST_ASSERT_EQUAL_INT(-1, voxmapMaterialAtVoxel(map, 1, 1, 0));
+	destroyVoxmap(map);
+}
+
+/* The smooth path computes per-corner tints for a bottom face too. */
+static void test_smooth_bottom_face(void)
+{
+	const char *text =
+		".\n"
+		"---\n"
+		".\n"
+		"---\n"
+		"1\n"
+		"---\n"
+		".\n";
+	const float bottomUV[4][2] = ATLAS_UV_SPARE;
+	Voxmap *map = parseText(text);
+	DrawList list;
+	Camera3D cam;
+	const DrawItem *bottom = NULL;
+	VoxmapEmitOptions opts = { DRAW_TINT(240, 240, 240, 255), true, false,
+				   NULL };
+	int k;
+	size_t i;
+
+	TEST_ASSERT_NOT_NULL(map);
+	initDrawList(&list, 16);
+	initCamera3D(&cam);
+	voxmapEmitFacesOpt(map, NULL, NULL, &list, &cam, &opts);
+	for (i = 0; i < drawListCount(&list); i++)
+		if (itemHasUV(drawListItem(&list, i), bottomUV))
+			bottom = drawListItem(&list, i);
+	TEST_ASSERT_NOT_NULL(bottom);
+	/* NULL grid: light 255, AO 100 -> 240 * 0.55 = 132 at every corner. */
+	for (k = 0; k < 4; k++)
+		TEST_ASSERT_EQUAL_INT((int)DRAW_TINT(132, 132, 132, 255),
+				      (int)bottom->cornerTint[k]);
+	destroyDrawList(&list);
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -1778,4 +2459,24 @@ void run_test_voxmap(void)
 	RUN_TEST(test_smooth_sides_all_directions);
 	RUN_TEST(test_light_debug_view);
 	RUN_TEST(test_smooth_null_grid_full_brightness);
+	RUN_TEST(test_slice_parse_and_queries);
+	RUN_TEST(test_slice_per_voxel_materials);
+	RUN_TEST(test_slice_space_is_air);
+	RUN_TEST(test_slice_malformed_sections);
+	RUN_TEST(test_heightmap_and_slice_emission_identical);
+	RUN_TEST(test_float_slab_top_bottom_sides);
+	RUN_TEST(test_doorway_side_runs);
+	RUN_TEST(test_interior_cavity_faces);
+	RUN_TEST(test_bottom_face_uv_shade);
+	RUN_TEST(test_bottom_face_light_sampling);
+	RUN_TEST(test_slice_whitespace_and_crlf);
+	RUN_TEST(test_slice_middle_depth_mismatch);
+	RUN_TEST(test_slice_size_guards);
+	RUN_TEST(test_slice_nonprintable_cells);
+	RUN_TEST(test_voxel_query_bounds);
+	RUN_TEST(test_smooth_bottom_face);
+	RUN_TEST(test_separator_line_variants);
+	RUN_TEST(test_directive_leading_whitespace);
+	RUN_TEST(test_legend_many_tokens);
+	RUN_TEST(test_debug_bottom_face);
 }
