@@ -46,7 +46,7 @@ build/isomata     # opens a window; close it or Ctrl-C to quit
 
 Controls: `Q`/`E` (or the on-screen ROT L / ROT R buttons) rotate 45 degrees per press, `R` (or the on-screen RESET button) restores the startup view, `+`/`-` zoom, drag pans, arrows/`hjkl` navigate, `Esc` pauses.
 
-Maps: see [docs/map-authoring.md](docs/map-authoring.md) for both map formats — the ASCII slices (`assets/maps/demo.txt`) and the PNG-slice authoring pipeline (`assets/maps/demo/`).
+Maps: see [docs/map-authoring.md](docs/map-authoring.md) for both map formats — the ASCII slices (`assets/maps/demo.txt`) and the PNG-slice authoring pipeline (`assets/maps/demo/`). The tile model and sub-voxel shape geometry (for building an external editor) are specified in [docs/tile-format-spec.md](docs/tile-format-spec.md); artist texturemap templates for the shapes live in [`assets/templates/`](assets/templates/README.md) and the all-sides captures in [`docs/images/tiles/`](docs/images/tiles/).
 
 If a system pkg-config entry for `sdl3-ttf` is missing (e.g. only the runtime
 lib is installed), Meson transparently falls back to
