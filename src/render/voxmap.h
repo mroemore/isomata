@@ -208,8 +208,9 @@
  * y + 0.5) and ANY slope (a RAMP's or a HALF_RAMP's) are NEVER culled by the
  * neighbour above: a FULL voxel above occupies [y + 1, y + 2], so it can meet
  * a surface only at the high edge line, and everywhere below that there is an
- * open wedge (0.5 deep for a HALF / HALF_RAMP, growing to a full 1.0 at the
- * low edge of a full RAMP). Culling any of these would be a see-through. (The
+ * open gap — a uniform 0.5 under a HALF's top, and a wedge growing from 0 at
+ * the high edge to 1.0 (a full RAMP) or 0.5 (a HALF_RAMP) at the low edge.
+ * Culling any of these would be a see-through. (The
  * only cost is a from-above overdraw when the cell above is FULL, acceptable.)
  * Shape-vs-shape adjacencies can therefore overdraw (faces hidden inside a
  * neighbouring half/ramp are still emitted) — "visible faces only" is preserved

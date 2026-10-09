@@ -2764,8 +2764,9 @@ static void test_triangle_uv_convention(void)
 	destroyVoxmap(map);
 }
 
-/* Conservative culling: a FULL voxel above a ramp culls its slope; a FULL side
- * neighbour culls a HALF's side. */
+/* Conservative culling: a FULL side neighbour culls a HALF's side; the
+ * surface above never culls a slope or a half top (see the regression in the
+ * body). */
 static void test_shape_culling_full_neighbour(void)
 {
 	/* Regression (T17 fix round): a RAMP dir N at level 1 with a FULL at
@@ -2998,8 +2999,8 @@ static void test_build_raw_shaped(void)
 }
 
 /* Extra culling arms: shape bottoms culled by a FULL below / absent at level 0;
- * a ramp back face and a triangle culled by a FULL neighbour; a half top
- * culled by a FULL above. */
+ * a ramp back face and a triangle culled by a FULL neighbour; a half top is
+ * NOT culled by a FULL above (the 0.5 gap stays visible). */
 static void test_shape_culling_extra(void)
 {
 	const float spare[4][2] = ATLAS_UV_SPARE;
@@ -3121,7 +3122,6 @@ static void test_shape_culling_extra(void)
 		TEST_ASSERT_TRUE(itemHasUV(&out, topUV));
 		destroyVoxmap(map);
 	}
-	(void)topUV;
 }
 
 /* Test-local copy of voxmap's shadeChannel (multiply a 0..255 channel by a
