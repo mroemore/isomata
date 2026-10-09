@@ -198,6 +198,172 @@ static void test_draw_empty_text(void)
 	uiDestroyElement(button);
 }
 
+/* Icon mode: fill + a centered aspect-fit square image, NO text call. */
+static void test_draw_icon_centered_no_text(void)
+{
+	static TestDrawLog log;
+	TextStyle style = { NULL, { measure_8x16, NULL }, 16 };
+	Element *button = uiCreateButton("ab", &style, NULL, NULL);
+
+	uiSetRect(button, 0, 0, 96, 48);
+	uiButtonSetIcon(button, UI_ICON_ROTATE_CCW);
+
+	tdlReset(&log);
+	UiDrawCtx ctx = tdlCtx(&log);
+	uiDraw(button, &ctx);
+
+	TEST_ASSERT_EQUAL_INT(1, log.nFills);
+	TEST_ASSERT_EQUAL_UINT(UI_COLOR_BUTTON, log.fills[0].rgba);
+	TEST_ASSERT_EQUAL_INT(0, log.nTexts);	/* icon mode draws no text */
+	TEST_ASSERT_EQUAL_INT(1, log.nImages);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_ROTATE_CCW, log.images[0].icon);
+	TEST_ASSERT_EQUAL_UINT(UI_COLOR_TEXT, log.images[0].rgba);
+	/* side = min(96,48) - 2*UI_BUTTON_ICON_INSET = 36; centered: x =
+	 * (96-36)/2 = 30, y = (48-36)/2 = 6. */
+	TEST_ASSERT_EQUAL_INT(30, log.images[0].x);
+	TEST_ASSERT_EQUAL_INT(6, log.images[0].y);
+	TEST_ASSERT_EQUAL_INT(36, log.images[0].w);
+	TEST_ASSERT_EQUAL_INT(36, log.images[0].h);
+
+	uiDestroyElement(button);
+}
+
+/* Clearing the icon restores text mode (getter + draw). */
+static void test_icon_clear_restores_text(void)
+{
+	static TestDrawLog log;
+	TextStyle style = { NULL, { measure_8x16, NULL }, 16 };
+	Element *button = uiCreateButton("ab", &style, NULL, NULL);
+
+	uiSetRect(button, 0, 0, 100, 20);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_COUNT, (int)uiButtonIcon(button));
+
+	uiButtonSetIcon(button, UI_ICON_BULB);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_BULB, (int)uiButtonIcon(button));
+
+	uiButtonSetIcon(button, UI_ICON_COUNT);	/* back to text */
+	TEST_ASSERT_EQUAL_INT(UI_ICON_COUNT, (int)uiButtonIcon(button));
+
+	tdlReset(&log);
+	UiDrawCtx ctx = tdlCtx(&log);
+	uiDraw(button, &ctx);
+	TEST_ASSERT_EQUAL_INT(1, log.nTexts);
+	TEST_ASSERT_EQUAL_INT(0, log.nImages);
+	TEST_ASSERT_EQUAL_STRING("ab", log.texts[0].text);
+
+	uiDestroyElement(button);
+}
+
+/* Out-of-range icon values (negative / past the enum) clear to text; NULL
+ * button is a no-op and a NULL-button getter reports "no icon". */
+static void test_icon_out_of_range_clears(void)
+{
+	Element *button = uiCreateButton("x", NULL, NULL, NULL);
+
+	uiButtonSetIcon(button, UI_ICON_BULB);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_BULB, (int)uiButtonIcon(button));
+	uiButtonSetIcon(button, (UiIcon)-1);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_COUNT, (int)uiButtonIcon(button));
+	uiButtonSetIcon(button, UI_ICON_BULB);
+	uiButtonSetIcon(button, (UiIcon)999);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_COUNT, (int)uiButtonIcon(button));
+
+	uiButtonSetIcon(NULL, UI_ICON_BULB);
+	TEST_ASSERT_EQUAL_INT(UI_ICON_COUNT, (int)uiButtonIcon(NULL));
+
+	uiDestroyElement(button);
+}
+
+/* A ctx without the image seam: icon mode still fills, no crash. */
+static const UiDrawCtxVt noImageVt = { tdl_fillRect, tdl_drawText, NULL };
+
+static void test_icon_draw_without_image_seam(void)
+{
+	static TestDrawLog log;
+	Element *button = uiCreateButton(NULL, NULL, NULL, NULL);
+
+	uiSetRect(button, 0, 0, 96, 48);
+	uiButtonSetIcon(button, UI_ICON_RESTORE);
+
+	tdlReset(&log);
+	UiDrawCtx ctx = tdlCtx(&log);
+
+	ctx.vt = &noImageVt;	/* drop the image callback */
+	uiDraw(button, &ctx);
+
+	TEST_ASSERT_EQUAL_INT(1, log.nFills);
+	TEST_ASSERT_EQUAL_INT(0, log.nImages);
+	TEST_ASSERT_EQUAL_INT(0, log.nTexts);
+
+	uiDestroyElement(button);
+}
+
+/* Zero-area rect: no image (nothing to fit), the fill still happens. */
+static void test_icon_zero_area_rect(void)
+{
+	static TestDrawLog log;
+	Element *button = uiCreateButton(NULL, NULL, NULL, NULL);
+
+	uiSetRect(button, 5, 5, 0, 0);
+	uiButtonSetIcon(button, UI_ICON_BULB);
+
+	tdlReset(&log);
+	UiDrawCtx ctx = tdlCtx(&log);
+	uiDraw(button, &ctx);
+
+	TEST_ASSERT_EQUAL_INT(1, log.nFills);
+	TEST_ASSERT_EQUAL_INT(0, log.nImages);
+
+	uiDestroyElement(button);
+}
+
+/* Boundary rects: a tiny icon rect clamps the side to 1 (never zero or
+ * negative); a zero-height icon rect draws no image. */
+static void test_icon_tiny_and_zero_height_rect(void)
+{
+	static TestDrawLog log;
+	Element *tiny = uiCreateButton(NULL, NULL, NULL, NULL);
+	Element *flat = uiCreateButton(NULL, NULL, NULL, NULL);
+
+	uiSetRect(tiny, 0, 0, 8, 8);	/* 8 - 2*6 = -4 -> clamped to 1 */
+	uiButtonSetIcon(tiny, UI_ICON_BULB);
+	tdlReset(&log);
+	UiDrawCtx ctx = tdlCtx(&log);
+	uiDraw(tiny, &ctx);
+	TEST_ASSERT_EQUAL_INT(1, log.nImages);
+	TEST_ASSERT_EQUAL_INT(1, log.images[0].w);
+	TEST_ASSERT_EQUAL_INT(1, log.images[0].h);
+
+	uiSetRect(flat, 3, 4, 20, 0);	/* w > 0 but h == 0 */
+	uiButtonSetIcon(flat, UI_ICON_BULB);
+	tdlReset(&log);
+	ctx = tdlCtx(&log);
+	uiDraw(flat, &ctx);
+	TEST_ASSERT_EQUAL_INT(1, log.nFills);
+	TEST_ASSERT_EQUAL_INT(0, log.nImages);
+
+	uiDestroyElement(tiny);
+	uiDestroyElement(flat);
+}
+
+/* Pointer boundary arms: above / right edges and a zero-height rect. */
+static void test_pointer_edge_arms(void)
+{
+	Element *button = uiCreateButton("x", NULL, countActivate, NULL);
+
+	uiSetRect(button, 10, 20, 100, 30);
+	resetFires();
+	TEST_ASSERT_FALSE(uiHandlePointer(button, 10, 19));	/* above */
+	TEST_ASSERT_FALSE(uiHandlePointer(button, 110, 20));	/* right */
+	TEST_ASSERT_EQUAL_INT(0, g_fires);
+
+	uiSetRect(button, 0, 0, 10, 0);	/* w > 0, h <= 0 */
+	TEST_ASSERT_FALSE(uiHandlePointer(button, 5, 0));
+	TEST_ASSERT_EQUAL_INT(0, g_fires);
+
+	uiDestroyElement(button);
+}
+
 /* NULL text/style/callback all tolerated at creation. */
 static void test_create_all_null(void)
 {
@@ -218,5 +384,12 @@ void run_test_element_button(void)
 	RUN_TEST(test_draw_fill_and_centered_text);
 	RUN_TEST(test_draw_unmeasurable_fallback);
 	RUN_TEST(test_draw_empty_text);
+	RUN_TEST(test_draw_icon_centered_no_text);
+	RUN_TEST(test_icon_clear_restores_text);
+	RUN_TEST(test_icon_out_of_range_clears);
+	RUN_TEST(test_icon_draw_without_image_seam);
+	RUN_TEST(test_icon_zero_area_rect);
+	RUN_TEST(test_icon_tiny_and_zero_height_rect);
+	RUN_TEST(test_pointer_edge_arms);
 	RUN_TEST(test_create_all_null);
 }
