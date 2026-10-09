@@ -43,13 +43,15 @@ assets/maps/demo/
   manifest (an explicit file list) is a documented future extension if a
   naming convention is ever not enough.
 - **`legend.txt`** — the colour legend and optional lights:
-  - `#RRGGBB <material>` maps an **exact** RGB colour to a material name from
-    `assets/textures/materials.txt`. The hex is case-insensitive. A duplicate
-    colour is a diagnostic and the **last** line wins. An opaque pixel whose
-    colour is **not** in the legend is a diagnostic, is counted, and is treated
-    as **air**. A malformed hex (`#GGGGGG`, wrong length) or an unknown
-    material name is a diagnostic and the line is skipped — a bad legend never
-    fails the load.
+  - `#RRGGBB <material> [shape=full|half|ramp|half-ramp] [dir=north|south|
+    east|west]` maps an **exact** RGB colour to a material name from
+    `assets/textures/materials.txt` and an optional per-voxel shape (see
+    "Sub-voxel shapes"). The hex is case-insensitive. A duplicate colour is a
+    diagnostic and the **last** line wins. An opaque pixel whose colour is
+    **not** in the legend is a diagnostic, is counted, and is treated as
+    **air**. A malformed hex (`#GGGGGG`, wrong length), an unknown material
+    name, or an unknown shape/dir value is a diagnostic and the line is
+    skipped — a bad legend never fails the load.
   - `$ point ...` / `$ spot ...` — lights, with **exactly** the same grammar
     and semantics as the ASCII format (see `voxmap.h`): a point seeds its cell
     with an RGB colour and optional radius; a spot adds a direction and a
@@ -66,6 +68,27 @@ assets/maps/demo/
 $ point 5.5 2.5 10.5 255 220 160 6
 $ spot 12 6 12 255 240 200 0 -1 0 40 6
 ```
+
+### Sub-voxel shapes
+
+Every voxel has a **shape**: `full` (the default), `half` (a bottom slab),
+`ramp` or `half-ramp` (a wedge). A ramp/half-ramp also takes a **`dir`** — the
+side the slope rises toward (`north` = `-z`, the image's top row; `south` =
+`+z`, `east` = `+x`, `west` = `-x`). The attributes are optional and the same
+in both formats:
+
+- **PNG** `legend.txt`: `#RRGGBB <material> shape=ramp dir=north`. Distinct
+  colours are distinct `(material, shape, dir)` tuples, so two shapes of the
+  same material need two colours.
+- **ASCII**: `@ <char> <height> <material> shape=ramp dir=north`. In a
+  heightmap the shape applies to **every** voxel of the column; in slice mode
+  it applies per voxel.
+
+An absent `shape` is `full`. A ramp without `dir` defaults to `north`; a `dir`
+on a non-ramp is ignored; both print a diagnostic. An unknown shape/dir value
+skips that legend entry. Geometry, culling and light semantics are documented
+at the top of `src/render/voxmap.h`; a rigorous external-tool spec (coordinate
+tables, template texturemaps, all-sides screenshots) is Task T18.
 
 ## Workflow
 
