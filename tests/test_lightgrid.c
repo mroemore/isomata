@@ -829,10 +829,152 @@ static void test_spot_crafted_line_no_ub(void)
 	destroyVoxmap(map);
 }
 
+/* --- 17. smooth per-corner helpers (T15) ------------------------------- */
+
+/* Solidity: in-bounds from the volume; y < 0 is ground; other OOB is sky. */
+static void test_solid_at(void)
+{
+	LightGrid *g = lightGridCreate(2, 1, 2);
+	uint8_t mask[4];
+
+	TEST_ASSERT_NOT_NULL(g);
+	memset(mask, 0, sizeof(mask));
+	setSolid(mask, 2, 2, 1, 0, 0);
+	lightGridPropagateSolid(g, mask);
+	TEST_ASSERT_TRUE(lightGridSolidAt(g, 1, 0, 0));
+	TEST_ASSERT_FALSE(lightGridSolidAt(g, 0, 0, 0));
+	TEST_ASSERT_TRUE(lightGridSolidAt(g, 0, -1, 0));	/* below world */
+	TEST_ASSERT_FALSE(lightGridSolidAt(g, 0, 2, 0));	/* above grid: sky */
+	TEST_ASSERT_FALSE(lightGridSolidAt(g, 5, 0, 0));	/* x OOB: sky */
+	TEST_ASSERT_FALSE(lightGridSolidAt(g, 0, 0, 5));	/* z OOB: sky */
+	TEST_ASSERT_FALSE(lightGridSolidAt(NULL, 0, 0, 0));
+	destroyLightGrid(g);
+}
+
+/* Corner average: all-air -> sky-open factor; a solid cell is skipped; the
+ * all-solid set falls back to the own cell; NULL grid is full brightness. */
+static void test_corner_average(void)
+{
+	LightGrid *g = lightGridCreate(4, 1, 1);
+	uint8_t mask[4];
+	uint8_t out[3];
+	const int cells[4][3] = {
+		{ 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 }, { 3, 0, 0 }
+	};
+	int i;
+
+	TEST_ASSERT_NOT_NULL(g);
+
+	/* All air, sky-open: every cell factor 93, average 93. */
+	memset(mask, 0, sizeof(mask));
+	lightGridPropagateSolid(g, mask);
+	lightGridCornerAverage(g, cells, 3, out);
+	TEST_ASSERT_EQUAL_INT(93, out[0]);
+	TEST_ASSERT_EQUAL_INT(93, out[1]);
+	TEST_ASSERT_EQUAL_INT(93, out[2]);
+
+	/* (2,0,0) solid: skipped, the three air cells still average 93. */
+	setSolid(mask, 4, 1, 2, 0, 0);
+	lightGridPropagateSolid(g, mask);
+	lightGridCornerAverage(g, cells, 3, out);
+	TEST_ASSERT_EQUAL_INT(93, out[0]);
+
+	/* All four solid: fall back to cells[ownIndex] = (3,0,0), a solid cell
+	 * whose factor is the ambient floor. */
+	for (i = 0; i < 4; i++)
+		setSolid(mask, 4, 1, i, 0, 0);
+	lightGridPropagateSolid(g, mask);
+	lightGridCornerAverage(g, cells, 3, out);
+	TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[0]);
+	TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[1]);
+	TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[2]);
+
+	/* NULL grid = lighting disabled; NULL out / cells are no-ops. */
+	lightGridCornerAverage(NULL, cells, 3, out);
+	TEST_ASSERT_EQUAL_INT(255, out[0]);
+	out[0] = 7;
+	lightGridCornerAverage(g, NULL, 3, out);
+	TEST_ASSERT_EQUAL_INT(7, out[0]);
+	lightGridCornerAverage(g, cells, 3, NULL);	/* no-op */
+	/* ownIndex out of range clamps to 0 (all-solid fallback (0,0,0)). */
+	lightGridCornerAverage(g, cells, 9, out);
+	TEST_ASSERT_EQUAL_INT(LIGHT_AMBIENT, out[0]);
+	destroyLightGrid(g);
+}
+
+/* Corner average mixes distinct per-cell factors with half-up rounding. */
+static void test_corner_average_mixed(void)
+{
+	LightGrid *g = lightGridCreate(2, 1, 2);
+	uint8_t out[3];
+	const int cells[4][3] = {
+		{ 0, 1, 0 }, { 1, 1, 0 }, { 0, 0, 0 }, { 1, 0, 0 }
+	};
+
+	TEST_ASSERT_NOT_NULL(g);
+	lightGridSeedPoint(g, 0.5f, 1.5f, 0.5f, 255.0f, 255.0f, 255.0f, 4.0f);
+	lightGridPropagateSolid(g, NULL);
+	/* Factors: (0,1,0)=151, (1,1,0)=136, (0,0,0)=136, (1,0,0)=122. */
+	lightGridCornerAverage(g, cells, 0, out);
+	TEST_ASSERT_EQUAL_INT(136, out[0]);
+	destroyLightGrid(g);
+}
+
+/* Occlusion counts solid cells, excluding the own cell; y < 0 counts solid. */
+static void test_corner_occlusion(void)
+{
+	LightGrid *g = lightGridCreate(4, 1, 1);
+	uint8_t mask[4];
+	const int cells[4][3] = {
+		{ 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 }, { 3, 0, 0 }
+	};
+	const int below[4][3] = {
+		{ 0, -1, 0 }, { 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 }
+	};
+
+	TEST_ASSERT_NOT_NULL(g);
+	memset(mask, 0, sizeof(mask));
+	lightGridPropagateSolid(g, mask);
+	TEST_ASSERT_EQUAL_INT(0, lightGridCornerOcclusion(g, cells, 3));
+
+	setSolid(mask, 4, 1, 1, 0, 0);
+	setSolid(mask, 4, 1, 2, 0, 0);
+	lightGridPropagateSolid(g, mask);
+	/* own=3 -> count cells 0,1,2 -> two solid. */
+	TEST_ASSERT_EQUAL_INT(2, lightGridCornerOcclusion(g, cells, 3));
+	/* own=1 excludes (1,0,0) -> only (2,0,0) solid. */
+	TEST_ASSERT_EQUAL_INT(1, lightGridCornerOcclusion(g, cells, 1));
+
+	/* y < 0 is below the world and counts solid: own=1 counts cells 0,2,3
+	 * -> (0,-1,0) ground, (1,0,0) and (2,0,0) masked solid = 3. */
+	TEST_ASSERT_EQUAL_INT(3, lightGridCornerOcclusion(g, below, 1));
+
+	/* NULL grid / cells -> 0; ownIndex out of range clamps to 0. */
+	TEST_ASSERT_EQUAL_INT(0, lightGridCornerOcclusion(NULL, cells, 0));
+	TEST_ASSERT_EQUAL_INT(0, lightGridCornerOcclusion(g, NULL, 0));
+	TEST_ASSERT_EQUAL_INT(2, lightGridCornerOcclusion(g, cells, 9));
+	destroyLightGrid(g);
+}
+
+static void test_ao_percent_table(void)
+{
+	TEST_ASSERT_EQUAL_INT(100, lightGridAoPercent(0));
+	TEST_ASSERT_EQUAL_INT(82, lightGridAoPercent(1));
+	TEST_ASSERT_EQUAL_INT(65, lightGridAoPercent(2));
+	TEST_ASSERT_EQUAL_INT(48, lightGridAoPercent(3));
+	TEST_ASSERT_EQUAL_INT(48, lightGridAoPercent(9));
+	TEST_ASSERT_EQUAL_INT(100, lightGridAoPercent(-1));
+}
+
 void run_test_lightgrid(void);
 
 void run_test_lightgrid(void)
 {
+	RUN_TEST(test_solid_at);
+	RUN_TEST(test_corner_average);
+	RUN_TEST(test_corner_average_mixed);
+	RUN_TEST(test_corner_occlusion);
+	RUN_TEST(test_ao_percent_table);
 	RUN_TEST(test_point_attenuation_rings);
 	RUN_TEST(test_per_channel_independence);
 	RUN_TEST(test_max_merge);

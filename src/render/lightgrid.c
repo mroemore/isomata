@@ -202,6 +202,90 @@ void lightGridFactorAt(const LightGrid *grid, int x, int y, int z,
 	}
 }
 
+/* --- smooth per-corner sampling and ambient occlusion (T15) ------------ */
+
+bool lightGridSolidAt(const LightGrid *grid, int x, int y, int z)
+{
+	if (grid == NULL)
+		return false;
+	if (y < 0)
+		return true;	/* below the world: ground */
+	if (!cellInBounds(grid, x, y, z))
+		return false;	/* x/z out of bounds or above the grid: sky */
+	return grid->solid[cellIndex(grid, x, y, z)] != 0;
+}
+
+int lightGridAoPercent(int count)
+{
+	if (count <= 0)
+		return LIGHT_AO_PCT_0;
+	if (count == 1)
+		return LIGHT_AO_PCT_1;
+	if (count == 2)
+		return LIGHT_AO_PCT_2;
+	return LIGHT_AO_PCT_3;
+}
+
+void lightGridCornerAverage(const LightGrid *grid, const int cells[4][3],
+			    int ownIndex, uint8_t out[3])
+{
+	int sum[3] = { 0, 0, 0 };
+	int n = 0;
+	int i;
+	int c;
+	uint8_t f[3];
+
+	if (out == NULL || cells == NULL)
+		return;
+	if (grid == NULL) {
+		out[0] = 255;
+		out[1] = 255;
+		out[2] = 255;
+		return;
+	}
+	if (ownIndex < 0 || ownIndex > 3)
+		ownIndex = 0;
+	for (i = 0; i < 4; i++) {
+		if (lightGridSolidAt(grid, cells[i][0], cells[i][1],
+				     cells[i][2]))
+			continue;	/* solid: not a light source */
+		lightGridFactorAt(grid, cells[i][0], cells[i][1], cells[i][2],
+				  f);
+		for (c = 0; c < 3; c++)
+			sum[c] += f[c];
+		n++;
+	}
+	if (n == 0) {
+		/* Every cell solid: fall back to the corner's own air cell (its
+		 * stored value is what a solid cell would read). */
+		lightGridFactorAt(grid, cells[ownIndex][0], cells[ownIndex][1],
+				  cells[ownIndex][2], out);
+		return;
+	}
+	for (c = 0; c < 3; c++)
+		out[c] = (uint8_t)((sum[c] + n / 2) / n);
+}
+
+int lightGridCornerOcclusion(const LightGrid *grid, const int cells[4][3],
+			     int ownIndex)
+{
+	int count = 0;
+	int i;
+
+	if (grid == NULL || cells == NULL)
+		return 0;
+	if (ownIndex < 0 || ownIndex > 3)
+		ownIndex = 0;
+	for (i = 0; i < 4; i++) {
+		if (i == ownIndex)
+			continue;
+		if (lightGridSolidAt(grid, cells[i][0], cells[i][1],
+				     cells[i][2]))
+			count++;
+	}
+	return count;
+}
+
 /* --- bucket flood ------------------------------------------------------ */
 
 static void bucketReset(LightGrid *g)

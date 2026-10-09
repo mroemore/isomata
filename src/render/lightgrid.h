@@ -55,6 +55,7 @@
 
 #include "render/voxmap.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -70,6 +71,15 @@
  * skylight. 100 = no gain (sky saturates). The ASCII heightmap has no
  * overhangs, so sky is uniform and this gain IS the daylight level. */
 #define LIGHT_SKY_GAIN_PCT 30
+
+/* Per-corner ambient-occlusion multipliers, percent (100 = no darkening).
+ * Indexed by the number of solid in-plane neighbours a corner has (0..3); the
+ * classic voxel staircase. Applied only on the smooth path (the flat path is
+ * byte-identical to T14). Tuned for the demo in T15. */
+#define LIGHT_AO_PCT_0 100
+#define LIGHT_AO_PCT_1 82
+#define LIGHT_AO_PCT_2 65
+#define LIGHT_AO_PCT_3 48
 
 /* Dimension / volume guards: a bad size must fail cleanly rather than force a
  * huge allocation. The map is at most 256 x 256 x 10, so these are generous. */
@@ -118,6 +128,44 @@ void lightGridAt(const LightGrid *grid, int x, int y, int z, uint8_t out[3]);
  * no-op. */
 void lightGridFactorAt(const LightGrid *grid, int x, int y, int z,
 		       uint8_t out[3]);
+
+/* --- smooth per-corner sampling and ambient occlusion (T15) ------------- */
+
+/*
+ * The smooth path replaces the flat single-sample-per-face factor with a
+ * per-corner average over a 2x2 block of cells, plus a per-corner occlusion
+ * multiplier. The caller (voxmap.c emission) builds the 4 cell coordinates for
+ * a corner; the helpers below are face-agnostic so they stay pure and exactly
+ * testable.
+ *
+ * SOLIDITY. lightGridSolidAt reports the grid's solid volume for an in-bounds
+ * cell. Out of bounds: y < 0 is BELOW the world and counts as solid (so the
+ * base of a wall meeting lower ground gets a contact shadow); every other out-
+ * of-bounds cell is open sky / air (matching lightGridFactorAt, which returns
+ * the open-sky factor there). A NULL grid is all air.
+ */
+
+/* Solidity of a cell for the smooth/AO passes (see the note above). */
+bool lightGridSolidAt(const LightGrid *grid, int x, int y, int z);
+
+/* Smooth corner light: the per-channel average of lightGridFactorAt over the
+ * air cells among `cells` (4 (x, y, z) triples); a solid cell is skipped. When
+ * all four are solid, the average falls back to cells[ownIndex] (the corner's
+ * own air cell). `ownIndex` outside 0..3 is clamped to 0. A NULL grid writes
+ * {255, 255, 255} (lighting disabled). A NULL `cells` or `out` is a no-op. The
+ * average rounds to nearest, half up: (sum + n/2) / n. */
+void lightGridCornerAverage(const LightGrid *grid, const int cells[4][3],
+			    int ownIndex, uint8_t out[3]);
+
+/* Per-corner occlusion: the count (0..3) of `cells` entries that are solid
+ * (lightGridSolidAt), excluding cells[ownIndex]. `ownIndex` outside 0..3 is
+ * clamped to 0. A NULL grid or `cells` returns 0. */
+int lightGridCornerOcclusion(const LightGrid *grid, const int cells[4][3],
+			     int ownIndex);
+
+/* AO multiplier percent for an occupancy count: 0 -> LIGHT_AO_PCT_0, 1..2 the
+ * middle constants, >= 3 -> LIGHT_AO_PCT_3, <= 0 -> LIGHT_AO_PCT_0. */
+int lightGridAoPercent(int count);
 
 /* Flood-fill the sky and block grids. The solid volume is rebuilt from `map`
  * (NULL = every cell air). Existing block seeds are kept and merged with the
