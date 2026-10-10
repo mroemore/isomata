@@ -69,6 +69,7 @@ void run_test_frame(void);
 void run_test_level_controls(void);
 void run_test_easing(void);
 void run_test_entities(void);
+void run_test_fsm(void);
 void run_test_ui_bridge(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
@@ -103,6 +104,7 @@ int main(void)
 	run_test_level_controls();
 	run_test_easing();
 	run_test_entities();
+	run_test_fsm();
 	run_test_ui_bridge();
 	run_test_ui_scale();
 	run_test_element();

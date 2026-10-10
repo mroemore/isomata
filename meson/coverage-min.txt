@@ -244,3 +244,9 @@ src/render/lightgrid.c		97
 # the unknown-kind fallbacks). Both modules hold at 100.
 src/entities/easing.c		100
 src/entities/entities.c		100
+
+# T21: the executor FSM (pure, twin suite). Every branch is closed (the full
+# transition table walked cell by cell, the START/BEGIN_ACTIVITY/WAIT payloads,
+# illegal + out-of-range no-ops, the name/validity helpers, NULL-safe entry
+# points); measured 100.
+src/ai/fsm.c			100
