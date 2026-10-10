@@ -221,6 +221,41 @@ Design (controller, 2026-10-09 — to be detailed in the task briefs):
 
 ## Item 3 — Entities
 
+### 3a T19 — entity core (DONE): registry, tile movement, easing tween
+### 3b T20 — path debug overlay (DONE)
+
+### 3c AI / simulation design (user acceptance bar, 2026-10-10)
+
+Target: a laundromat sim where customers arrive with a goal (leave with
+clean, dry clothes), pick machines by heuristic (closest; closest more than
+K tiles from an occupied machine; extensible), walk there, re-plan if a
+machine is broken/occupied, pay, load, idle, collect, dry, unload, leave.
+"Robust enough to support that flexibly and reusably = good enough."
+
+Three layers (no GOAP needed — plan templates + re-planning):
+
+1. **Interactables** (T22): objects with kind (washer/dryer), tile, claim
+   state (free/claimed/busy/broken), fee, and a **phase script** (data:
+   pay/load/run/wait with durations). Exclusive claim by one entity; a
+   completed phase wakes its owner; broken machines refuse claims; release
+   on owner interruption.
+2. **Executor FSM** (T21): entity states Idle / MovingTo(target) /
+   Acting(activity step) / Waiting(reason); events arrived, denied,
+   phaseDone, interrupted, timeout; actions moveTo/bindActivity/waitFor/
+   finishGoal. Pure, table-driven; the concrete actions run in the sim glue.
+3. **The brain** (T23): goal (clean+dry garments — garment state carried by
+   the entity: dirty → washed → dried); parameterized **plan templates**
+   (goal → tasks: useMachine(washer) → useMachine(dryer) → leave), each task
+   resolved at execution: candidate set (kind + usable hard filters) →
+   **selection policy** (named heuristics; default = closest + penalty when
+   within K of an occupied machine) → bind + claim → execute → release.
+   Any failure (broken on arrival, claim race lost) → unbind, re-select
+   excluding failures; none left → wait/retry/abort policy. All pure.
+   Sim log + debug overlay show the chosen target/task/reason.
+
+Assumptions to keep: entities do not collide on tiles (v1; no avoidance);
+waiting = idle in place (no multi-tasking); money = a counter + PAY steps.
+
 ### User notes (captured 2026-10-09)
 
 - AI movement is **tile based on the backend**.
