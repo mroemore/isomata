@@ -46,3 +46,6 @@ subprojects/SDL3_ttf-*/
 .slim/worktrees/
 .slim/worktrees.json
 # END oh-my-opencode-slim worktrees
+
+# Superpowers agent worktrees
+.worktrees/
