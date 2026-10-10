@@ -477,7 +477,6 @@ static void levelSmokeSendToMachine(LevelState *st, SmokeDriver *d)
 	if (m != NULL)
 		levelSmokePathTo(st, d, m->tileX, m->tileZ);
 }
-
 /* The primary's fixed scripted cycle against washer 0. */
 static void levelSmokePrimary(LevelState *st, SmokeDriver *d, float dt)
 {
@@ -875,7 +874,7 @@ static bool level_init(void *self, App *app)
 	levelBuildLights(st);
 	levelBuildEntities(st, spriteMaterial);
 	levelBuildMachines(st);
-	levelBuildSmoke(st);
+	levelBuildSmoke(st);		/* TEMPORARY T22 smoke driver (T23 deletes) */
 
 	/* UI root: a zero-padding pane is the layout root the toast and the
 	 * controls hang off. The pane itself is never drawn (its draw() paints
@@ -997,7 +996,8 @@ static void level_update(void *self, App *app, float dt)
 	entitiesUpdate(&st->entities, dt);
 	levelUpdateWalkers(st, dt);
 	/* Advance the T22 machines, log their state-change wakes and feed the
-	 * temporary smoke driver (which reacts to the PHASE_DONE wake). */
+	 * TEMPORARY T22 smoke driver (which reacts to the PHASE_DONE wake). T23
+	 * deletes the levelUpdateSmoke line and the levelSmoke* block. */
 	{
 		int nw = machinesUpdate(&st->machines, dt, st->wakes,
 					LEVEL_MACHINE_WAKE_MAX);
