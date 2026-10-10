@@ -15,7 +15,7 @@ void machinesInit(MachineRegistry *reg)
 	if (reg == NULL)
 		return;
 	for (int i = 0; i < MACHINE_MAX; i++) {
-		reg->slots[i] = (Machine){ 0 };
+		reg->slots[i] = (Machine){ .owner = MACHINE_NO_OWNER };
 		reg->alive[i] = false;
 	}
 	reg->liveCount = 0;
