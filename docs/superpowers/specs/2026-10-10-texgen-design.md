@@ -224,26 +224,30 @@ the font and audio assets.
 ```
 tools/texgen/
   README.md
-  config.json          # defaults: comfy url, model, sizes, palette path, viewer
-  texgen               # executable entry point (python shebang, argparse);
-                       # the package is a directory named texgen/, so the entry
-                       # point must NOT be texgen.py (import collision)
-  texgen/              # package
-    __init__.py
-    run.py             # run directory, run.json, staleness
-    comfy.py           # ComfyUI client + service lifecycle
-    stages.py          # gen/inpaint/crop/pixelate/palette/assign/export
-    palette.py         # dotty JSON palette reader
-    imops.py           # Pillow ops: crop, resize, quantise, preview, montage
-    manifest.py        # materials.txt parse/validate/upsert
-    prov.py            # provenance sidecar writer
-    review.py          # feh gate + single-key prompt loop
+  config.json          # defaults: comfy url/dir, model, sizes, palette path, viewer
+  texgen               # executable entry point (python shebang; puts its own
+                       # directory on sys.path, then calls cli.main())
+  cli.py               # argparse subcommands
+  run.py               # run directory, run.json, staleness, latest run
+  comfy.py             # ComfyUI client + service lifecycle
+  stages.py            # gen/inpaint/crop/pixelate/palette/assign/export/requantise
+  palette.py           # dotty JSON palette reader
+  imops.py             # Pillow ops: crop, resize, quantise, preview, montage
+  manifest.py          # materials.txt parse/validate/upsert/atomic write
+  prov.py              # provenance sidecar writer
+  review.py            # feh gate + single-key prompt loop
   workflows/
     txt2img.json
     inpaint.json
     edit.json
-  tests/               # stdlib unittest, pure stages only
+  tests/               # stdlib unittest, pure units + a stub HTTP server
 ```
+
+Flat modules on purpose: the tool directory is its own import root, so an
+entry point named `texgen` and the modules beside it can never shadow each
+other (a `texgen.py` next to a `texgen/` package would).
+
+Tests run with `python3 -m unittest discover -s tools/texgen/tests -t tools/texgen`.
 
 - Runtime dependencies: **Python 3 + Pillow only** (both present on the
   workstation; Pillow 12.2.0). Everything else is stdlib (`urllib`, `json`,
