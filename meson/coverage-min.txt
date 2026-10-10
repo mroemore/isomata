@@ -255,3 +255,10 @@ src/ai/fsm.c			100
 # output and node caps -> TOO_LONG, run-to-run determinism, the open-node
 # g-improvement witness map, NULL outLen and a negative cap); measured 100.
 src/ai/pathfind.c		100
+# T21: the entity navigation glue (pure, twin suite). entityFollowPath queues a
+# validated route; entityPathTo computes with A* and REPLACES the route
+# (dropping the queue, keeping the in-flight segment, pathing from its target).
+# The lone untaken arm is entityPathTo's entityWalkPath-failure fail-safe: a
+# findPath result is always a valid, in-capacity 4-adjacent walkable chain, so
+# entityWalkPath cannot reject it (dead by construction). Measured 11/12.
+src/ai/nav.c			91

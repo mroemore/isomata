@@ -55,6 +55,7 @@ set(ISOMATA_SRC
 	../../../src/entities/entities.c
 	../../../src/ai/fsm.c
 	../../../src/ai/pathfind.c
+	../../../src/ai/nav.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c
 	../../../src/ui/layout.c
