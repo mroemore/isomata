@@ -72,6 +72,7 @@ void run_test_entities(void);
 void run_test_fsm(void);
 void run_test_pathfind(void);
 void run_test_nav(void);
+void run_test_machines(void);
 void run_test_ui_bridge(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
@@ -109,6 +110,7 @@ int main(void)
 	run_test_fsm();
 	run_test_pathfind();
 	run_test_nav();
+	run_test_machines();
 	run_test_ui_bridge();
 	run_test_ui_scale();
 	run_test_element();

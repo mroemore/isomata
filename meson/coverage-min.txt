@@ -262,3 +262,12 @@ src/ai/pathfind.c		100
 # findPath result is always a valid, in-capacity 4-adjacent walkable chain, so
 # entityWalkPath cannot reject it (dead by construction). Measured 11/12.
 src/ai/nav.c			91
+
+# T22: the interactable-machine layer (pure, twin suite). Every branch is
+# closed (the full state machine; the FREE-only claim / exclusivity rule
+# including the same-tick double-claim and invalid owners; run completion at
+# the exact t == runSecs boundary; the PHASE_DONE / INTERRUPTED wakes
+# including the cap-as-prefix and the no-owner break; release from every
+# state; repair; the registry capacity / iteration / dead-slot guards;
+# NULL-safety and run-to-run determinism); measured 92/92 = 100.
+src/sim/machines.c		100
