@@ -67,6 +67,7 @@ void run_test_lightgrid(void);
 void run_test_sprites(void);
 void run_test_frame(void);
 void run_test_level_controls(void);
+void run_test_easing(void);
 void run_test_ui_bridge(void);
 void run_test_ui_scale(void);
 void run_test_element(void);
@@ -99,6 +100,7 @@ int main(void)
 	run_test_sprites();
 	run_test_frame();
 	run_test_level_controls();
+	run_test_easing();
 	run_test_ui_bridge();
 	run_test_ui_scale();
 	run_test_element();
