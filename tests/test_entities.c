@@ -697,6 +697,9 @@ static void test_path_append_variants(void)
 	TEST_ASSERT_EQUAL_INT(1, e->pathCount);
 	TEST_ASSERT_TRUE(entityWalkPath(e, moreStep, 1));
 	TEST_ASSERT_EQUAL_INT(2, e->pathCount);
+	/* The origin is retained when appending to an active path. */
+	TEST_ASSERT_EQUAL_INT(0, e->pathStartX);
+	TEST_ASSERT_EQUAL_INT(1, e->pathStartZ);
 
 	/* Append to a bare in-flight segment (empty queue): the reference tile
 	 * is the segment target. */
