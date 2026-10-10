@@ -3526,7 +3526,8 @@ void run_test_voxmap(void)
 	RUN_TEST(test_surface_y_heightmap);
 	RUN_TEST(test_surface_y_shapes);
 	RUN_TEST(test_surface_y_topmost_wins);
-	RUN_TEST(test_surface_y_height_zero_ground);	RUN_TEST(test_smooth_bottom_face);
+	RUN_TEST(test_surface_y_height_zero_ground);
+	RUN_TEST(test_smooth_bottom_face);
 	RUN_TEST(test_separator_line_variants);
 	RUN_TEST(test_directive_leading_whitespace);
 	RUN_TEST(test_legend_many_tokens);

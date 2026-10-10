@@ -276,10 +276,16 @@ bool entityWalkPath(Entity *e, const int (*tiles)[2], int n)
 	int refZ;
 	int i;
 
-	if (e == NULL || e->map == NULL || tiles == NULL)
+	if (e == NULL || e->map == NULL || tiles == NULL) {
+		fprintf(stderr, "entities: walk path rejected (null entity/map/tiles)\n");
 		return false;
-	if (n < 0 || n > ENTITY_MAX_PATH)
+	}
+	if (n < 0 || n > ENTITY_MAX_PATH) {
+		fprintf(stderr,
+			"entities: walk path of %d rejected (max %d)\n", n,
+			ENTITY_MAX_PATH);
 		return false;
+	}
 	if (n == 0)
 		return true;
 	if (e->pathHead + e->pathCount + n > ENTITY_MAX_PATH) {
