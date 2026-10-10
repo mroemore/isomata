@@ -23,6 +23,7 @@
 #include "achievement.h"
 #include "app.h"
 #include "audio/audio.h"
+#include "entities/entities.h"
 #include "events.h"
 #include "input/input.h"
 #include "platform/platform.h"
@@ -48,11 +49,38 @@
 #include <SDL3/SDL.h>
 
 #define LEVEL_DRAWLIST_CAPACITY 4096
-#define LEVEL_SPRITE_COUNT 3
+#define LEVEL_SPRITE_MAX 8
+#define LEVEL_WALKER_COUNT 3
 
 #define LEVEL_TOAST_W 300
 #define LEVEL_TOAST_H 48
 #define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
+
+/* Demo walk paths (T19): destination waypoints, each a 4-neighbour of the
+ * previous one. Every tile is open plateau or tower-top ground so the demo
+ * reads clearly and never routes through the room (x4-8, z9-12, roof) or a
+ * tower side:
+ *   A paces a 3-tile line on z=3 (x10..12): the (11,3)->(12,3) step drops a
+ *     full unit (stone plateau 2.0 -> grass 1.0) and back, so the tween's y
+ *     follow is visible;
+ *   B paces a 4-tile line on z=8 (x10..13), all flat (contrast linear easing);
+ *   C loops the 2x2 tower top (x6-7, z7-8) at height 9. */
+static const int DEMO_PATH_A[4][2] = {
+	{ 11, 3 }, { 12, 3 }, { 11, 3 }, { 10, 3 },
+};
+static const int DEMO_PATH_B[6][2] = {
+	{ 11, 8 }, { 12, 8 }, { 13, 8 }, { 12, 8 }, { 11, 8 }, { 10, 8 },
+};
+static const int DEMO_PATH_C[4][2] = {
+	{ 7, 7 }, { 7, 8 }, { 6, 8 }, { 6, 7 },
+};
+
+/* A demo entity plus the preset path it repeats once it runs out. */
+typedef struct DemoWalker {
+	EntityHandle handle;
+	const int (*path)[2];
+	int pathLen;
+} DemoWalker;
 
 /* The four controls (ROT L / ROT R / DEBUG / RESET) and their layout rule
  * live in the pure level_controls module so they are headless-testable;
@@ -63,8 +91,11 @@ typedef struct LevelState {
 	LightGrid *lights;	/* baked from the map's emitters + sky */
 	Camera3D camera;
 	DrawList list;
-	SpriteEntity sprites[LEVEL_SPRITE_COUNT];
+	SpriteEntity sprites[LEVEL_SPRITE_MAX];
 	size_t spriteCount;
+	EntityRegistry entities;	/* the demo critters (T19) */
+	DemoWalker walkers[LEVEL_WALKER_COUNT];
+	int walkerCount;
 	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
@@ -76,18 +107,108 @@ typedef struct LevelState {
 	LevelControls controls;	/* rotate x2 / debug / reset icon buttons */
 } LevelState;
 
-/* The demo's three billboards (Task 8): two on the plateau, one on the
- * tower top, so painter order is visible against the terrain. They sample the
- * manifest's "sprite" material (an alpha-edged texture). */
-static void levelBuildSprites(LevelState *st, int16_t material)
+/* Create the demo critters (T19): three registry entities with preset walk
+ * paths on the plateau / tower top. Each one's billboard samples the
+ * manifest's "sprite" material (an alpha-edged texture). The path is queued
+ * immediately so the entity is moving on the first frame. */
+static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 {
-	st->sprites[0] = (SpriteEntity){ 6.5f, 2.0f, 9.5f, 1.2f, 1.8f,
-					 DRAW_TINT(255, 255, 255, 255), material };
-	st->sprites[1] = (SpriteEntity){ 11.5f, 2.0f, 10.5f, 1.2f, 1.8f,
-					 DRAW_TINT(255, 255, 255, 255), material };
-	st->sprites[2] = (SpriteEntity){ 7.0f, 9.0f, 8.0f, 1.5f, 2.2f,
-					 DRAW_TINT(255, 255, 255, 255), material };
-	st->spriteCount = LEVEL_SPRITE_COUNT;
+	static const struct {
+		int startX;
+		int startZ;
+		const int (*path)[2];
+		int pathLen;
+		float speed;
+		EasingFn easing;
+		float width;
+		float height;
+	} demo[LEVEL_WALKER_COUNT] = {
+		{ 10, 3, DEMO_PATH_A, 4, 1.5f, EASE_IN_OUT, 1.2f, 1.8f },
+		{ 10, 8, DEMO_PATH_B, 6, 1.8f, EASE_LINEAR, 1.2f, 1.8f },
+		{ 6, 7, DEMO_PATH_C, 4, 2.5f, EASE_OUT, 1.5f, 2.2f },
+	};
+	int i;
+
+	entitiesInit(&st->entities, st->map);
+	st->walkerCount = 0;
+	for (i = 0; i < LEVEL_WALKER_COUNT; i++) {
+		EntityHandle h = entityCreate(&st->entities);
+		Entity *e = entityGet(&st->entities, h);
+
+		if (e == NULL ||
+		    !entityPlace(e, demo[i].startX, demo[i].startZ)) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: demo entity %d placement failed",
+				     i);
+			continue;
+		}
+		e->speed = demo[i].speed;
+		e->easing = demo[i].easing;
+		e->animated = true;
+		entitySetSprite(e, demo[i].width, demo[i].height,
+				DRAW_TINT(255, 255, 255, 255), spriteMaterial);
+		if (!entityWalkPath(e, demo[i].path, demo[i].pathLen))
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: demo entity %d path rejected",
+				     i);
+		st->walkers[st->walkerCount].handle = h;
+		st->walkers[st->walkerCount].path = demo[i].path;
+		st->walkers[st->walkerCount].pathLen = demo[i].pathLen;
+		st->walkerCount++;
+		SDL_Log("isomata: demo entity %d created at (%d,%d), path %d tiles",
+			h, demo[i].startX, demo[i].startZ, demo[i].pathLen);
+	}
+}
+
+/* Log arrivals (opt-in ISO_LOG=debug) and re-queue a walker's preset path
+ * once it runs out, so the demo loops. */
+static void levelUpdateWalkers(LevelState *st)
+{
+	int i;
+
+	for (i = 0; i < st->walkerCount; i++) {
+		Entity *e = entityGet(&st->entities, st->walkers[i].handle);
+
+		if (e == NULL)
+			continue;
+		if (e->arrived)
+			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+				     "isomata: demo entity %d arrived (%d,%d) y %.2f",
+				     st->walkers[i].handle, e->tileX, e->tileZ,
+				     e->y);
+		if (e->moving || e->pathCount > 0)
+			continue;
+		if (!entityWalkPath(e, st->walkers[i].path,
+				    st->walkers[i].pathLen))
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: demo walker %d re-path failed",
+				     i);
+	}
+}
+
+/* Derive the billboard array from the registry each frame (position + sprite
+ * link). Order is registry slot order, which is stable. */
+static void levelSyncSprites(LevelState *st)
+{
+	EntityHandle h;
+	size_t n = 0;
+
+	for (h = entityFirst(&st->entities); h != ENTITY_INVALID;
+	     h = entityNext(&st->entities, h)) {
+		const Entity *e = entityGet(&st->entities, h);
+
+		if (e == NULL || n >= LEVEL_SPRITE_MAX)
+			break;
+		st->sprites[n].x = e->x;
+		st->sprites[n].y = e->y;
+		st->sprites[n].z = e->z;
+		st->sprites[n].width = e->width;
+		st->sprites[n].height = e->height;
+		st->sprites[n].tint = e->tint;
+		st->sprites[n].material = e->material;
+		n++;
+	}
+	st->spriteCount = n;
 }
 
 static TextStyle levelStyle(const App *app)
@@ -244,7 +365,6 @@ static bool level_init(void *self, App *app)
 	 * fallback regions. */
 	st->materials = gpu != NULL ? gpuBackendMaterials(gpu) : NULL;
 	spriteMaterial = (int16_t)materialIdByName(st->materials, "sprite");
-	levelBuildSprites(st, spriteMaterial);
 
 	/* Load the demo map through SDL I/O so Android APK assets resolve. The
 	 * PNG slice directory (T13b) is preferred; the ASCII demo.txt is the
@@ -284,6 +404,7 @@ static bool level_init(void *self, App *app)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");
 	levelBuildLights(st);
+	levelBuildEntities(st, spriteMaterial);
 
 	/* UI root: a zero-padding pane is the layout root the toast and the
 	 * controls hang off. The pane itself is never drawn (its draw() paints
@@ -401,6 +522,9 @@ static void level_update(void *self, App *app, float dt)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
+	/* Advance the demo critters and loop their preset paths (T19). */
+	entitiesUpdate(&st->entities, dt);
+	levelUpdateWalkers(st);
 	toastUpdate(st->toast, dt);
 }
 
@@ -484,6 +608,10 @@ static void level_draw(void *self, App *app)
 			if (st->lightDebug &&
 			    gpuBackendDebugUV(gpu, debugUV))
 				opts.debugUV = debugUV;
+			/* Billboards follow the registry (position + tint);
+			 * they still go through the sprite path + flat light
+			 * inside buildFrameDrawList. */
+			levelSyncSprites(st);
 			buildFrameDrawList(st->map, st->materials, st->lights,
 					   st->sprites, st->spriteCount,
 					   &st->camera, &st->list, &opts);
