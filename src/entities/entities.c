@@ -192,6 +192,8 @@ bool entityPlace(Entity *e, int tileX, int tileZ)
 	e->arrived = false;
 	e->pathHead = 0;
 	e->pathCount = 0;
+	e->pathStartX = 0;
+	e->pathStartZ = 0;
 	e->tileX = tileX;
 	e->tileZ = tileZ;
 	e->x = (float)tileX + 0.5f;
@@ -266,6 +268,10 @@ bool entityMoveTo(Entity *e, int tx, int tz)
 		return false;
 	}
 	e->arrived = false;
+	/* T20: this move begins here; the start marker stays put across the
+	 * (single) segment. */
+	e->pathStartX = e->tileX;
+	e->pathStartZ = e->tileZ;
 	entityBeginSegment(e, tx, tz);
 	return true;
 }
@@ -335,6 +341,10 @@ bool entityWalkPath(Entity *e, const int (*tiles)[2], int n)
 		int nx = e->path[e->pathHead][0];
 		int nz = e->path[e->pathHead][1];
 
+		/* T20: a path issued while idle begins at the tile we stand on;
+		 * appending to an active move/path keeps the original start. */
+		e->pathStartX = e->tileX;
+		e->pathStartZ = e->tileZ;
 		e->pathHead++;
 		e->pathCount--;
 		if (e->pathCount == 0)
@@ -386,5 +396,86 @@ void entitiesUpdate(EntityRegistry *reg, float dt)
 			}
 		}
 		entityUpdatePosition(e);
+	}
+}
+
+/* --- T20 path-debug overlay -------------------------------------------- */
+
+/* Append one marker if the buffer has room; silently drops it when full, so
+ * the overlay is a bounded, deterministic prefix and can never overflow. */
+static void markerPush(EntityDebugMarker *out, int cap, int *n, int x, int z,
+		       uint8_t kind)
+{
+	if (*n >= cap)
+		return;
+	out[*n].x = x;
+	out[*n].z = z;
+	out[*n].kind = kind;
+	(*n)++;
+}
+
+int entitiesDebugMarkers(const EntityRegistry *reg, EntityDebugMarker *out,
+			 int cap)
+{
+	EntityHandle h;
+	int n = 0;
+
+	if (reg == NULL || out == NULL || cap <= 0)
+		return 0;
+
+	for (h = entityFirst(reg); h != ENTITY_INVALID;
+	     h = entityNext(reg, h)) {
+		const Entity *e = &reg->slots[h];	/* live by iteration */
+		int i;
+
+		if (e->pathCount == 0 && !e->moving)
+			continue;			/* idle: no markers */
+		markerPush(out, cap, &n, e->pathStartX, e->pathStartZ,
+			   (uint8_t)ENTITY_DEBUG_START);
+		/* The tile being walked toward is the first path marker. */
+		if (e->moving)
+			markerPush(out, cap, &n, e->toX, e->toZ,
+				   (uint8_t)ENTITY_DEBUG_PATH);
+		for (i = 0; i < e->pathCount; i++)
+			markerPush(out, cap, &n, e->path[e->pathHead + i][0],
+				   e->path[e->pathHead + i][1],
+				   (uint8_t)ENTITY_DEBUG_PATH);
+		/* Destination: the final queued waypoint, else the segment
+		 * target of a bare far move. */
+		if (e->pathCount > 0)
+			markerPush(out, cap, &n,
+				   e->path[e->pathHead + e->pathCount - 1][0],
+				   e->path[e->pathHead + e->pathCount - 1][1],
+				   (uint8_t)ENTITY_DEBUG_DEST);
+		else
+			markerPush(out, cap, &n, e->toX, e->toZ,
+				   (uint8_t)ENTITY_DEBUG_DEST);
+	}
+	return n;
+}
+
+uint32_t entityDebugMarkerTint(int kind)
+{
+	switch (kind) {
+	case ENTITY_DEBUG_START:
+		return ENTITY_DEBUG_TINT_START;
+	case ENTITY_DEBUG_DEST:
+		return ENTITY_DEBUG_TINT_DEST;
+	case ENTITY_DEBUG_PATH:
+	default:
+		return ENTITY_DEBUG_TINT_PATH;
+	}
+}
+
+float entityDebugMarkerWidth(int kind)
+{
+	switch (kind) {
+	case ENTITY_DEBUG_START:
+		return ENTITY_DEBUG_MARKER_START_WIDTH;
+	case ENTITY_DEBUG_DEST:
+		return ENTITY_DEBUG_MARKER_DEST_WIDTH;
+	case ENTITY_DEBUG_PATH:
+	default:
+		return ENTITY_DEBUG_MARKER_PATH_WIDTH;
 	}
 }

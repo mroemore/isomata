@@ -51,6 +51,15 @@ void buildSpriteQuad(const SpriteEntity *sprite, const Camera3D *camera,
 bool appendSprite(DrawList *list, const SpriteEntity *sprite,
 		  const Camera3D *camera, const MaterialTable *materials);
 
+/* Append the sprite billed with an explicit 4-corner UV quad (canonical corner
+ * order, matching SpriteEntity's bottom-left..top-left world corners) instead
+ * of a material face, always alpha-blended. The T20 path-debug markers use it
+ * to sample the reserved white atlas cell so their tint reads as a flat
+ * colour with no material texture behind it. Returns false on a NULL sprite,
+ * NULL uv, a NULL list, or a full list. */
+bool appendSpriteUV(DrawList *list, const SpriteEntity *sprite,
+		    const Camera3D *camera, const float uv[4][2]);
+
 /* Apply the flat per-channel light factor at the sprite's base cell (the cell
  * containing its anchor) to its tint: RGB scaled by factor/255 and rounded,
  * alpha preserved. A NULL `sprite` returns 0; a NULL `lights` returns the

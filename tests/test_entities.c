@@ -709,6 +709,259 @@ static void test_path_append_variants(void)
 	destroyVoxmap(map);
 }
 
+/* ---- T20 path-debug markers ------------------------------------------- */
+
+/* Mid-segment with queue [A,B,C]: START = the path origin, PATH = the
+ * current target then each remaining waypoint, DEST = the final waypoint
+ * (which is the same tile as the last PATH marker). Order and count pinned. */
+static void test_debug_markers_mid_segment(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	static const int path[3][2] = { { 0, 0 }, { 1, 0 }, { 2, 0 } };
+	EntityDebugMarker m[8];
+	int n;
+
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_NOT_NULL(e);
+	TEST_ASSERT_TRUE(entityWalkPath(e, path, 3));
+	/* Mid-segment: (0,0) active, (1,0) and (2,0) still queued. */
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->toX);
+	TEST_ASSERT_EQUAL_INT(0, e->toZ);
+	TEST_ASSERT_EQUAL_INT(2, e->pathCount);
+
+	n = entitiesDebugMarkers(&reg, m, 8);
+	TEST_ASSERT_EQUAL_INT(5, n);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[0].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[0].x);	/* origin (0,1) */
+	TEST_ASSERT_EQUAL_INT(1, m[0].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[1].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[1].x);
+	TEST_ASSERT_EQUAL_INT(0, m[1].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[2].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[2].x);
+	TEST_ASSERT_EQUAL_INT(0, m[2].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[3].kind);
+	TEST_ASSERT_EQUAL_INT(2, m[3].x);
+	TEST_ASSERT_EQUAL_INT(0, m[3].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_DEST, m[4].kind);
+	TEST_ASSERT_EQUAL_INT(2, m[4].x);	/* final waypoint */
+	TEST_ASSERT_EQUAL_INT(0, m[4].z);
+	destroyVoxmap(map);
+}
+
+/* Idle (no path) and just-completed both yield zero markers. */
+static void test_debug_markers_idle_and_completed(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	static const int one[1][2] = { { 0, 0 } };
+	EntityDebugMarker m[4];
+
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+
+	/* Idle: no markers. */
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(&reg, m, 4));
+
+	/* A one-step path: start, the target, and the destination. */
+	e->speed = 10.0f;	/* duration 0.1 s */
+	TEST_ASSERT_TRUE(entityWalkPath(e, one, 1));
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_EQUAL_INT(3, entitiesDebugMarkers(&reg, m, 4));
+
+	entitiesUpdate(&reg, 0.1f);
+	TEST_ASSERT_TRUE(e->arrived);
+	TEST_ASSERT_FALSE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->pathCount);
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(&reg, m, 4));
+	destroyVoxmap(map);
+}
+
+/* Two entities with different paths stay independent, emitted in registry
+ * slot order (A then B). */
+static void test_debug_markers_two_entities(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *a;
+	Entity *b;
+	static const int pathA[1][2] = { { 0, 0 } };
+	static const int pathB[1][2] = { { 1, 0 } };
+	EntityDebugMarker m[8];
+	int n;
+
+	entitiesInit(&reg, map);
+	a = entityGet(&reg, makeWalker(&reg, 0, 1));
+	b = entityGet(&reg, makeWalker(&reg, 1, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(a, pathA, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(b, pathB, 1));
+
+	n = entitiesDebugMarkers(&reg, m, 8);
+	TEST_ASSERT_EQUAL_INT(6, n);
+	/* A: start(0,1), path(0,0), dest(0,0). */
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[0].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[0].x);
+	TEST_ASSERT_EQUAL_INT(1, m[0].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_DEST, m[2].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[2].x);
+	/* B: start(1,1), path(1,0), dest(1,0). */
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[3].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[3].x);
+	TEST_ASSERT_EQUAL_INT(1, m[3].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[4].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[4].x);
+	TEST_ASSERT_EQUAL_INT(0, m[4].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_DEST, m[5].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[5].x);
+	destroyVoxmap(map);
+}
+
+/* Capacity: a short buffer truncates the tail safely (never overflows), and
+ * the guard args return zero. */
+static void test_debug_markers_overflow(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	static const int path[3][2] = { { 0, 0 }, { 1, 0 }, { 2, 0 } };
+	EntityDebugMarker m[5];
+
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(e, path, 3));
+	/* Five markers total; every cap yields exactly min(cap, 5). */
+	TEST_ASSERT_EQUAL_INT(5, entitiesDebugMarkers(&reg, m, 5));
+	TEST_ASSERT_EQUAL_INT(4, entitiesDebugMarkers(&reg, m, 4));
+	TEST_ASSERT_EQUAL_INT(3, entitiesDebugMarkers(&reg, m, 3));
+	TEST_ASSERT_EQUAL_INT(2, entitiesDebugMarkers(&reg, m, 2));
+	TEST_ASSERT_EQUAL_INT(1, entitiesDebugMarkers(&reg, m, 1));
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(&reg, m, 0));
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(&reg, m, -1));
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(NULL, m, 5));
+	TEST_ASSERT_EQUAL_INT(0, entitiesDebugMarkers(&reg, NULL, 5));
+	destroyVoxmap(map);
+}
+
+/* When the buffer fills on an earlier entity, a later entity's markers are
+ * dropped wholesale (deterministic prefix, no partial interleave). */
+static void test_debug_markers_truncates_later_entities(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *a;
+	Entity *b;
+	static const int pathA[1][2] = { { 0, 0 } };
+	static const int pathB[1][2] = { { 1, 0 } };
+	EntityDebugMarker m[1];
+
+	entitiesInit(&reg, map);
+	a = entityGet(&reg, makeWalker(&reg, 0, 1));
+	b = entityGet(&reg, makeWalker(&reg, 1, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(a, pathA, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(b, pathB, 1));
+
+	/* A's start fills the single slot; B's markers are dropped. */
+	TEST_ASSERT_EQUAL_INT(1, entitiesDebugMarkers(&reg, m, 1));
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[0].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[0].x);
+	TEST_ASSERT_EQUAL_INT(1, m[0].z);
+	destroyVoxmap(map);
+}
+
+/* A bare move (segment, no queue) still overlays start/target/dest; a queue
+ * with no active segment (constructible via the public fields, not through
+ * the movement API) enumerates the queue without a current target. */
+static void test_debug_markers_move_to_and_queued_idle(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	EntityDebugMarker m[6];
+	int n;
+
+	entitiesInit(&reg, map);
+
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityMoveTo(e, 0, 0));
+	n = entitiesDebugMarkers(&reg, m, 6);
+	TEST_ASSERT_EQUAL_INT(3, n);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[0].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[0].x);
+	TEST_ASSERT_EQUAL_INT(1, m[0].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[1].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[1].x);
+	TEST_ASSERT_EQUAL_INT(0, m[1].z);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_DEST, m[2].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[2].x);
+	TEST_ASSERT_EQUAL_INT(0, m[2].z);
+
+	/* Queued but idle (hand-built state) — fresh registry so the previous
+	 * entity does not contribute. */
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	e->moving = false;
+	e->pathStartX = 0;
+	e->pathStartZ = 1;
+	e->pathHead = 0;
+	e->pathCount = 2;
+	e->path[0][0] = 0;
+	e->path[0][1] = 0;
+	e->path[1][0] = 1;
+	e->path[1][1] = 0;
+	n = entitiesDebugMarkers(&reg, m, 6);
+	TEST_ASSERT_EQUAL_INT(4, n);	/* start, two path, dest */
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_START, m[0].kind);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[1].kind);
+	TEST_ASSERT_EQUAL_INT(0, m[1].x);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_PATH, m[2].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[2].x);
+	TEST_ASSERT_EQUAL_INT(ENTITY_DEBUG_DEST, m[3].kind);
+	TEST_ASSERT_EQUAL_INT(1, m[3].x);
+	TEST_ASSERT_EQUAL_INT(0, m[3].z);
+	destroyVoxmap(map);
+}
+
+/* Kind values, tints and widths are the pinned overlay contract. */
+static void test_debug_marker_look_constants(void)
+{
+	TEST_ASSERT_EQUAL_INT(0, ENTITY_DEBUG_START);
+	TEST_ASSERT_EQUAL_INT(1, ENTITY_DEBUG_PATH);
+	TEST_ASSERT_EQUAL_INT(2, ENTITY_DEBUG_DEST);
+
+	/* cyan path, green start, red dest. */
+	TEST_ASSERT_EQUAL_UINT(0x00DCDCFFu, ENTITY_DEBUG_TINT_PATH);
+	TEST_ASSERT_EQUAL_UINT(0x3CDC50FFu, ENTITY_DEBUG_TINT_START);
+	TEST_ASSERT_EQUAL_UINT(0xE63232FFu, ENTITY_DEBUG_TINT_DEST);
+
+	TEST_ASSERT_EQUAL_UINT(ENTITY_DEBUG_TINT_PATH,
+			       entityDebugMarkerTint(ENTITY_DEBUG_PATH));
+	TEST_ASSERT_EQUAL_UINT(ENTITY_DEBUG_TINT_START,
+			       entityDebugMarkerTint(ENTITY_DEBUG_START));
+	TEST_ASSERT_EQUAL_UINT(ENTITY_DEBUG_TINT_DEST,
+			       entityDebugMarkerTint(ENTITY_DEBUG_DEST));
+	TEST_ASSERT_EQUAL_UINT(ENTITY_DEBUG_TINT_PATH,
+			       entityDebugMarkerTint(99));	/* fallback */
+
+	TEST_ASSERT_FLOAT_WITHIN(EPS, ENTITY_DEBUG_MARKER_PATH_WIDTH,
+				 entityDebugMarkerWidth(ENTITY_DEBUG_PATH));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, ENTITY_DEBUG_MARKER_START_WIDTH,
+				 entityDebugMarkerWidth(ENTITY_DEBUG_START));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, ENTITY_DEBUG_MARKER_DEST_WIDTH,
+				 entityDebugMarkerWidth(ENTITY_DEBUG_DEST));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, ENTITY_DEBUG_MARKER_PATH_WIDTH,
+				 entityDebugMarkerWidth(99));	/* fallback */
+	TEST_ASSERT_TRUE(ENTITY_DEBUG_MARKER_START_WIDTH >
+			 ENTITY_DEBUG_MARKER_PATH_WIDTH);
+	TEST_ASSERT_TRUE(ENTITY_DEBUG_MARKER_PATH_WIDTH >
+			 ENTITY_DEBUG_MARKER_DEST_WIDTH);
+	TEST_ASSERT_TRUE(ENTITY_DEBUG_MARKER_LIFT > 0.0f);
+}
+
 void run_test_entities(void);
 
 void run_test_entities(void)
@@ -734,4 +987,11 @@ void run_test_entities(void)
 	RUN_TEST(test_path_overflow);
 	RUN_TEST(test_update_dt_clamp);
 	RUN_TEST(test_determinism);
+	RUN_TEST(test_debug_markers_mid_segment);
+	RUN_TEST(test_debug_markers_idle_and_completed);
+	RUN_TEST(test_debug_markers_two_entities);
+	RUN_TEST(test_debug_markers_overflow);
+	RUN_TEST(test_debug_markers_truncates_later_entities);
+	RUN_TEST(test_debug_markers_move_to_and_queued_idle);
+	RUN_TEST(test_debug_marker_look_constants);
 }

@@ -239,6 +239,45 @@ static void test_apply_light(void)
 	destroyLightGrid(g);
 }
 
+/* appendSpriteUV bills with an explicit UV quad (the T20 debug-marker path):
+ * it copies the quad, stamps DRAW_KIND_SPRITE + the tint / per-corner tint and
+ * blends, and is NULL- and capacity-safe. */
+static void test_append_sprite_uv(void)
+{
+	Camera3D camera = cameraAtYaw(0.0f);
+	SpriteEntity sprite = { 4.0f, 1.0f, 2.0f, 1.0f, 1.0f,
+				DRAW_TINT(1, 2, 3, 4), -1 };
+	const float custom[4][2] = {
+		{ 0.10f, 0.90f }, { 0.50f, 0.90f },
+		{ 0.50f, 0.50f }, { 0.10f, 0.50f },
+	};
+	DrawList list;
+	float quad[4][3];
+
+	initDrawList(&list, 1);
+	TEST_ASSERT_TRUE(appendSpriteUV(&list, &sprite, &camera, custom));
+	TEST_ASSERT_EQUAL_INT(1, (int)drawListCount(&list));
+	TEST_ASSERT_EQUAL_INT(DRAW_KIND_SPRITE, drawListItem(&list, 0)->kind);
+	TEST_ASSERT_EQUAL_INT(ALPHA_BLEND, drawListItem(&list, 0)->alphaMode);
+	TEST_ASSERT_EQUAL_MEMORY(custom, drawListItem(&list, 0)->uv,
+				 sizeof(custom));
+	TEST_ASSERT_EQUAL_INT((int)sprite.tint,
+			      (int)drawListItem(&list, 0)->tint);
+	TEST_ASSERT_EQUAL_INT((int)sprite.tint,
+			      (int)drawListItem(&list, 0)->cornerTint[0]);
+	/* The same camera-anchored billboard appendSprite builds. */
+	buildSpriteQuad(&sprite, &camera, quad);
+	TEST_ASSERT_EQUAL_MEMORY(quad, drawListItem(&list, 0)->worldQuad,
+				 sizeof(quad));
+
+	/* Full list, NULL sprite, NULL uv and NULL list all reject. */
+	TEST_ASSERT_FALSE(appendSpriteUV(&list, &sprite, &camera, custom));
+	TEST_ASSERT_FALSE(appendSpriteUV(&list, NULL, &camera, custom));
+	TEST_ASSERT_FALSE(appendSpriteUV(&list, &sprite, &camera, NULL));
+	TEST_ASSERT_FALSE(appendSpriteUV(NULL, &sprite, &camera, custom));
+	destroyDrawList(&list);
+}
+
 void run_test_sprites(void);
 
 void run_test_sprites(void)
@@ -250,4 +289,5 @@ void run_test_sprites(void)
 	RUN_TEST(test_append_sprite_stamps_kind_uv_tint);
 	RUN_TEST(test_null_safe);
 	RUN_TEST(test_append_sprite_uses_material);
+	RUN_TEST(test_append_sprite_uv);
 }

@@ -93,6 +93,25 @@ bool appendSprite(DrawList *list, const SpriteEntity *sprite,
 	return appendDrawItem(list, &item);
 }
 
+bool appendSpriteUV(DrawList *list, const SpriteEntity *sprite,
+		    const Camera3D *camera, const float uv[4][2])
+{
+	DrawItem item;
+
+	if (sprite == NULL || uv == NULL)
+		return false;
+	buildSpriteQuad(sprite, camera, item.worldQuad);
+	memcpy(item.uv, uv, sizeof(item.uv));
+	item.alphaMode = (uint8_t)ALPHA_BLEND;
+	item.tint = sprite->tint;
+	item.cornerTint[0] = sprite->tint;
+	item.cornerTint[1] = sprite->tint;
+	item.cornerTint[2] = sprite->tint;
+	item.cornerTint[3] = sprite->tint;
+	item.kind = DRAW_KIND_SPRITE;
+	return appendDrawItem(list, &item);
+}
+
 /* Scale one 0..255 channel by a 0..255 factor, clamped, rounded to nearest. */
 static uint8_t scaleChannel(uint32_t c, uint8_t factor)
 {

@@ -235,5 +235,12 @@ src/render/lightgrid.c		97
 # (the fake-dt suite covers the far-move, speed<=0 instant-arrival, same-tile
 # cancel, no-map rejection, one-step drain, append-while-moving and n<0 arms).
 # Measured 8/8 = 100.0 and 122/122 = 100.0; floors at 100 as a ratchet.
+#
+# T20: the path-debug marker derivation (entitiesDebugMarkers + the pinned
+# kind/tint/width look) and the generic appendSpriteUV add branches that the
+# entity and sprite suites close exactly (mid-segment/queued/destination,
+# idle, completed, two-entity order, the empty-queue bare move, the
+# hand-built queued-idle state, every truncation cap, NULL/cap<=0 guards and
+# the unknown-kind fallbacks). Both modules hold at 100.
 src/entities/easing.c		100
 src/entities/entities.c		100

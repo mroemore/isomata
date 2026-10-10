@@ -37,6 +37,7 @@
 #include "render/materials.h"
 #include "render/math3d.h"
 #include "render/sprites.h"
+#include "render/textures.h"
 #include "render/voxmap.h"
 #include "scenes/level_controls.h"
 #include "scenes/pause_scene.h"
@@ -51,6 +52,9 @@
 #define LEVEL_DRAWLIST_CAPACITY 4096
 #define LEVEL_SPRITE_MAX 8
 #define LEVEL_WALKER_COUNT 3
+/* Most T20 debug markers held per frame (the demo paths are a handful of
+ * tiles; the derivation caps safely if this is ever exceeded). */
+#define LEVEL_DEBUG_MARKER_MAX 256
 
 #define LEVEL_TOAST_W 300
 #define LEVEL_TOAST_H 48
@@ -96,6 +100,7 @@ typedef struct LevelState {
 	EntityRegistry entities;	/* the demo critters (T19) */
 	DemoWalker walkers[LEVEL_WALKER_COUNT];
 	int walkerCount;
+	EntityDebugMarker markers[LEVEL_DEBUG_MARKER_MAX];	/* T20 overlay */
 	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
 	EventBus *bus;		/* borrowed from the App; may be NULL */
@@ -572,6 +577,41 @@ static void levelDrawUi(LevelState *st, App *app)
 	uiDraw(st->toast, ctx);
 }
 
+/* T20 path-debug overlay. Markers sample the reserved white atlas cell when
+ * the debug view is up so their tint reads as a flat colour; without a white
+ * cell (no GPU atlas) the built-in sprite region stands in. */
+static const float kDebugMarkerFallbackUV[4][2] = ATLAS_UV_SPRITE;
+
+/* Append each entity's start / path / destination markers as flat-tinted
+ * billboards lifted just above the tile surface. Called only in the
+ * light-debug view, and AFTER buildFrameDrawList's painter sort, so the
+ * markers draw last in a fixed order (start, route, destination) and are never
+ * occluded by terrain — a debug overlay should always read. The destination is
+ * appended last so it draws over the path marker on its own tile. */
+static void levelAppendDebugMarkers(LevelState *st, const float uv[4][2])
+{
+	int n = entitiesDebugMarkers(&st->entities, st->markers,
+				     LEVEL_DEBUG_MARKER_MAX);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		const EntityDebugMarker *m = &st->markers[i];
+		float sy = voxmapSurfaceY(st->map, m->x, m->z);
+		SpriteEntity s;
+
+		if (sy < 0.0f)
+			continue;	/* void tile: nothing to stand on */
+		s.x = (float)m->x + 0.5f;
+		s.y = sy + ENTITY_DEBUG_MARKER_LIFT;
+		s.z = (float)m->z + 0.5f;
+		s.width = entityDebugMarkerWidth((int)m->kind);
+		s.height = s.width;
+		s.tint = entityDebugMarkerTint((int)m->kind);
+		s.material = -1;
+		appendSpriteUV(&st->list, &s, &st->camera, uv);
+	}
+}
+
 static void level_draw(void *self, App *app)
 {
 	LevelState *st = scenePayload(self);
@@ -601,13 +641,16 @@ static void level_draw(void *self, App *app)
 			FrameOptions opts = { st->smoothLight, st->lightDebug,
 					      NULL };
 			float debugUV[4][2];
+			bool haveDebugUV = false;
 
 			/* The debug view samples a reserved white atlas cell;
 			 * without a GPU (smoke) the emitter's spare fallback
 			 * applies. */
 			if (st->lightDebug &&
-			    gpuBackendDebugUV(gpu, debugUV))
+			    gpuBackendDebugUV(gpu, debugUV)) {
 				opts.debugUV = debugUV;
+				haveDebugUV = true;
+			}
 			/* Billboards follow the registry (position + tint);
 			 * they still go through the sprite path + flat light
 			 * inside buildFrameDrawList. */
@@ -615,6 +658,15 @@ static void level_draw(void *self, App *app)
 			buildFrameDrawList(st->map, st->materials, st->lights,
 					   st->sprites, st->spriteCount,
 					   &st->camera, &st->list, &opts);
+			/* T20: overlay the entity paths last, and only in the
+			 * debug view — zero geometry/cost when it is off. */
+			if (st->lightDebug) {
+				if (haveDebugUV)
+					levelAppendDebugMarkers(st, debugUV);
+				else
+					levelAppendDebugMarkers(
+						st, kDebugMarkerFallbackUV);
+			}
 		}
 		gpuBackendDrawList(gpu, &viewProj, &st->list);
 	}
