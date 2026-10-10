@@ -51,6 +51,8 @@ set(ISOMATA_SRC
 	../../../src/render/grid.c
 	../../../src/scenes/ui_bridge.c
 	../../../src/scenes/level_controls.c
+	../../../src/entities/easing.c
+	../../../src/entities/entities.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c
 	../../../src/ui/layout.c
