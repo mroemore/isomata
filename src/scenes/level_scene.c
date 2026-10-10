@@ -594,6 +594,9 @@ static void levelAppendDebugMarkers(LevelState *st, const float uv[4][2])
 				     LEVEL_DEBUG_MARKER_MAX);
 	int i;
 
+	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+		     "isomata: path-debug overlay %d marker%s", n,
+		     n == 1 ? "" : "s");
 	for (i = 0; i < n; i++) {
 		const EntityDebugMarker *m = &st->markers[i];
 		float sy = voxmapSurfaceY(st->map, m->x, m->z);
