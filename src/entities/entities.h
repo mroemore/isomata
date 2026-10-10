@@ -64,6 +64,9 @@ typedef struct Entity {
 	float height;
 	uint32_t tint;		/* RGBA (see DRAW_TINT) */
 	int16_t material;	/* atlas material id; -1 = fallback region */
+	/* T23 gameplay state: the entity's funds (a plain counter the brain
+	 * debits on the pay step). Movement ignores it. */
+	int money;
 	/* Current segment. */
 	bool moving;
 	int fromX;
