@@ -1,0 +1,33 @@
+# T22 smoke-driver debug log excerpt (ISO_LOG=debug, Xvfb :89).
+# SDL_GetTicks milliseconds in [t=...]. One full machine cycle, plus the
+# challenger refused while the machine is RUNNING (the exclusivity guarantee).
+
+## machines registered + the two smoke critters
+isomata: machine 0 WASHER at (1,1) fee 3 run 30s
+isomata: machine 1 WASHER at (2,1) fee 3 run 30s
+isomata: machine 2 WASHER at (3,1) fee 3 run 30s
+isomata: machine 3 DRYER at (4,1) fee 2 run 30s
+isomata: machine 4 DRYER at (5,1) fee 2 run 30s
+isomata: smoke critter 3 (primary) at (1,3)
+isomata: smoke critter 4 (challenger) at (1,0)
+
+## cycle 1: claim -> load(5s) -> run(30s) -> PHASE_DONE wake -> walk back -> collect(5s) -> release
+isomata: [t=3458ms] machine 0 claimed -> kind WASHER state CLAIMED owner 3 runLeft 0.00
+isomata: [t=3458ms] smoke primary: loading 5s in place
+isomata: [t=8486ms] machine 0 run started -> kind WASHER state RUNNING owner 3 runLeft 30.00
+isomata: [t=38491ms] machine 0 wake PHASE_DONE owner 3
+isomata: [t=38491ms] smoke primary: phase done, walking back
+isomata: [t=39428ms] smoke primary: collecting 5s in place
+isomata: [t=44448ms] machine 0 released -> kind WASHER state FREE owner -1 runLeft 0.00
+isomata: [t=46311ms] machine 0 claimed -> kind WASHER state CLAIMED owner 3 runLeft 0.00
+
+## the challenger refused while the machine is RUNNING
+isomata: [t=8871ms] smoke challenger claim DENIED by machine 0 state RUNNING owner 3
+isomata: [t=9645ms] smoke challenger claim DENIED by machine 0 state RUNNING owner 3
+isomata: [t=10423ms] smoke challenger claim DENIED by machine 0 state RUNNING owner 3
+  ... denied every ~1.5s for the whole 30s run ...
+isomata: [t=55600ms] smoke challenger claim DENIED by machine 0 state RUNNING owner 3
+
+## cycle 2 begins (the machine was FREE between cycles)
+isomata: [t=46311ms] machine 0 claimed -> kind WASHER state CLAIMED owner 3 runLeft 0.00
+isomata: [t=51337ms] machine 0 run started -> kind WASHER state RUNNING owner 3 runLeft 30.00
