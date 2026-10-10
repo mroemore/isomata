@@ -20,3 +20,6 @@ material sixface face top=six_top.png bottom=six_bottom.png north=six_north.png 
 material tile face top=tile_top.png bottom=tile_bottom.png north=tile_north.png south=tile_south.png east=tile_east.png west=tile_west.png
 material foliage leaf.png alpha=cutout
 material sprite  sprite.png alpha=blend
+# T22 machines: a plain white 16x16 block so each machine's kind tint (cool
+# washers / warm dryers) reads as a flat colour instead of the red sprite ball.
+material machine machine.png
