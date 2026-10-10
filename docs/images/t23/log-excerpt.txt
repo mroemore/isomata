@@ -1,0 +1,57 @@
+# T23 laundromat demo — ISO_LOG=debug excerpt (single Xvfb run, SDL_GetTicks ms)
+# Desktop: Xvfb :88, SDL_AUDIODRIVER=dummy. Machine run 30s, load/collect 5s, door (0,0).
+
+--- machines + spawner up ---
+isomata: machine 0 WASHER at (1,1) fee 3 run 30s
+isomata: machine 1 WASHER at (2,1) fee 3 run 30s
+isomata: machine 2 WASHER at (3,1) fee 3 run 30s
+isomata: machine 3 DRYER at (4,1) fee 2 run 30s
+isomata: machine 4 DRYER at (5,1) fee 2 run 30s
+isomata: customer spawner on (4s interval, cap 4, door (0,0))
+
+--- opening rush: two customers walk in together, plus the first interval arrival ---
+isomata: [t=2525ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=2525ms] customer #1 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=2525ms] customer #2 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=3352ms] customer #1 claim DENIED on machine 0; re-planning
+isomata: [t=3352ms] customer #2 claim DENIED on machine 0; re-planning
+isomata: [t=3382ms] customer #1 chose machine 1 (dist 1, score 1, policy closest)
+isomata: [t=3382ms] customer #2 chose machine 1 (dist 1, score 1, policy closest)
+isomata: [t=3794ms] customer #2 claim DENIED on machine 1; re-planning
+isomata: [t=3823ms] customer #2 chose machine 2 (dist 1, score 1, policy closest)
+isomata: [t=44258ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
+isomata: [t=45159ms] customer #1 chose machine 3 (dist 2, score 2, policy closest)
+isomata: [t=45989ms] customer #1 claim DENIED on machine 3; re-planning
+
+--- one full lifecycle (customer #0: wash, dry, leave clean dry) ---
+isomata: [t=2524ms] customer #0 (handle 3, policy closest) arrived at the door with $20
+isomata: [t=2525ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=3382ms] customer #0 paid 3 to machine 0
+isomata: [t=3382ms] customer #0 loading 5s in place at machine 0
+isomata: [t=8384ms] customer #0 started machine 0; walking away while it runs
+isomata: [t=39193ms] customer #0 collecting 5s in place at machine 0
+isomata: [t=44199ms] customer #0 garment is now WET_CLEAN
+isomata: [t=44258ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
+isomata: [t=45492ms] customer #0 paid 2 to machine 3
+isomata: [t=45492ms] customer #0 loading 5s in place at machine 3
+isomata: [t=50514ms] customer #0 started machine 3; walking away while it runs
+isomata: [t=82524ms] customer #0 collecting 5s in place at machine 3
+isomata: [t=87548ms] customer #0 garment is now DRY_CLEAN
+isomata: [t=87607ms] customer #0 heading for the exit
+isomata: [t=89612ms] customer #0 left (clean dry)
+
+--- a machine breaks mid-run during its second use -> INTERRUPTED -> re-plan ---
+isomata: [t=45189ms] customer #3 chose machine 0 (dist 2, score 100002, policy spread_k)
+isomata: [t=46019ms] customer #3 paid 3 to machine 0
+isomata: [t=53013ms] SCRIPTED BREAK: washer 0 broke mid-run
+isomata: [t=53043ms] customer #3: machine 0 BROKE mid-run; re-planning (garment DIRTY)
+isomata: [t=53073ms] customer #3 chose machine 1 (dist 3, score 100003, policy spread_k)
+isomata: [t=54330ms] customer #3 paid 3 to machine 1
+isomata: [t=77989ms] SCRIPTED REPAIR: washer 0 free again
+isomata: [t=95675ms] customer #3 chose machine 4 (dist 3, score 100003, policy spread_k)
+isomata: [t=96909ms] customer #3 paid 2 to machine 4
+
+--- departures ---
+isomata: [t=89612ms] customer #0 left (clean dry)
+isomata: [t=91411ms] customer #1 left (clean dry)
+isomata: [t=132319ms] customer #2 left (clean dry)

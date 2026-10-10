@@ -271,3 +271,18 @@ src/ai/nav.c			91
 # state; repair; the registry capacity / iteration / dead-slot guards;
 # NULL-safety and run-to-run determinism); measured 92/92 = 100.
 src/sim/machines.c		100
+
+# T23: the customer brain + its pure support modules. garments.c is a tiny
+# transition table and closes every branch (100). plan.c's lone untaken arm is
+# the PLAN_MAX_TASKS clamp, dead with the static goal table (kept as a
+# future-table guard). selection.c has three untaken sub-line edges in its
+# guards. brain.c is pure glue: the demo-critical paths (selection, payment,
+# the bounded retry wait, refusal/break re-plan, garment transitions,
+# departure, the spawner, the run wait timeout, an unreachable machine/exit)
+# are all closed, but its many defensive NULL / "machine vanished" / "entity
+# died under us" arms need fault injection to reach. Floors are the measured
+# branch %.
+src/sim/garments.c		100
+src/sim/plan.c			95
+src/sim/selection.c		95
+src/sim/brain.c			80
