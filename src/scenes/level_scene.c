@@ -45,7 +45,10 @@
 #include "scenes/level_controls.h"
 #include "scenes/pause_scene.h"
 #include "scenes/ui_bridge.h"
+#include "sim/brain.h"
+#include "sim/garments.h"
 #include "sim/machines.h"
+#include "sim/selection.h"
 #include "ui/element.h"
 #include "ui/layout.h"
 #include "ui/toast.h"
@@ -98,9 +101,9 @@ static const int DEMO_DESTS_C[2][2] = { { 11, 10 }, { 2, 7 } };
 #define LEVEL_MACHINE_W 1.2f
 #define LEVEL_MACHINE_H 1.4f
 #define LEVEL_MACHINE_RUN_SECS 30.0f
-#define LEVEL_MACHINE_WAKE_MAX 8
 #define LEVEL_MACHINE_TINT_WASHER DRAW_TINT(150, 200, 255, 255)	/* cool */
 #define LEVEL_MACHINE_TINT_DRYER DRAW_TINT(255, 190, 130, 255)	/* warm */
+#define LEVEL_MACHINE_TINT_BROKEN DRAW_TINT(80, 80, 90, 255)	/* dark grey */
 
 static const struct {
 	int kind;
@@ -127,40 +130,38 @@ typedef struct DemoWalker {
 	float waitLeft;
 } DemoWalker;
 
-/* --- TEMPORARY T22 SMOKE DRIVER (replaced wholesale by the T23 brain) ----
+/* --- T23 customers ------------------------------------------------------ *
  *
- * Makes the machine layer visible before the brain exists: one critter walks
- * onto washer 0's tile, claims it, LOADs 5 s, starts the 30 s RUN, walks home,
- * walks back on the PHASE_DONE wake, COLLECTs 5 s and releases, looping; a
- * second critter repeatedly walks up mid-run and has its claim refused (the
- * machine stays RUNNING). Delete this struct plus every level-smoke helper
- * and smoke field in T23. */
-#define LEVEL_SMOKE_COUNT 2
-#define LEVEL_SMOKE_TARGET 0		/* washer at (1,1) */
-#define LEVEL_SMOKE_LOAD_SECS 5.0f
-#define LEVEL_SMOKE_COLLECT_SECS 5.0f
+ * The customer demo replaces the T22 smoke driver wholesale. Customers spawn
+ * at the door tile on an interval, each with its own selection policy (the
+ * spawner cycles closest / spread_k / cheapest so the heuristic genuinely
+ * changes choices), walk to a machine picked by that policy, pay, load, walk
+ * away while it runs, collect on the wake, dry, and leave clean-dry. A
+ * scripted break takes washer 0 down during its second run so the
+ * INTERRUPTED -> re-plan path is exercised visibly; it is repaired later.
+ *
+ * The door, the exit and the "owner away" wait spot are one clear grass tile
+ * at the map's NW corner, one step from the machine row. */
+#define LEVEL_DOOR_X 0
+#define LEVEL_DOOR_Z 0
+#define LEVEL_EXIT_X 0
+#define LEVEL_EXIT_Z 0
+#define LEVEL_WAIT_X 0
+#define LEVEL_WAIT_Z 0
+#define LEVEL_CUSTOMER_W 1.0f
+#define LEVEL_CUSTOMER_H 1.6f
+#define LEVEL_CUSTOMER_TINT_CLOSEST DRAW_TINT(120, 200, 255, 255)	/* blue */
+#define LEVEL_CUSTOMER_TINT_SPREAD DRAW_TINT(150, 255, 150, 255)	/* green */
+#define LEVEL_CUSTOMER_TINT_CHEAPEST DRAW_TINT(255, 220, 120, 255)	/* amber */
+/* Scripted break: washer 0 goes down this many seconds into its second run,
+ * and is repaired this many seconds later. */
+#define LEVEL_SCRIPT_BREAK_MACHINE 0
+#define LEVEL_SCRIPT_BREAK_DELAY 2.0f
+#define LEVEL_SCRIPT_REPAIR_SECS 25.0f
 
-typedef enum SmokePhase {
-	SMOKE_IDLE = 0,
-	SMOKE_WALK_IN,
-	SMOKE_LOAD,
-	SMOKE_RUN_AWAY,
-	SMOKE_RUN_WAIT,
-	SMOKE_WALK_BACK,
-	SMOKE_COLLECT,
-	SMOKE_RETURN,
-} SmokePhase;
-
-typedef struct SmokeDriver {
-	EntityHandle handle;
-	int role;			/* 0 = full cycle, 1 = challenger */
-	MachineHandle target;
-	int homeX;
-	int homeZ;
-	int phase;			/* SmokePhase */
-	float timer;
-	bool kicked;			/* saw the machine's PHASE_DONE */
-} SmokeDriver;
+/* Forward declaration: the opening pair is spawned (and logged) from
+ * level_init, before the brain-glue helpers are defined. */
+static void levelLogBrainEvent(const BrainEvent *ev);
 
 /* The four controls (ROT L / ROT R / DEBUG / RESET) and their layout rule
  * live in the pure level_controls module so they are headless-testable;
@@ -173,15 +174,16 @@ typedef struct LevelState {
 	DrawList list;
 	SpriteEntity sprites[LEVEL_SPRITE_MAX];
 	size_t spriteCount;
-	EntityRegistry entities;	/* the demo critters (T19) */
+	SimWorld sim;			/* T23: registries + customers + machines */
 	DemoWalker walkers[LEVEL_WALKER_COUNT];
 	int walkerCount;
-	MachineRegistry machines;	/* T22 interactables */
 	int16_t spriteMaterial;		/* atlas material for the critters */
 	int16_t machineMaterial;	/* atlas material for the machines */
-	MachineWake wakes[LEVEL_MACHINE_WAKE_MAX];	/* per-frame machine wakes */
-	SmokeDriver smoke[LEVEL_SMOKE_COUNT];	/* TEMPORARY T22 smoke driver */
-	int smokeCount;
+	BrainEvent events[BRAIN_MAX_EVENTS];	/* per-frame brain events */
+	/* Scripted demo break / repair of washer 0. */
+	int washer0Runs;	/* RUN_START events seen for washer 0 */
+	float breakTimer;	/* countdown to the scripted break (<0 = idle) */
+	float repairTimer;	/* countdown to the scripted repair (<0 = idle) */
 	EntityDebugMarker markers[LEVEL_DEBUG_MARKER_MAX];	/* T20 overlay */
 	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
@@ -215,11 +217,10 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 	};
 	int i;
 
-	entitiesInit(&st->entities, st->map);
 	st->walkerCount = 0;
 	for (i = 0; i < LEVEL_WALKER_COUNT; i++) {
-		EntityHandle h = entityCreate(&st->entities);
-		Entity *e = entityGet(&st->entities, h);
+		EntityHandle h = entityCreate(&st->sim.entities);
+		Entity *e = entityGet(&st->sim.entities, h);
 		DemoWalker *w;
 
 		if (e == NULL ||
@@ -272,7 +273,7 @@ static FsmResult demoFsmStep(DemoWalker *w, int event)
 static void demoStartLeg(LevelState *st, DemoWalker *w)
 {
 	const int *d = w->dests[w->destIndex];
-	Entity *e = entityGet(&st->entities, w->handle);
+	Entity *e = entityGet(&st->sim.entities, w->handle);
 	int straight;
 	int len;
 
@@ -309,7 +310,7 @@ static void levelUpdateWalkers(LevelState *st, float dt)
 
 	for (i = 0; i < st->walkerCount; i++) {
 		DemoWalker *w = &st->walkers[i];
-		Entity *e = entityGet(&st->entities, w->handle);
+		Entity *e = entityGet(&st->sim.entities, w->handle);
 		FsmResult r;
 
 		if (e == NULL)
@@ -343,45 +344,34 @@ static void levelUpdateWalkers(LevelState *st, float dt)
 
 /* Derive the billboard array from the registry each frame (position + sprite
  * link). Order is registry slot order, which is stable. */
-/* ---- T22 machines + the temporary smoke driver ------------------------ */
+/* ---- T22 machines ----------------------------------------------------- */
 
-/* The pinned tint for a machine kind; an unknown kind reads as a washer. */
-static uint32_t levelMachineTint(int kind)
+/* The pinned tint for a machine: broken machines read as dark grey, otherwise
+ * washers are cool and dryers warm (an unknown kind reads as a washer). */
+static uint32_t levelMachineTint(int kind, int state)
 {
+	if (state == MACHINE_STATE_BROKEN)
+		return LEVEL_MACHINE_TINT_BROKEN;
 	return kind == MACHINE_KIND_DRYER ? LEVEL_MACHINE_TINT_DRYER
 					  : LEVEL_MACHINE_TINT_WASHER;
 }
 
-/* Milliseconds since SDL init, prefixed on every smoke line as a timestamp. */
+/* Milliseconds since SDL init, prefixed on every brain/machine log line as a
+ * timestamp. */
 static unsigned long long levelMs(void)
 {
 	return (unsigned long long)SDL_GetTicks();
 }
 
-/* One machine-state-change log line (opt-in ISO_LOG=debug), naming the kind,
- * the state and the owner so the claim/run/release cycle is readable. */
-static void levelLogMachine(const LevelState *st, MachineHandle h,
-			    const char *what)
-{
-	const Machine *m = machineGetConst(&st->machines, h);
 
-	if (m == NULL)
-		return;
-	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-		     "isomata: [t=%llums] machine %d %s -> kind %s state %s owner %d runLeft %.2f",
-		     levelMs(), h, what, machineKindName(m->kind),
-		     machineStateName(m->state), m->owner, (double)m->runLeft);
-}
-
-/* Register the five machines (T22 layer-1 objects). */
+/* Register the five machines (T22 layer-1 objects) into the sim world. */
 static void levelBuildMachines(LevelState *st)
 {
 	int i;
 
-	machinesInit(&st->machines);
 	for (i = 0; i < LEVEL_MACHINE_COUNT; i++) {
 		MachineHandle h = machineCreate(
-			&st->machines, LEVEL_MACHINE_SPEC[i].kind,
+			&st->sim.machines, LEVEL_MACHINE_SPEC[i].kind,
 			LEVEL_MACHINE_SPEC[i].x, LEVEL_MACHINE_SPEC[i].z,
 			LEVEL_MACHINE_SPEC[i].fee, LEVEL_MACHINE_RUN_SECS);
 
@@ -398,248 +388,14 @@ static void levelBuildMachines(LevelState *st)
 	}
 }
 
-/* Create the two smoke critters: the primary (full cycle) and the challenger.
- * Tinted apart from the T21 demo walkers so the screenshot reads. */
-static void levelBuildSmoke(LevelState *st)
-{
-	static const struct {
-		int x;
-		int z;
-		int role;
-		int homeX;
-		int homeZ;
-		uint32_t tint;
-		float speed;
-	} spec[LEVEL_SMOKE_COUNT] = {
-		{ 1, 3, 0, 1, 3, DRAW_TINT(140, 255, 140, 255), 2.2f },
-		{ 1, 0, 1, 1, 0, DRAW_TINT(255, 150, 150, 255), 2.8f },
-	};
-	int i;
-
-	st->smokeCount = 0;
-	for (i = 0; i < LEVEL_SMOKE_COUNT; i++) {
-		EntityHandle h = entityCreate(&st->entities);
-		Entity *e = entityGet(&st->entities, h);
-		SmokeDriver *d;
-
-		if (e == NULL || !entityPlace(e, spec[i].x, spec[i].z)) {
-			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				     "level_scene: smoke entity %d placement failed",
-				     i);
-			continue;
-		}
-		e->speed = spec[i].speed;
-		e->easing = EASE_IN_OUT;
-		e->animated = true;
-		entitySetSprite(e, 1.0f, 1.5f, spec[i].tint,
-				st->spriteMaterial);
-
-		d = &st->smoke[st->smokeCount];
-		d->handle = h;
-		d->role = spec[i].role;
-		d->target = LEVEL_SMOKE_TARGET;
-		d->homeX = spec[i].homeX;
-		d->homeZ = spec[i].homeZ;
-		d->phase = SMOKE_IDLE;
-		d->timer = 0.0f;
-		d->kicked = false;
-		st->smokeCount++;
-		SDL_Log("isomata: smoke critter %d (%s) at (%d,%d)",
-			h, spec[i].role == 0 ? "primary" : "challenger",
-			spec[i].x, spec[i].z);
-	}
-}
-
-/* True when the entity has finished its whole route (no active segment, empty
- * queue). */
-static bool levelArrived(const Entity *e)
-{
-	return !e->moving && e->pathCount == 0;
-}
-
-static void levelSmokePathTo(LevelState *st, SmokeDriver *d, int x, int z)
-{
-	Entity *e = entityGet(&st->entities, d->handle);
-
-	if (e != NULL)
-		(void)entityPathTo(e, x, z);
-}
-
-static void levelSmokeSendHome(LevelState *st, SmokeDriver *d)
-{
-	levelSmokePathTo(st, d, d->homeX, d->homeZ);
-}
-
-static void levelSmokeSendToMachine(LevelState *st, SmokeDriver *d)
-{
-	const Machine *m = machineGetConst(&st->machines, d->target);
-
-	if (m != NULL)
-		levelSmokePathTo(st, d, m->tileX, m->tileZ);
-}
-/* The primary's fixed scripted cycle against washer 0. */
-static void levelSmokePrimary(LevelState *st, SmokeDriver *d, float dt)
-{
-	Entity *e = entityGet(&st->entities, d->handle);
-
-	if (e == NULL)
-		return;
-	switch (d->phase) {
-	case SMOKE_IDLE:
-		levelSmokeSendToMachine(st, d);
-		d->phase = SMOKE_WALK_IN;
-		break;
-	case SMOKE_WALK_IN:
-		if (!levelArrived(e))
-			break;
-		if (machineClaim(machineGet(&st->machines, d->target),
-				 d->handle)) {
-			levelLogMachine(st, d->target, "claimed");
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: [t=%llums] smoke primary: loading %.0fs in place",
-				     levelMs(), (double)LEVEL_SMOKE_LOAD_SECS);
-			d->phase = SMOKE_LOAD;
-			d->timer = LEVEL_SMOKE_LOAD_SECS;
-		} else {
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: [t=%llums] smoke primary claim DENIED",
-				     levelMs());
-			d->phase = SMOKE_RETURN;
-			levelSmokeSendHome(st, d);
-		}
-		break;
-	case SMOKE_LOAD:
-		d->timer -= dt;
-		if (d->timer <= 0.0f) {
-			machineStartRun(machineGet(&st->machines, d->target));
-			levelLogMachine(st, d->target, "run started");
-			d->phase = SMOKE_RUN_AWAY;
-			levelSmokeSendHome(st, d);
-		}
-		break;
-	case SMOKE_RUN_AWAY:
-		if (levelArrived(e))
-			d->phase = SMOKE_RUN_WAIT;
-		break;
-	case SMOKE_RUN_WAIT:
-		if (d->kicked) {
-			d->kicked = false;
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: [t=%llums] smoke primary: phase done, walking back",
-				     levelMs());
-			d->phase = SMOKE_WALK_BACK;
-			levelSmokeSendToMachine(st, d);
-		}
-		break;
-	case SMOKE_WALK_BACK:
-		if (levelArrived(e)) {
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: [t=%llums] smoke primary: collecting %.0fs in place",
-				     levelMs(), (double)LEVEL_SMOKE_COLLECT_SECS);
-			d->phase = SMOKE_COLLECT;
-			d->timer = LEVEL_SMOKE_COLLECT_SECS;
-		}
-		break;
-	case SMOKE_COLLECT:
-		d->timer -= dt;
-		if (d->timer <= 0.0f) {
-			machineRelease(machineGet(&st->machines, d->target));
-			levelLogMachine(st, d->target, "released");
-			d->phase = SMOKE_RETURN;
-			levelSmokeSendHome(st, d);
-		}
-		break;
-	case SMOKE_RETURN:
-		if (levelArrived(e))
-			d->phase = SMOKE_IDLE;
-		break;
-	default:
-		break;
-	}
-}
-
-/* The challenger: only walks up while the machine is RUNNING, so its claim is
- * guaranteed to be refused — the exclusivity the T23 brain relies on. */
-static void levelSmokeChallenger(LevelState *st, SmokeDriver *d)
-{
-	Entity *e = entityGet(&st->entities, d->handle);
-	const Machine *m = machineGetConst(&st->machines, d->target);
-
-	if (e == NULL)
-		return;
-	switch (d->phase) {
-	case SMOKE_IDLE:
-		if (m != NULL && m->state == MACHINE_STATE_RUNNING) {
-			levelSmokeSendToMachine(st, d);
-			d->phase = SMOKE_WALK_IN;
-		}
-		break;
-	case SMOKE_WALK_IN:
-		if (!levelArrived(e))
-			break;
-		{
-			Machine *mm = machineGet(&st->machines, d->target);
-
-			if (mm != NULL && machineClaim(mm, d->handle)) {
-				SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-					     "isomata: [t=%llums] smoke challenger WON the claim (unexpected)",
-					     levelMs());
-				machineRelease(mm);
-			} else {
-				SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-					     "isomata: [t=%llums] smoke challenger claim DENIED by machine %d state %s owner %d",
-					     levelMs(), d->target,
-					     mm != NULL ? machineStateName(mm->state) : "?",
-					     mm != NULL ? mm->owner : MACHINE_NO_OWNER);
-			}
-		}
-		d->phase = SMOKE_RETURN;
-		levelSmokeSendHome(st, d);
-		break;
-	case SMOKE_RETURN:
-		if (levelArrived(e))
-			d->phase = SMOKE_IDLE;
-		break;
-	default:
-		break;
-	}
-}
-
-/* Drain the frame's machine wakes into the driver (the PHASE_DONE wake is what
- * sends the primary back to collect), then advance both smoke critters. */
-static void levelUpdateSmoke(LevelState *st, float dt,
-			     const MachineWake *wakes, int nw)
-{
-	int i;
-
-	for (i = 0; i < nw; i++) {
-		int j;
-
-		if (wakes[i].kind != MACHINE_WAKE_PHASE_DONE)
-			continue;
-		for (j = 0; j < st->smokeCount; j++) {
-			SmokeDriver *d = &st->smoke[j];
-
-			if (d->role == 0 && d->target == wakes[i].machine)
-				d->kicked = true;
-		}
-	}
-	for (i = 0; i < st->smokeCount; i++) {
-		if (st->smoke[i].role == 0)
-			levelSmokePrimary(st, &st->smoke[i], dt);
-		else
-			levelSmokeChallenger(st, &st->smoke[i]);
-	}
-}
-
 static void levelSyncSprites(LevelState *st)
 {
 	EntityHandle h;
 	size_t n = 0;
 
-	for (h = entityFirst(&st->entities); h != ENTITY_INVALID;
-	     h = entityNext(&st->entities, h)) {
-		const Entity *e = entityGet(&st->entities, h);
+	for (h = entityFirst(&st->sim.entities); h != ENTITY_INVALID;
+	     h = entityNext(&st->sim.entities, h)) {
+		const Entity *e = entityGet(&st->sim.entities, h);
 
 		if (e == NULL || n >= LEVEL_SPRITE_MAX)
 			break;
@@ -654,9 +410,9 @@ static void levelSyncSprites(LevelState *st)
 	}
 	/* T22: append each machine as a billboard standing on its tile (bottom-
 	 * centre on the surface), tinted by kind. */
-	for (MachineHandle mh = machineFirst(&st->machines);
-	     mh != MACHINE_INVALID; mh = machineNext(&st->machines, mh)) {
-		const Machine *m = machineGetConst(&st->machines, mh);
+	for (MachineHandle mh = machineFirst(&st->sim.machines);
+	     mh != MACHINE_INVALID; mh = machineNext(&st->sim.machines, mh)) {
+		const Machine *m = machineGetConst(&st->sim.machines, mh);
 		float sy;
 
 		if (m == NULL || n >= LEVEL_SPRITE_MAX)
@@ -669,7 +425,7 @@ static void levelSyncSprites(LevelState *st)
 		st->sprites[n].z = (float)m->tileZ + 0.5f;
 		st->sprites[n].width = LEVEL_MACHINE_W;
 		st->sprites[n].height = LEVEL_MACHINE_H;
-		st->sprites[n].tint = levelMachineTint(m->kind);
+		st->sprites[n].tint = levelMachineTint(m->kind, m->state);
 		st->sprites[n].material = st->machineMaterial;
 		n++;
 	}
@@ -872,9 +628,45 @@ static bool level_init(void *self, App *app)
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 			     "level_scene: demo map unavailable");
 	levelBuildLights(st);
+	/* T23: the sim world owns the entity + machine registries. Bind the
+	 * map and the door / exit / wait tiles, then build the critters and the
+	 * machines into it, then start the customer spawner. */
+	simWorldInit(&st->sim, st->map, LEVEL_DOOR_X, LEVEL_DOOR_Z,
+		     LEVEL_EXIT_X, LEVEL_EXIT_Z, LEVEL_WAIT_X, LEVEL_WAIT_Z);
+	st->sim.customerWidth = LEVEL_CUSTOMER_W;
+	st->sim.customerHeight = LEVEL_CUSTOMER_H;
+	/* The flat-white "machine" material so the per-policy tint reads (the
+	 * "sprite" material renders red whatever the tint). */
+	st->sim.customerMaterial = st->machineMaterial;
+	st->sim.policyTint[SEL_POLICY_CLOSEST] = LEVEL_CUSTOMER_TINT_CLOSEST;
+	st->sim.policyTint[SEL_POLICY_SPREAD_K] = LEVEL_CUSTOMER_TINT_SPREAD;
+	st->sim.policyTint[SEL_POLICY_CHEAPEST] = LEVEL_CUSTOMER_TINT_CHEAPEST;
+	st->washer0Runs = 0;
+	st->breakTimer = -1.0f;
+	st->repairTimer = -1.0f;
 	levelBuildEntities(st, spriteMaterial);
 	levelBuildMachines(st);
-	levelBuildSmoke(st);		/* TEMPORARY T22 smoke driver (T23 deletes) */
+	simSetSpawner(&st->sim, true, BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP);
+	SDL_Log("isomata: customer spawner on (%.0fs interval, cap %d, door (%d,%d))",
+		(double)BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP, LEVEL_DOOR_X,
+		LEVEL_DOOR_Z);
+	/* Opening pair: two customers walk in together and both pick the
+	 * nearest washer, so the second's claim is refused and it re-plans to
+	 * the next free washer — the refusal path, visible from the first
+	 * frames. The interval spawner adds the rest. */
+	{
+		int n0 = 0;
+		int k;
+
+		(void)simSpawnCustomer(&st->sim, SEL_POLICY_CLOSEST,
+				       BRAIN_START_MONEY, st->events,
+				       BRAIN_MAX_EVENTS, &n0);
+		(void)simSpawnCustomer(&st->sim, SEL_POLICY_CLOSEST,
+				       BRAIN_START_MONEY, st->events,
+				       BRAIN_MAX_EVENTS, &n0);
+		for (k = 0; k < n0; k++)
+			levelLogBrainEvent(&st->events[k]);
+	}
 
 	/* UI root: a zero-padding pane is the layout root the toast and the
 	 * controls hang off. The pane itself is never drawn (its draw() paints
@@ -961,6 +753,151 @@ static void levelHandleCommand(LevelState *st, App *app, Command cmd)
 	}
 }
 
+/* --- T23 customer brain glue ------------------------------------------- */
+
+/* One readable log line per brain event (ISO_LOG=debug), stamped with the
+ * millisecond clock so the story lines up with the machine wakes. */
+static void levelLogBrainEvent(const BrainEvent *ev)
+{
+	unsigned long long t = levelMs();
+
+	switch (ev->kind) {
+	case BRAIN_EV_SPAWN:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d (handle %d, policy %s) arrived at the door with $%d",
+			     t, ev->id, ev->customer, selPolicyName(ev->policy),
+			     ev->amount);
+		break;
+	case BRAIN_EV_TASK_BEGIN:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d chose machine %d (dist %d, score %d, policy %s)",
+			     t, ev->id, ev->machine, ev->distance,
+			     ev->score, selPolicyName(ev->policy));
+		break;
+	case BRAIN_EV_NO_CANDIDATE:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d found no free machine; waiting and retrying",
+			     t, ev->id);
+		break;
+	case BRAIN_EV_CLAIM_DENIED:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d claim DENIED on machine %d; re-planning",
+			     t, ev->id, ev->machine);
+		break;
+	case BRAIN_EV_PAY:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d paid %d to machine %d",
+			     t, ev->id, ev->amount, ev->machine);
+		break;
+	case BRAIN_EV_LOAD:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d loading %.0fs in place at machine %d",
+			     t, ev->id, (double)BRAIN_LOAD_SECS,
+			     ev->machine);
+		break;
+	case BRAIN_EV_RUN_START:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d started machine %d; walking away while it runs",
+			     t, ev->id, ev->machine);
+		break;
+	case BRAIN_EV_MACHINE_DONE:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d: machine %d run done, walking back to collect",
+			     t, ev->id, ev->machine);
+		break;
+	case BRAIN_EV_INTERRUPTED:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d: machine %d BROKE mid-run; re-planning (garment %s)",
+			     t, ev->id, ev->machine,
+			     garmentStateName(ev->garment));
+		break;
+	case BRAIN_EV_COLLECT:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d collecting %.0fs in place at machine %d",
+			     t, ev->id, (double)BRAIN_COLLECT_SECS,
+			     ev->machine);
+		break;
+	case BRAIN_EV_GARMENT:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d garment is now %s",
+			     t, ev->id, garmentStateName(ev->garment));
+		break;
+	case BRAIN_EV_ABANDON:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d abandoning the goal (garment %s)",
+			     t, ev->id, garmentStateName(ev->garment));
+		break;
+	case BRAIN_EV_WAIT_TIMEOUT:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d wait timed out on machine %d; re-planning",
+			     t, ev->id, ev->machine);
+		break;
+	case BRAIN_EV_LEAVE_BEGIN:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d heading for the exit",
+			     t, ev->id);
+		break;
+	case BRAIN_EV_DEPART:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d left (%s)",
+			     t, ev->id,
+			     ev->garment == GARMENT_DRY_CLEAN
+				     ? "clean dry"
+				     : garmentStateName(ev->garment));
+		break;
+	default:
+		break;
+	}
+}
+
+/* Advance the customer world: the spawner, the machine timers/wakes, every
+ * customer brain, the scripted washer-0 break/repair, and the brain/wake log
+ * stream. */
+static void levelUpdateBrain(LevelState *st, float dt)
+{
+	int n = simUpdate(&st->sim, dt, st->events, BRAIN_MAX_EVENTS);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		const BrainEvent *ev = &st->events[i];
+
+		if (ev->kind == BRAIN_EV_RUN_START &&
+		    ev->machine == LEVEL_SCRIPT_BREAK_MACHINE) {
+			st->washer0Runs++;
+			if (st->washer0Runs == 2)
+				st->breakTimer = LEVEL_SCRIPT_BREAK_DELAY;
+		}
+		levelLogBrainEvent(ev);
+	}
+	for (i = 0; i < st->sim.wakeCount; i++)
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] machine %d wake %s owner %d",
+			     levelMs(), st->sim.wakes[i].machine,
+			     machineWakeKindName(st->sim.wakes[i].kind),
+			     st->sim.wakes[i].owner);
+	if (st->breakTimer > 0.0f) {
+		st->breakTimer -= dt;
+		if (st->breakTimer <= 0.0f) {
+			if (simBreakMachine(&st->sim,
+					    LEVEL_SCRIPT_BREAK_MACHINE))
+				SDL_Log("isomata: [t=%llums] SCRIPTED BREAK: washer %d broke mid-run",
+					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
+			st->repairTimer = LEVEL_SCRIPT_REPAIR_SECS;
+		}
+	}
+	if (st->repairTimer > 0.0f) {
+		st->repairTimer -= dt;
+		if (st->repairTimer <= 0.0f) {
+			Machine *m = machineGet(&st->sim.machines,
+						LEVEL_SCRIPT_BREAK_MACHINE);
+
+			if (m != NULL && machineRepair(m))
+				SDL_Log("isomata: [t=%llums] SCRIPTED REPAIR: washer %d free again",
+					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
+		}
+	}
+}
+
 static void level_update(void *self, App *app, float dt)
 {
 	LevelState *st = scenePayload(self);
@@ -992,25 +929,14 @@ static void level_update(void *self, App *app, float dt)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
-	/* Advance the demo critters: FSM + A* driven routes (T21). */
-	entitiesUpdate(&st->entities, dt);
+	/* Advance the T21 demo critters (FSM + A* decisions for this frame). */
 	levelUpdateWalkers(st, dt);
-	/* Advance the T22 machines, log their state-change wakes and feed the
-	 * TEMPORARY T22 smoke driver (which reacts to the PHASE_DONE wake). T23
-	 * deletes the levelUpdateSmoke line and the levelSmoke* block. */
-	{
-		int nw = machinesUpdate(&st->machines, dt, st->wakes,
-					LEVEL_MACHINE_WAKE_MAX);
-		int i;
-
-		for (i = 0; i < nw; i++)
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: [t=%llums] machine %d wake %s owner %d",
-				     levelMs(), st->wakes[i].machine,
-				     machineWakeKindName(st->wakes[i].kind),
-				     st->wakes[i].owner);
-		levelUpdateSmoke(st, dt, st->wakes, nw);
-	}
+	/* Advance the T23 customers + machines: spawner, machine timers and
+	 * wakes, each customer's brain, and the scripted break/repair. */
+	levelUpdateBrain(st, dt);
+	/* Advance every walker once, after all decisions are in for the
+	 * frame. */
+	entitiesUpdate(&st->sim.entities, dt);
 	toastUpdate(st->toast, dt);
 }
 
@@ -1071,7 +997,7 @@ static const float kDebugMarkerFallbackUV[4][2] = ATLAS_UV_SPRITE;
  * appended last so it draws over the path marker on its own tile. */
 static void levelAppendDebugMarkers(LevelState *st, const float uv[4][2])
 {
-	int n = entitiesDebugMarkers(&st->entities, st->markers,
+	int n = entitiesDebugMarkers(&st->sim.entities, st->markers,
 				     LEVEL_DEBUG_MARKER_MAX);
 	int i;
 
