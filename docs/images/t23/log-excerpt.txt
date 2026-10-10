@@ -1,57 +1,86 @@
 # T23 laundromat demo — ISO_LOG=debug excerpt (single Xvfb run, SDL_GetTicks ms)
 # Desktop: Xvfb :88, SDL_AUDIODRIVER=dummy. Machine run 30s, load/collect 5s, door (0,0).
+# Machines: washers 0-2 at x1..3 z1, dryers 3-4 at x4..5 z1, isolated washer 5 at (14,1).
 
---- machines + spawner up ---
+--- machines up ---
 isomata: machine 0 WASHER at (1,1) fee 3 run 30s
 isomata: machine 1 WASHER at (2,1) fee 3 run 30s
 isomata: machine 2 WASHER at (3,1) fee 3 run 30s
 isomata: machine 3 DRYER at (4,1) fee 2 run 30s
 isomata: machine 4 DRYER at (5,1) fee 2 run 30s
-isomata: customer spawner on (4s interval, cap 4, door (0,0))
+isomata: machine 5 WASHER at (14,1) fee 3 run 30s
 
---- opening rush: two customers walk in together, plus the first interval arrival ---
-isomata: [t=2525ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
-isomata: [t=2525ms] customer #1 chose machine 0 (dist 2, score 2, policy closest)
-isomata: [t=2525ms] customer #2 chose machine 0 (dist 2, score 2, policy closest)
-isomata: [t=3352ms] customer #1 claim DENIED on machine 0; re-planning
-isomata: [t=3352ms] customer #2 claim DENIED on machine 0; re-planning
-isomata: [t=3382ms] customer #1 chose machine 1 (dist 1, score 1, policy closest)
-isomata: [t=3382ms] customer #2 chose machine 1 (dist 1, score 1, policy closest)
-isomata: [t=3794ms] customer #2 claim DENIED on machine 1; re-planning
-isomata: [t=3823ms] customer #2 chose machine 2 (dist 1, score 1, policy closest)
-isomata: [t=44258ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
-isomata: [t=45159ms] customer #1 chose machine 3 (dist 2, score 2, policy closest)
-isomata: [t=45989ms] customer #1 claim DENIED on machine 3; re-planning
+--- the scripted divergence: cluster washer 0 occupied, then a closest + a
+--- spread_k customer choose from the SAME candidate set and pick differently ---
+isomata: [t=2049ms] customer #0 (handle 3, policy closest) arrived at the door with $20
+isomata: [t=2049ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=2882ms] customer #0 paid 3 to machine 0
+isomata: [t=2882ms] customer #0 loading 5s in place at machine 0
+isomata: [t=2882ms] scripted divergence pair (closest + spread_k) arrived; interval spawner on (4s interval, cap 4, door (0,0))
+isomata: [t=2882ms] customer #1 (handle 4, policy closest) arrived at the door with $20
+isomata: [t=2882ms] customer #2 (handle 5, policy spread_k) arrived at the door with $20
+isomata: [t=2912ms] customer #3 (handle 6, policy cheapest) arrived at the door with $20
+isomata: [t=2912ms] customer #1 chose machine 1 (dist 3, score 3, policy closest)
+isomata: [t=2912ms] customer #2 chose machine 5 (dist 15, score 15, policy spread_k)
+isomata: [t=2912ms] customer #3 chose machine 1 (dist 3, score 3003, policy cheapest)
+isomata: [t=4147ms] customer #3 claim DENIED on machine 1; re-planning
+isomata: [t=4177ms] customer #1 paid 3 to machine 1
+isomata: [t=4177ms] customer #1 loading 5s in place at machine 1
+isomata: [t=4177ms] customer #3 chose machine 2 (dist 1, score 3001, policy cheapest)
+isomata: [t=4626ms] customer #3 paid 3 to machine 2
+isomata: [t=4626ms] customer #3 loading 5s in place at machine 2
+isomata: [t=7888ms] customer #0 started machine 0; walking away while it runs
+isomata: [t=8956ms] customer #2 paid 3 to machine 5
+isomata: [t=8956ms] customer #2 loading 5s in place at machine 5
+isomata: [t=9185ms] customer #1 started machine 1; walking away while it runs
+isomata: [t=9632ms] customer #3 started machine 2; walking away while it runs
+isomata: [t=13974ms] customer #2 started machine 5; walking away while it runs
+# #1 chose the next free CLUSTER washer (score 3 = distance); #2 skipped it --
+# it is within K=2 of the occupied machine 0 and would score 3 + 100000 -- and
+# walked 15 tiles to the ISOLATED washer, unpenalised (score 15 = distance).
 
 --- one full lifecycle (customer #0: wash, dry, leave clean dry) ---
-isomata: [t=2524ms] customer #0 (handle 3, policy closest) arrived at the door with $20
-isomata: [t=2525ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
-isomata: [t=3382ms] customer #0 paid 3 to machine 0
-isomata: [t=3382ms] customer #0 loading 5s in place at machine 0
-isomata: [t=8384ms] customer #0 started machine 0; walking away while it runs
-isomata: [t=39193ms] customer #0 collecting 5s in place at machine 0
-isomata: [t=44199ms] customer #0 garment is now WET_CLEAN
-isomata: [t=44258ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
-isomata: [t=45492ms] customer #0 paid 2 to machine 3
-isomata: [t=45492ms] customer #0 loading 5s in place at machine 3
-isomata: [t=50514ms] customer #0 started machine 3; walking away while it runs
-isomata: [t=82524ms] customer #0 collecting 5s in place at machine 3
-isomata: [t=87548ms] customer #0 garment is now DRY_CLEAN
-isomata: [t=87607ms] customer #0 heading for the exit
-isomata: [t=89612ms] customer #0 left (clean dry)
+isomata: [t=37890ms] customer #0: machine 0 run done, walking back to collect
+isomata: [t=37890ms] machine 0 wake PHASE_DONE owner 3
+isomata: [t=38701ms] customer #0 collecting 5s in place at machine 0
+isomata: [t=43720ms] customer #0 garment is now WET_CLEAN
+isomata: [t=43779ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
+isomata: [t=45015ms] customer #0 paid 2 to machine 3
+isomata: [t=45015ms] customer #0 loading 5s in place at machine 3
+isomata: [t=50041ms] customer #0 started machine 3; walking away while it runs
+isomata: [t=80055ms] customer #0: machine 3 run done, walking back to collect
+isomata: [t=82060ms] customer #0 collecting 5s in place at machine 3
+isomata: [t=87086ms] customer #0 garment is now DRY_CLEAN
+isomata: [t=87146ms] customer #0 heading for the exit
+isomata: [t=89155ms] customer #0 left (clean dry)
+isomata: [t=91699ms] customer #1 left (clean dry)
+
+--- the penalty, both ways: spread_k scores the CLUSTER +100000 when a cluster
+--- machine is occupied, and 0 penalty on the isolated one ---
+isomata: [t=87529ms] customer #2 chose machine 3 (dist 10, score 100010, policy spread_k)
+isomata: [t=91552ms] customer #2 claim DENIED on machine 3; re-planning
+isomata: [t=91581ms] customer #2 chose machine 4 (dist 1, score 100001, policy spread_k)
+isomata: [t=95337ms] customer #5 (handle 4, policy spread_k) arrived at the door with $20
+isomata: [t=95337ms] customer #5 chose machine 5 (dist 15, score 15, policy spread_k)
+isomata: [t=101366ms] customer #5 paid 3 to machine 5
+isomata: [t=101366ms] customer #5 loading 5s in place at machine 5
 
 --- a machine breaks mid-run during its second use -> INTERRUPTED -> re-plan ---
-isomata: [t=45189ms] customer #3 chose machine 0 (dist 2, score 100002, policy spread_k)
-isomata: [t=46019ms] customer #3 paid 3 to machine 0
-isomata: [t=53013ms] SCRIPTED BREAK: washer 0 broke mid-run
-isomata: [t=53043ms] customer #3: machine 0 BROKE mid-run; re-planning (garment DIRTY)
-isomata: [t=53073ms] customer #3 chose machine 1 (dist 3, score 100003, policy spread_k)
-isomata: [t=54330ms] customer #3 paid 3 to machine 1
-isomata: [t=77989ms] SCRIPTED REPAIR: washer 0 free again
-isomata: [t=95675ms] customer #3 chose machine 4 (dist 3, score 100003, policy spread_k)
-isomata: [t=96909ms] customer #3 paid 2 to machine 4
+isomata: [t=91315ms] customer #4 (handle 3, policy closest) arrived at the door with $20
+isomata: [t=91315ms] customer #4 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=92164ms] customer #4 paid 3 to machine 0
+isomata: [t=92164ms] customer #4 loading 5s in place at machine 0
+isomata: [t=97186ms] customer #4 started machine 0; walking away while it runs
+isomata: [t=99179ms] SCRIPTED BREAK: washer 0 broke mid-run
+isomata: [t=99210ms] customer #4: machine 0 BROKE mid-run; re-planning (garment DIRTY)
+isomata: [t=99241ms] customer #4 chose machine 1 (dist 3, score 3, policy closest)
+isomata: [t=100473ms] customer #4 paid 3 to machine 1
+isomata: [t=100473ms] customer #4 loading 5s in place at machine 1
+isomata: [t=124178ms] SCRIPTED REPAIR: washer 0 free again
 
---- departures ---
-isomata: [t=89612ms] customer #0 left (clean dry)
-isomata: [t=91411ms] customer #1 left (clean dry)
-isomata: [t=132319ms] customer #2 left (clean dry)
+--- departures (every one of them clean dry) ---
+isomata: [t=89155ms] customer #0 left (clean dry)
+isomata: [t=91699ms] customer #1 left (clean dry)
+isomata: [t=132463ms] customer #3 left (clean dry)
+isomata: [t=136984ms] customer #2 left (clean dry)
+isomata: [t=186793ms] customer #4 left (clean dry)
