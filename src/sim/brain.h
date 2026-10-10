@@ -10,8 +10,15 @@
  * by the caller's dt (clamped to BRAIN_MAX_DT), so an integration scenario
  * stepped with a fixed fake dt is deterministic and replayable.
  *
- * EXECUTOR WIRING (the T21 FSM drives decisions, this glue executes them).
- * One USE_MACHINE plan task runs as two FSM legs:
+ * EXECUTOR WIRING. The customer driver runs its OWN task-leg phase machine
+ * (BrainPhase); the T21 executor FSM is stepped alongside as a transition
+ * model — the same events are fed and its states stay coherent — but the
+ * driver does NOT yet consult the FSM's state or result to make a decision.
+ * Consolidating the driver onto the FSM (or retiring the FSM) is a recorded
+ * follow-up (see the T23 report's design-debt section); this header claims
+ * only what is true today.
+ *
+ * One USE_MACHINE plan task runs as two legs:
  *   LOAD leg     SELECT -> fsmStart(machine tile) [MOVE_TO] -> MOVING_TO
  *                ARRIVED -> ACTING: claim the machine (a refusal -> DENIED ->
  *                re-plan), pay the fee, LOAD 5 s in place -> machineStartRun

@@ -1,9 +1,17 @@
 /*
  * The customer brain (see sim/brain.h).
  *
- * Pure glue over the T21 executor FSM, the T22 machine layer and the T23 plan /
- * selection / garment modules. No allocation, no SDL, no time source: the world
- * advances only by the caller's dt, so a fake-dt scenario is deterministic.
+ * Pure glue over the T22 machine layer and the T23 plan / selection / garment
+ * modules. No allocation, no SDL, no time source: the world advances only by
+ * the caller's dt, so a fake-dt scenario is deterministic.
+ *
+ * EXECUTOR OWNERSHIP (stated plainly, because it is easy to over-claim): the
+ * driver decides with each customer's OWN task-leg machine (`c->phase`, a
+ * BrainPhase). Every customer also carries a T21 `Fsm`, and this file steps it
+ * with the same events so its states stay coherent as a transition model — but
+ * nothing here reads the FSM's state or result to choose what happens next.
+ * Folding the driver onto the FSM (or retiring the unused FSM) is recorded
+ * design debt in the T23 report.
  */
 
 #include "sim/brain.h"
