@@ -228,3 +228,12 @@ src/render/lightgrid.c		97
 # mapsource.c 98.5% (the three untaken arms remain the natural-comparer
 # compound-condition edges documented above). Both floors still hold at their
 # previous values.
+
+# T19: the pure entity core. easing.c is a branch-free curve switch (every
+# curve's clamp, NaN collapse and unknown-enum fallback are pinned) and
+# entities.c closes every registry / walkable-step / tween / path-queue branch
+# (the fake-dt suite covers the far-move, speed<=0 instant-arrival, same-tile
+# cancel, no-map rejection, one-step drain, append-while-moving and n<0 arms).
+# Measured 8/8 = 100.0 and 122/122 = 100.0; floors at 100 as a ratchet.
+src/entities/easing.c		100
+src/entities/entities.c		100

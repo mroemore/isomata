@@ -108,6 +108,7 @@ static void test_registry_destroy_and_reuse(void)
 	TEST_ASSERT_FALSE(entityAlive(&reg, a));
 	TEST_ASSERT_NULL(entityGet(&reg, a));
 	TEST_ASSERT_FALSE(entityDestroy(&reg, a));
+	TEST_ASSERT_FALSE(entityDestroy(&reg, -1));
 	TEST_ASSERT_EQUAL_INT(1, entityCount(&reg));
 	TEST_ASSERT_EQUAL_INT(b, entityFirst(&reg));
 
@@ -601,6 +602,113 @@ static void test_determinism(void)
 	destroyVoxmap(map);
 }
 
+/* A far (non-adjacent) valid target is a single segment; speed <= 0 means an
+ * instant arrival (duration 0). */
+static void test_move_far_and_speed_zero(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityMoveTo(e, 2, 1));	/* 2 tiles away */
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_EQUAL_INT(2, e->toX);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, e->segDuration);	/* 2 / speed 1 */
+
+	TEST_ASSERT_TRUE(entityPlace(e, 1, 1));
+	e->speed = 0.0f;
+	TEST_ASSERT_TRUE(entityMoveTo(e, 0, 1));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, e->segDuration);
+	entitiesUpdate(&reg, 0.05f);
+	TEST_ASSERT_TRUE(e->arrived);
+	TEST_ASSERT_FALSE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->tileX);
+	destroyVoxmap(map);
+}
+
+/* A move re-issued to the tile we started from cancels the in-flight
+ * segment and snaps back. */
+static void test_move_same_tile_cancels(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	int i;
+
+	entitiesInit(&reg, map);
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityMoveTo(e, 0, 0));
+	for (i = 0; i < 5; i++)
+		entitiesUpdate(&reg, 0.05f);
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_TRUE(entityMoveTo(e, 0, 1));	/* == current tile */
+	TEST_ASSERT_FALSE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->tileX);
+	TEST_ASSERT_EQUAL_INT(1, e->tileZ);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 1.5f, e->z);
+	destroyVoxmap(map);
+}
+
+/* An entity created without a map accepts no move or path. */
+static void test_entity_no_map(void)
+{
+	EntityRegistry bare;
+	EntityHandle h;
+	Entity *e;
+	static const int step[1][2] = { { 0, 0 } };
+
+	entitiesInit(&bare, NULL);
+	h = entityCreate(&bare);
+	e = entityGet(&bare, h);
+	TEST_ASSERT_FALSE(entityMoveTo(e, 0, 0));
+	TEST_ASSERT_FALSE(entityWalkPath(e, step, 1));
+}
+
+/* One-step paths drain immediately; a path appends to an in-flight queue or a
+ * bare segment; n < 0 is rejected. */
+static void test_path_append_variants(void)
+{
+	Voxmap *map = stepMap();
+	EntityRegistry reg;
+	Entity *e;
+	static const int oneStep[1][2] = { { 0, 0 } };
+	static const int twoStep[2][2] = { { 0, 0 }, { 1, 0 } };
+	static const int moreStep[1][2] = { { 2, 0 } };
+	static const int adjStep[1][2] = { { 1, 0 } };
+
+	entitiesInit(&reg, map);
+
+	/* A one-step path drains immediately: head and count reset to 0. */
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(e, oneStep, 1));
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->pathCount);
+	TEST_ASSERT_EQUAL_INT(0, e->pathHead);
+	TEST_ASSERT_EQUAL_INT(0, e->toX);
+	TEST_ASSERT_EQUAL_INT(0, e->toZ);
+	TEST_ASSERT_FALSE(entityWalkPath(e, oneStep, -1));
+
+	/* Append to an existing queue while moving: the reference tile is the
+	 * last queued waypoint. */
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityWalkPath(e, twoStep, 2));
+	TEST_ASSERT_EQUAL_INT(1, e->pathCount);
+	TEST_ASSERT_TRUE(entityWalkPath(e, moreStep, 1));
+	TEST_ASSERT_EQUAL_INT(2, e->pathCount);
+
+	/* Append to a bare in-flight segment (empty queue): the reference tile
+	 * is the segment target. */
+	e = entityGet(&reg, makeWalker(&reg, 0, 1));
+	TEST_ASSERT_TRUE(entityMoveTo(e, 0, 0));
+	TEST_ASSERT_TRUE(e->moving);
+	TEST_ASSERT_EQUAL_INT(0, e->pathCount);
+	TEST_ASSERT_TRUE(entityWalkPath(e, adjStep, 1));	/* from (0,0) */
+	TEST_ASSERT_EQUAL_INT(1, e->pathCount);
+	destroyVoxmap(map);
+}
+
 void run_test_entities(void);
 
 void run_test_entities(void)
@@ -617,8 +725,12 @@ void run_test_entities(void)
 	RUN_TEST(test_move_y_follows_surface);
 	RUN_TEST(test_move_to_same_tile);
 	RUN_TEST(test_move_rejects_invalid);
+	RUN_TEST(test_move_far_and_speed_zero);
+	RUN_TEST(test_move_same_tile_cancels);
+	RUN_TEST(test_entity_no_map);
 	RUN_TEST(test_path_queue_steps);
 	RUN_TEST(test_path_rejection_atomic);
+	RUN_TEST(test_path_append_variants);
 	RUN_TEST(test_path_overflow);
 	RUN_TEST(test_update_dt_clamp);
 	RUN_TEST(test_determinism);
