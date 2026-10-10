@@ -250,3 +250,8 @@ src/entities/entities.c		100
 # illegal + out-of-range no-ops, the name/validity helpers, NULL-safe entry
 # points); measured 100.
 src/ai/fsm.c			100
+# T21: A* on the tile grid (pure, twin suite). Every branch is closed (exact
+# straight-line / wall-detour / doorway / enclosed maps, start == goal, the
+# output and node caps -> TOO_LONG, run-to-run determinism, the open-node
+# g-improvement witness map, NULL outLen and a negative cap); measured 100.
+src/ai/pathfind.c		100
