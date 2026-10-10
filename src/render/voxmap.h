@@ -322,6 +322,13 @@ int voxmapLevels(const Voxmap *map);
  * void / out of bounds / NULL (see the header note). */
 int voxmapHeightAt(const Voxmap *map, int x, int z);
 
+/* Walkable surface height at (x, z): the topmost solid voxel's base level plus
+ * the height of its shape AT THE CELL CENTRE — full +1, half +0.5, ramp +0.5,
+ * half-ramp +0.25. A height-0 ground tile (no voxel; the ground flag) is 0.
+ * -1 for void / out of bounds / NULL. For an all-FULL column this equals
+ * voxmapHeightAt. Used by the entity walkability + tween layer. */
+float voxmapSurfaceY(const Voxmap *map, int x, int z);
+
 /* True when (x, z) is void, out of bounds, or the map is NULL. */
 bool voxmapIsVoid(const Voxmap *map, int x, int z);
 

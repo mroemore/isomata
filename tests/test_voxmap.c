@@ -3375,6 +3375,79 @@ static void test_triangle_debug_view(void)
 	destroyVoxmap(map);
 }
 
+/* voxmapSurfaceY: void / out-of-bounds / NULL -> -1; a height-0 ground tile
+ * -> 0; a full column of height h -> h. */
+static void test_surface_y_heightmap(void)
+{
+	Voxmap *map = loadTemp("vm_surface.txt", "0.\n33\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, voxmapSurfaceY(map, 0, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, voxmapSurfaceY(map, 1, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 3.0f, voxmapSurfaceY(map, 0, 1));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 3.0f, voxmapSurfaceY(map, 1, 1));
+	/* Out of bounds (both axes), negative, and a NULL map. */
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, voxmapSurfaceY(map, 2, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, voxmapSurfaceY(map, 0, 2));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, voxmapSurfaceY(map, -1, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, -1.0f, voxmapSurfaceY(NULL, 0, 0));
+	destroyVoxmap(map);
+}
+
+/* The surface at the cell centre adds the topmost voxel's shape height:
+ * full +1, half +0.5, ramp +0.5, half-ramp +0.25 (all at level 0 here). */
+static void test_surface_y_shapes(void)
+{
+	Voxmap *map = parseText("@ f 1 stone shape=full\n"
+				"@ h 1 stone shape=half\n"
+				"@ r 1 stone shape=ramp dir=north\n"
+				"@ q 1 stone shape=half-ramp dir=north\n"
+				"fhrq\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 1.0f, voxmapSurfaceY(map, 0, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.5f, voxmapSurfaceY(map, 1, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.5f, voxmapSurfaceY(map, 2, 0));
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.25f, voxmapSurfaceY(map, 3, 0));
+	destroyVoxmap(map);
+}
+
+/* The topmost solid voxel decides the surface; a shape below it is unseen. */
+static void test_surface_y_topmost_wins(void)
+{
+	uint8_t solid[2] = { 1, 1 };
+	int16_t mats[2] = { 1, 1 };
+	uint8_t shapes[2] = {
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF, VOXMAP_DIR_NORTH),
+		VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF_RAMP, VOXMAP_DIR_NORTH),
+	};
+	Voxmap *map = voxmapBuildRawShaped(1, 1, 2, solid, mats, shapes, NULL,
+					   0);
+
+	TEST_ASSERT_NOT_NULL(map);
+	/* level 1 half-ramp -> 1 + 0.25. */
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 1.25f, voxmapSurfaceY(map, 0, 0));
+	destroyVoxmap(map);
+
+	/* A half-ramp below and a full on top -> 2.0. */
+	shapes[0] = VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_HALF_RAMP, VOXMAP_DIR_EAST);
+	shapes[1] = VOXMAP_SHAPE_PACK(VOXMAP_SHAPE_FULL, VOXMAP_DIR_NORTH);
+	map = voxmapBuildRawShaped(1, 1, 2, solid, mats, shapes, NULL, 0);
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 2.0f, voxmapSurfaceY(map, 0, 0));
+	destroyVoxmap(map);
+}
+
+/* A height-0 legend entry with a shape still reads as flat ground at 0. */
+static void test_surface_y_height_zero_ground(void)
+{
+	Voxmap *map = parseText("@ Z 0 stone shape=half\nZ\n");
+
+	TEST_ASSERT_NOT_NULL(map);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.0f, voxmapSurfaceY(map, 0, 0));
+	destroyVoxmap(map);
+}
+
 void run_test_voxmap(void);
 
 void run_test_voxmap(void)
@@ -3450,7 +3523,10 @@ void run_test_voxmap(void)
 	RUN_TEST(test_slice_size_guards);
 	RUN_TEST(test_slice_nonprintable_cells);
 	RUN_TEST(test_voxel_query_bounds);
-	RUN_TEST(test_smooth_bottom_face);
+	RUN_TEST(test_surface_y_heightmap);
+	RUN_TEST(test_surface_y_shapes);
+	RUN_TEST(test_surface_y_topmost_wins);
+	RUN_TEST(test_surface_y_height_zero_ground);	RUN_TEST(test_smooth_bottom_face);
 	RUN_TEST(test_separator_line_variants);
 	RUN_TEST(test_directive_leading_whitespace);
 	RUN_TEST(test_legend_many_tokens);

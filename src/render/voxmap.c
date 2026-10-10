@@ -1064,6 +1064,35 @@ bool voxmapIsVoid(const Voxmap *map, int x, int z)
 	return voxmapHeightAt(map, x, z) < 0;
 }
 
+float voxmapSurfaceY(const Voxmap *map, int x, int z)
+{
+	int y;
+
+	if (map == NULL || x < 0 || z < 0 || x >= map->width ||
+	    z >= map->depth)
+		return -1.0f;
+	for (y = map->levels - 1; y >= 0; y--) {
+		size_t idx = voxelIndex(map, x, y, z);
+
+		if (!map->solid[idx])
+			continue;
+		switch (VOXMAP_SHAPE_OF(map->shapes[idx])) {
+		case VOXMAP_SHAPE_HALF:
+			return (float)y + 0.5f;
+		case VOXMAP_SHAPE_RAMP:
+			return (float)y + 0.5f;
+		case VOXMAP_SHAPE_HALF_RAMP:
+			return (float)y + 0.25f;
+		case VOXMAP_SHAPE_FULL:
+		default:
+			return (float)y + 1.0f;
+		}
+	}
+	if (map->ground[(size_t)z * map->width + x])
+		return 0.0f;
+	return -1.0f;
+}
+
 int voxmapMaterialAt(const Voxmap *map, int x, int z)
 {
 	int y;
