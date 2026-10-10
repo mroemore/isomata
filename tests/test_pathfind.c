@@ -201,7 +201,9 @@ static void test_output_cap(void)
 
 /* The node-store cap: an unreachable goal on a large flat map forces the
  * search to flood past PATHFIND_MAX_NODES, which fails safely as TOO_LONG
- * (not NO_PATH). */
+ * (not NO_PATH). Coupled to the expansion order: a reordering that reaches
+ * the enclosed goal before the cap would flip this to NO_PATH — keep both
+ * in sync. */
 static void test_node_cap_too_long(void)
 {
 	char buf[48 * 49 + 1];

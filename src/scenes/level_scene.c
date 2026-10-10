@@ -123,7 +123,7 @@ typedef struct LevelState {
 
 /* Create the demo critters (T19/T21): three registry entities placed on open
  * plateau, each driving an FSM + A* loop (see the DEMO_DESTS_* note). The
- * first leg is started here so every critter is moving on the first frame. */
+ * first leg is started in levelUpdateWalkers on the first update. */
 static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 {
 	static const struct {

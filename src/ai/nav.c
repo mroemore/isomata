@@ -17,6 +17,8 @@ int entityPathTo(Entity *e, int tx, int tz)
 	int n = 0;
 	int fromX;
 	int fromZ;
+	int oldHead;
+	int oldCount;
 
 	if (e == NULL || e->map == NULL)
 		return -1;
@@ -35,10 +37,18 @@ int entityPathTo(Entity *e, int tx, int tz)
 		return -1;
 
 	/* Replace the remaining route. entityWalkPath references the in-flight
-	 * segment target when the queue is emptied, matching `fromX/fromZ`. */
+	 * segment target when the queue is emptied, matching `fromX/fromZ`.
+	 * Snapshot first: the swap commits only if the queue accepts the route,
+	 * so a rejected route leaves the previous one intact. */
+	oldHead = e->pathHead;
+	oldCount = e->pathCount;
+
 	e->pathHead = 0;
 	e->pathCount = 0;
-	if (n > 0 && !entityWalkPath(e, tiles, n))
-		return -1;	/* unreachable for a findPath result; fail safe */
+	if (n > 0 && !entityWalkPath(e, tiles, n)) {
+		e->pathHead = oldHead;	/* unreachable for a findPath result */
+		e->pathCount = oldCount;
+		return -1;	/* fail safe: the old route survives */
+	}
 	return n;
 }
