@@ -89,15 +89,19 @@ static const int DEMO_DESTS_C[2][2] = { { 11, 10 }, { 2, 7 } };
 
 /* --- T22 machines ------------------------------------------------------- *
  *
- * Five machines in a "laundromat corner" row on the north grass (z=1, x1..5),
- * clear of the room (x4-8,z9-12), the tower (x6-7,z3-6) and every critter
- * lane (A paces z=8, B the x=10 column z3-13, C detours south of the room).
- * The row sits west of the tower and two grass rows north of the z=3 stone, so
- * all five billboards read unobstructed. Each renders as a 1.2x1.4 billboard
- * through the sprite path, tinted per kind (washers cool, dryers warm); the
- * tile stays walkable so a critter can step onto it to interact (v1
- * convention, sim/machines.h). */
-#define LEVEL_MACHINE_COUNT 5
+ * Five machines in a "laundromat corner" row on the north grass (z=1, x1..5)
+ * plus a SIXTH, ISOLATED washer far east at (14,1) — at least K+1 tiles from
+ * the cluster. The row is clear of the room (x4-8,z9-12), the tower (x6-7,z3-6)
+ * and every critter lane (A paces z=8, B the x=10 column z3-13, C detours
+ * south of the room). The isolated washer exists so the selection policies
+ * visibly diverge: when a cluster washer is occupied, a `closest` customer
+ * still picks the nearest cluster washer while a `spread_k` customer (which
+ * penalises candidates within K=2 of the occupied one) picks the isolated
+ * washer. Each renders as a 1.2x1.4 billboard through the sprite path, tinted
+ * per kind (washers cool, dryers warm, broken dark grey); the tile stays
+ * walkable so a critter can step onto it to interact (v1 convention,
+ * sim/machines.h). */
+#define LEVEL_MACHINE_COUNT 6
 #define LEVEL_MACHINE_W 1.2f
 #define LEVEL_MACHINE_H 1.4f
 #define LEVEL_MACHINE_RUN_SECS 30.0f
@@ -116,6 +120,8 @@ static const struct {
 	{ MACHINE_KIND_WASHER, 3, 1, 3 },
 	{ MACHINE_KIND_DRYER, 4, 1, 2 },
 	{ MACHINE_KIND_DRYER, 5, 1, 2 },
+	/* Isolated washer: >K from the cluster, so spread_k can diverge. */
+	{ MACHINE_KIND_WASHER, 14, 1, 3 },
 };
 
 /* A demo critter: its entity, its executor FSM and a two-destination loop.
@@ -180,10 +186,13 @@ typedef struct LevelState {
 	int16_t spriteMaterial;		/* atlas material for the critters */
 	int16_t machineMaterial;	/* atlas material for the machines */
 	BrainEvent events[BRAIN_MAX_EVENTS];	/* per-frame brain events */
-	/* Scripted demo break / repair of washer 0. */
+	/* Scripted demo break / repair of washer 0, and the scripted divergence
+	 * pair (a closest + a spread_k customer) spawned once washer 0 is
+	 * occupied. */
 	int washer0Runs;	/* RUN_START events seen for washer 0 */
-	float breakTimer;	/* countdown to the scripted break (<0 = idle) */
-	float repairTimer;	/* countdown to the scripted repair (<0 = idle) */
+	bool divergenceSpawned;	/* the closest/spread_k pair was spawned */
+	float breakTimer;	/* countdown to the scripted break (<= 0 = idle) */
+	float repairTimer;	/* countdown to the scripted repair (<= 0 = idle) */
 	EntityDebugMarker markers[LEVEL_DEBUG_MARKER_MAX];	/* T20 overlay */
 	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
@@ -642,25 +651,23 @@ static bool level_init(void *self, App *app)
 	st->sim.policyTint[SEL_POLICY_SPREAD_K] = LEVEL_CUSTOMER_TINT_SPREAD;
 	st->sim.policyTint[SEL_POLICY_CHEAPEST] = LEVEL_CUSTOMER_TINT_CHEAPEST;
 	st->washer0Runs = 0;
+	st->divergenceSpawned = false;
 	st->breakTimer = -1.0f;
 	st->repairTimer = -1.0f;
 	levelBuildEntities(st, spriteMaterial);
 	levelBuildMachines(st);
-	simSetSpawner(&st->sim, true, BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP);
-	SDL_Log("isomata: customer spawner on (%.0fs interval, cap %d, door (%d,%d))",
-		(double)BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP, LEVEL_DOOR_X,
-		LEVEL_DOOR_Z);
-	/* Opening pair: two customers walk in together and both pick the
-	 * nearest washer, so the second's claim is refused and it re-plans to
-	 * the next free washer — the refusal path, visible from the first
-	 * frames. The interval spawner adds the rest. */
+	/* The interval spawner stays OFF until the scripted divergence pair has
+	 * arrived (see levelUpdateBrain). One closest customer goes in first and
+	 * claims the nearest cluster washer; then a closest + a spread_k pair
+	 * arrive while that washer is occupied, so their choices diverge: the
+	 * closest one takes the next free cluster washer, the spread_k one
+	 * (penalising candidates within K=2 of the occupied one) takes the
+	 * isolated washer far east. */
+	simSetSpawner(&st->sim, false, BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP);
 	{
 		int n0 = 0;
 		int k;
 
-		(void)simSpawnCustomer(&st->sim, SEL_POLICY_CLOSEST,
-				       BRAIN_START_MONEY, st->events,
-				       BRAIN_MAX_EVENTS, &n0);
 		(void)simSpawnCustomer(&st->sim, SEL_POLICY_CLOSEST,
 				       BRAIN_START_MONEY, st->events,
 				       BRAIN_MAX_EVENTS, &n0);
@@ -850,17 +857,47 @@ static void levelLogBrainEvent(const BrainEvent *ev)
 	}
 }
 
+/* Spawn the scripted divergence pair — a `closest` and a `spread_k` customer
+ * together — and start the interval spawner. Called once, when washer 0's
+ * first LOAD shows a cluster machine occupied: the closest customer takes the
+ * next free cluster washer, the spread_k customer (penalising candidates within
+ * K=2 of the occupied one) takes the isolated washer, and the next spawner
+ * arrival is a `cheapest` customer so all three policies appear. */
+static void levelSpawnDivergence(LevelState *st)
+{
+	BrainEvent ev[8];
+	int n = 0;
+	int k;
+
+	(void)simSpawnCustomer(&st->sim, SEL_POLICY_CLOSEST, BRAIN_START_MONEY,
+			       ev, 8, &n);
+	(void)simSpawnCustomer(&st->sim, SEL_POLICY_SPREAD_K, BRAIN_START_MONEY,
+			       ev, 8, &n);
+	st->divergenceSpawned = true;
+	st->sim.spawnCursor = SEL_POLICY_CHEAPEST;
+	simSetSpawner(&st->sim, true, BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP);
+	SDL_Log("isomata: [t=%llums] scripted divergence pair (closest + spread_k) arrived; interval spawner on (%.0fs interval, cap %d, door (%d,%d))",
+		levelMs(), (double)BRAIN_SPAWN_INTERVAL, BRAIN_SPAWN_CAP,
+		LEVEL_DOOR_X, LEVEL_DOOR_Z);
+	for (k = 0; k < n; k++)
+		levelLogBrainEvent(&ev[k]);
+}
+
 /* Advance the customer world: the spawner, the machine timers/wakes, every
- * customer brain, the scripted washer-0 break/repair, and the brain/wake log
- * stream. */
+ * customer brain, the scripted divergence pair, the scripted washer-0
+ * break/repair, and the brain/wake log stream. */
 static void levelUpdateBrain(LevelState *st, float dt)
 {
 	int n = simUpdate(&st->sim, dt, st->events, BRAIN_MAX_EVENTS);
+	bool spawn_divergence = false;
 	int i;
 
 	for (i = 0; i < n; i++) {
 		const BrainEvent *ev = &st->events[i];
 
+		if (!st->divergenceSpawned && ev->kind == BRAIN_EV_LOAD &&
+		    ev->machine == LEVEL_SCRIPT_BREAK_MACHINE)
+			spawn_divergence = true;
 		if (ev->kind == BRAIN_EV_RUN_START &&
 		    ev->machine == LEVEL_SCRIPT_BREAK_MACHINE) {
 			st->washer0Runs++;
@@ -869,6 +906,10 @@ static void levelUpdateBrain(LevelState *st, float dt)
 		}
 		levelLogBrainEvent(ev);
 	}
+	/* Spawn after the loop: spawning appends events and must not clobber
+	 * the frame's event array while it is being walked. */
+	if (spawn_divergence)
+		levelSpawnDivergence(st);
 	for (i = 0; i < st->sim.wakeCount; i++)
 		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
 			     "isomata: [t=%llums] machine %d wake %s owner %d",
@@ -883,6 +924,7 @@ static void levelUpdateBrain(LevelState *st, float dt)
 				SDL_Log("isomata: [t=%llums] SCRIPTED BREAK: washer %d broke mid-run",
 					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
 			st->repairTimer = LEVEL_SCRIPT_REPAIR_SECS;
+			st->breakTimer = -1.0f;
 		}
 	}
 	if (st->repairTimer > 0.0f) {
@@ -894,6 +936,7 @@ static void levelUpdateBrain(LevelState *st, float dt)
 			if (m != NULL && machineRepair(m))
 				SDL_Log("isomata: [t=%llums] SCRIPTED REPAIR: washer %d free again",
 					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
+			st->repairTimer = -1.0f;
 		}
 	}
 }
