@@ -21,6 +21,9 @@
 #include "scenes/level_scene.h"
 
 #include "achievement.h"
+#include "ai/fsm.h"
+#include "ai/nav.h"
+#include "ai/pathfind.h"
 #include "app.h"
 #include "audio/audio.h"
 #include "entities/entities.h"
@@ -60,30 +63,36 @@
 #define LEVEL_TOAST_H 48
 #define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
 
-/* Demo walk paths (T19): destination waypoints, each a 4-neighbour of the
- * previous one. Every tile is open plateau or tower-top ground so the demo
- * reads clearly and never routes through the room (x4-8, z9-12, roof) or a
- * tower side:
- *   A paces a 3-tile line on z=3 (x10..12): the (11,3)->(12,3) step drops a
- *     full unit (stone plateau 2.0 -> grass 1.0) and back, so the tween's y
- *     follow is visible;
- *   B paces a 4-tile line on z=8 (x10..13), all flat (contrast linear easing);
- *   C loops the 2x2 tower top (x6-7, z7-8) at height 9. */
-static const int DEMO_PATH_A[4][2] = {
-	{ 11, 3 }, { 12, 3 }, { 11, 3 }, { 10, 3 },
-};
-static const int DEMO_PATH_B[6][2] = {
-	{ 11, 8 }, { 12, 8 }, { 13, 8 }, { 12, 8 }, { 11, 8 }, { 10, 8 },
-};
-static const int DEMO_PATH_C[4][2] = {
-	{ 7, 7 }, { 7, 8 }, { 6, 8 }, { 6, 7 },
-};
+/* T21 demo: FSM + A* driven critters. Each walker cycles a two-destination
+ * list; a leg's route is computed with A* (entityPathTo) and the executor FSM
+ * drives IDLE -> MOVING_TO -> (ARRIVED) ACTING -> (PHASE_DONE) WAITING ->
+ * (PHASE_DONE) DONE -> ..., so every state/action is exercised. Destinations
+ * are open plateau tiles:
+ *   A paces the tower row z=8 (x2<->x12): the tower (x6-7, z7-8) blocks the
+ *     straight line, so A* routes 20 tiles around the south edge (straight-line
+ *     10) — the visible detour;
+ *   B walks the x=10 lane (z3<->z13): a straight 10-tile run through the gap
+ *     between the tower and the room (contrast, no detour);
+ *   C crosses west (2,7) to east (11,10): the room (x4-8, z9-12) blocks it, so
+ *     the route runs 18 tiles around the south (straight-line 12). */
+static const int DEMO_DESTS_A[2][2] = { { 12, 8 }, { 2, 8 } };
+static const int DEMO_DESTS_B[2][2] = { { 10, 13 }, { 10, 3 } };
+static const int DEMO_DESTS_C[2][2] = { { 11, 10 }, { 2, 7 } };
 
-/* A demo entity plus the preset path it repeats once it runs out. */
+/* The WAIT reason the demo's timed machine phase carries, and its bound. */
+#define DEMO_WAIT_CYCLE 1
+#define DEMO_WAIT_SECONDS 0.4f
+
+/* A demo critter: its entity, its executor FSM and a two-destination loop.
+ * waitLeft counts down the FSM's WAITING phase (the simulated machine cycle;
+ * the demo never lets it reach a timeout). */
 typedef struct DemoWalker {
 	EntityHandle handle;
-	const int (*path)[2];
-	int pathLen;
+	Fsm fsm;
+	const int (*dests)[2];
+	int destCount;
+	int destIndex;
+	float waitLeft;
 } DemoWalker;
 
 /* The four controls (ROT L / ROT R / DEBUG / RESET) and their layout rule
@@ -112,25 +121,24 @@ typedef struct LevelState {
 	LevelControls controls;	/* rotate x2 / debug / reset icon buttons */
 } LevelState;
 
-/* Create the demo critters (T19): three registry entities with preset walk
- * paths on the plateau / tower top. Each one's billboard samples the
- * manifest's "sprite" material (an alpha-edged texture). The path is queued
- * immediately so the entity is moving on the first frame. */
+/* Create the demo critters (T19/T21): three registry entities placed on open
+ * plateau, each driving an FSM + A* loop (see the DEMO_DESTS_* note). The
+ * first leg is started here so every critter is moving on the first frame. */
 static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 {
 	static const struct {
 		int startX;
 		int startZ;
-		const int (*path)[2];
-		int pathLen;
+		const int (*dests)[2];
+		int destCount;
 		float speed;
 		EasingFn easing;
 		float width;
 		float height;
 	} demo[LEVEL_WALKER_COUNT] = {
-		{ 10, 3, DEMO_PATH_A, 4, 1.5f, EASE_IN_OUT, 1.2f, 1.8f },
-		{ 10, 8, DEMO_PATH_B, 6, 1.8f, EASE_LINEAR, 1.2f, 1.8f },
-		{ 6, 7, DEMO_PATH_C, 4, 2.5f, EASE_OUT, 1.5f, 2.2f },
+		{ 2, 8, DEMO_DESTS_A, 2, 3.0f, EASE_IN_OUT, 1.2f, 1.8f },
+		{ 10, 3, DEMO_DESTS_B, 2, 2.5f, EASE_LINEAR, 1.2f, 1.8f },
+		{ 2, 7, DEMO_DESTS_C, 2, 3.5f, EASE_OUT, 1.5f, 2.2f },
 	};
 	int i;
 
@@ -139,6 +147,7 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 	for (i = 0; i < LEVEL_WALKER_COUNT; i++) {
 		EntityHandle h = entityCreate(&st->entities);
 		Entity *e = entityGet(&st->entities, h);
+		DemoWalker *w;
 
 		if (e == NULL ||
 		    !entityPlace(e, demo[i].startX, demo[i].startZ)) {
@@ -152,42 +161,110 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 		e->animated = true;
 		entitySetSprite(e, demo[i].width, demo[i].height,
 				DRAW_TINT(255, 255, 255, 255), spriteMaterial);
-		if (!entityWalkPath(e, demo[i].path, demo[i].pathLen))
-			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				     "level_scene: demo entity %d path rejected",
-				     i);
-		st->walkers[st->walkerCount].handle = h;
-		st->walkers[st->walkerCount].path = demo[i].path;
-		st->walkers[st->walkerCount].pathLen = demo[i].pathLen;
+
+		w = &st->walkers[st->walkerCount];
+		w->handle = h;
+		fsmInit(&w->fsm);
+		w->dests = demo[i].dests;
+		w->destCount = demo[i].destCount;
+		w->destIndex = 0;
+		w->waitLeft = 0.0f;
+		w->fsm.waitReason = DEMO_WAIT_CYCLE;
+		w->fsm.waitSeconds = DEMO_WAIT_SECONDS;
 		st->walkerCount++;
-		SDL_Log("isomata: demo entity %d created at (%d,%d), path %d tiles",
-			h, demo[i].startX, demo[i].startZ, demo[i].pathLen);
+		SDL_Log("isomata: demo entity %d created at (%d,%d)",
+			h, demo[i].startX, demo[i].startZ);
 	}
 }
 
-/* Log arrivals (opt-in ISO_LOG=debug) and re-queue a walker's preset path
- * once it runs out, so the demo loops. */
-static void levelUpdateWalkers(LevelState *st)
+/* Apply one FSM event and log the transition (opt-in ISO_LOG=debug), so the
+ * log shows the FSM actually driving the critters. */
+static FsmResult demoFsmStep(DemoWalker *w, int event)
+{
+	int before = w->fsm.state;
+	FsmResult r = fsmStep(&w->fsm, event);
+
+	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+		     "isomata: entity %d fsm %s --%s--> %s (action %s)",
+		     w->handle, fsmStateName(before), fsmEventName(event),
+		     fsmStateName(r.state), fsmActionName(r.action));
+	return r;
+}
+
+/* Begin the walker's next leg: drive the FSM START (MOVE_TO the target), then
+ * A* the route with entityPathTo and queue it; log the recomputed path length
+ * against the straight-line distance so a detour leg is provable. A rejected
+ * route fails the task (DENIED -> FINISH_GOAL) and the next leg is tried on
+ * the following update. */
+static void demoStartLeg(LevelState *st, DemoWalker *w)
+{
+	const int *d = w->dests[w->destIndex];
+	Entity *e = entityGet(&st->entities, w->handle);
+	int straight;
+	int len;
+
+	if (e == NULL)
+		return;
+	straight = pathfindManhattan(e->tileX, e->tileZ, d[0], d[1]);
+	/* FSM decision first: START carries the target and emits MOVE_TO. */
+	fsmSetGoal(&w->fsm, d[0], d[1]);
+	demoFsmStep(w, FSM_EVENT_START);
+
+	len = entityPathTo(e, d[0], d[1]);
+	if (len < 0) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: entity %d path to (%d,%d) rejected",
+			     w->handle, d[0], d[1]);
+		demoFsmStep(w, FSM_EVENT_DENIED);
+		w->destIndex = (w->destIndex + 1) % w->destCount;
+		return;
+	}
+	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+		     "isomata: entity %d: task path (len %d) to (%d,%d) straight %d%s",
+		     w->handle, len, d[0], d[1], straight,
+		     len > straight ? " DETOUR" : "");
+	w->destIndex = (w->destIndex + 1) % w->destCount;
+}
+
+/* Advance each critter's executor one step: on arrival run the activity step
+ * and hand off to the timed WAIT, count the WAIT down, then begin the next
+ * leg. The FSM models the decisions; this is the sim glue that executes
+ * MOVE_TO (entityPathTo) and WAIT (waitLeft). */
+static void levelUpdateWalkers(LevelState *st, float dt)
 {
 	int i;
 
 	for (i = 0; i < st->walkerCount; i++) {
-		Entity *e = entityGet(&st->entities, st->walkers[i].handle);
+		DemoWalker *w = &st->walkers[i];
+		Entity *e = entityGet(&st->entities, w->handle);
+		FsmResult r;
 
 		if (e == NULL)
 			continue;
-		if (e->arrived)
-			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-				     "isomata: demo entity %d arrived (%d,%d) y %.2f",
-				     st->walkers[i].handle, e->tileX, e->tileZ,
-				     e->y);
-		if (e->moving || e->pathCount > 0)
-			continue;
-		if (!entityWalkPath(e, st->walkers[i].path,
-				    st->walkers[i].pathLen))
-			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-				     "level_scene: demo walker %d re-path failed",
-				     i);
+		switch (w->fsm.state) {
+		case FSM_STATE_MOVING_TO:
+			/* Arrival = the whole route is walked: no active
+			 * segment and an empty queue. */
+			if (!e->moving && e->pathCount == 0) {
+				demoFsmStep(w, FSM_EVENT_ARRIVED);
+				/* The activity step completes at once,
+				 * handing off to the timed phase. */
+				r = demoFsmStep(w, FSM_EVENT_PHASE_DONE);
+				w->waitLeft = r.waitSeconds;
+			}
+			break;
+		case FSM_STATE_WAITING:
+			w->waitLeft -= dt;
+			if (w->waitLeft <= 0.0f)
+				demoFsmStep(w, FSM_EVENT_PHASE_DONE);
+			break;
+		case FSM_STATE_IDLE:
+		case FSM_STATE_DONE:
+			demoStartLeg(st, w);
+			break;
+		default:
+			break;
+		}
 	}
 }
 
@@ -527,9 +604,9 @@ static void level_update(void *self, App *app, float dt)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
-	/* Advance the demo critters and loop their preset paths (T19). */
+	/* Advance the demo critters: FSM + A* driven routes (T21). */
 	entitiesUpdate(&st->entities, dt);
-	levelUpdateWalkers(st);
+	levelUpdateWalkers(st, dt);
 	toastUpdate(st->toast, dt);
 }
 
