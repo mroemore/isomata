@@ -34,6 +34,8 @@
 
 /* 8 x 4 all-walkable ground (surface y = 1); door/exit/wait at (0,0). */
 static const char *SCENARIO_MAP = "11111111\n11111111\n11111111\n11111111\n";
+/* 12 x 3 ground for the spread_k divergence scenario. */
+static const char *DIVERGE_MAP = "111111111111\n111111111111\n111111111111\n";
 
 #define DT 0.05f
 #define MAX_STEPS 12000
@@ -825,6 +827,73 @@ static void test_entity_destroyed_mid_life(void)
 	destroyVoxmap(map);
 }
 
+/* The reviewer's divergence oracle: with one cluster washer occupied, a
+ * `closest` customer takes the next free cluster washer while a `spread_k`
+ * customer takes the isolated one — exact machines and scores pinned. */
+static void test_integration_spread_diverges(void)
+{
+	Voxmap *map = parseVoxmapText(DIVERGE_MAP, strlen(DIVERGE_MAP), NULL);
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	int n = 0;
+	int i;
+	int m_closest = -1;
+	int m_spread = -1;
+	int s_closest = -1;
+	int s_spread = -1;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);	/* #0 */
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 3, 0, 3, 1.0f);	/* #1 */
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 10, 0, 3, 1.0f); /* #2 */
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 1.0f);
+
+	/* A closest customer claims the nearest cluster washer (#0) first. */
+	(void)simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	for (i = 0; i < MAX_STEPS; i++) {
+		step1(&w, &t, DT);
+		if (countKind(&t, BRAIN_EV_LOAD) >= 1)
+			break;
+	}
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_CLAIMED,
+			      machineGetConst(&w.machines, 0)->state);
+
+	/* A closest and a spread_k customer arrive together while #0 is
+	 * occupied (only #1 is a free cluster washer; #2 is isolated). */
+	n = 0;
+	(void)simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	n = 0;
+	(void)simSpawnCustomer(&w, SEL_POLICY_SPREAD_K, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	step1(&w, &t, DT);
+
+	for (i = 0; i < t.count; i++) {
+		if (t.ev[i].kind != BRAIN_EV_TASK_BEGIN)
+			continue;
+		if (t.ev[i].id == 1) {
+			m_closest = t.ev[i].machine;
+			s_closest = t.ev[i].score;
+		}
+		if (t.ev[i].id == 2) {
+			m_spread = t.ev[i].machine;
+			s_spread = t.ev[i].score;
+		}
+	}
+	/* closest -> the free cluster washer (#1), score = distance 3.
+	 * spread_k -> the isolated washer (#2), score = distance 10; the
+	 * cluster washer #1 is within K=2 of the occupied #0 and carries the
+	 * 100000 penalty. */
+	TEST_ASSERT_EQUAL_INT(1, m_closest);
+	TEST_ASSERT_EQUAL_INT(3, s_closest);
+	TEST_ASSERT_EQUAL_INT(2, m_spread);
+	TEST_ASSERT_EQUAL_INT(10, s_spread);
+	destroyVoxmap(map);
+}
+
 void run_test_brain(void)
 {
 	(void)dumpStory;
@@ -840,6 +909,7 @@ void run_test_brain(void)
 	RUN_TEST(test_unreachable_machine_abandons);
 	RUN_TEST(test_entity_destroyed_mid_life);
 	RUN_TEST(test_integration_two_customers_clean_dry);
+	RUN_TEST(test_integration_spread_diverges);
 	RUN_TEST(test_integration_single_washer_contention);
 	RUN_TEST(test_integration_break_mid_run_replans);
 	RUN_TEST(test_determinism);
