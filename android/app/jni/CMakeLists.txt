@@ -61,6 +61,8 @@ set(ISOMATA_SRC
 	../../../src/sim/plan.c
 	../../../src/sim/selection.c
 	../../../src/sim/brain.c
+	../../../src/agents/need.c
+	../../../src/agents/agent.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c
 	../../../src/ui/layout.c

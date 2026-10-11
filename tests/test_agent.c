@@ -1,0 +1,557 @@
+/*
+ * Agent registry + role profiles (CTOL rung 1: unit + boundary).
+ *
+ * Covers: agentsInit's reset (including the monotonic id stamp restarting);
+ * the flat-slot registry (create to AGENT_MAX, the AGENT_INVALID overflow,
+ * destroy, the AGENT_INVALID get guards, slot reuse never aliasing a live
+ * agent, a reused slot getting a FRESH id); agentCreate's defaults (content
+ * needs, zeroed skills/flaws, unlinked entity, no board / job, dwell 0,
+ * panicMask matching the freshly initialised panic channel); the exact
+ * RoleProfile row for every role (every need slot, both columns);
+ * agentRoleProfile's NULL for an unknown role; agentsDecay (per-role decay
+ * multipliers, live agents only, panicMask refresh, AGENT_MAX_DT clamp,
+ * NaN-safe dt, the unknown-role skip); agentsStats; and run-to-run
+ * determinism.
+ *
+ * dt values are dyadic (1/16 s) with dyadic role multipliers, so the expected
+ * floats are exact — TEST_ASSERT_FLOAT_WITHIN(0.0f, ...) is a bit-exact pin.
+ *
+ * Pure: links agent.c + need.c + the Unity subset. Harness convention: no
+ * main()/setUp()/tearDown(); exposes run_test_agent().
+ */
+
+#include "unity.h"
+
+#include "agents/agent.h"
+#include "entities/entities.h"
+
+#include <string.h>
+
+#define EPS 1e-6f
+
+/* ---- helpers ------------------------------------------------------------ */
+
+/* Pin every decay multiplier / panic threshold of a profile: the role's base
+ * decay everywhere except the slots named in exceptNeeds, and one threshold
+ * for the whole role. Naming the exceptions (rather than "all rows are the
+ * base") is what makes a STAFF row checkable at all — it has three. */
+static void assertProfileRow(const RoleProfile *p, float decay, float threshold,
+			     int exceptCount, const int *exceptNeeds,
+			     const float *exceptDecays)
+{
+	int n, i;
+
+	TEST_ASSERT_NOT_NULL(p);
+	for (n = 0; n < NEED_COUNT; n++) {
+		float wantDecay = decay;
+
+		for (i = 0; i < exceptCount; i++)
+			if (exceptNeeds[i] == n)
+				wantDecay = exceptDecays[i];
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, wantDecay, p->decayMul[n]);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, threshold, p->panicThreshold[n]);
+	}
+}
+
+static void assertAgentDefaults(const Agent *a, int role, int id)
+{
+	int n;
+
+	TEST_ASSERT_EQUAL_INT(id, a->id);
+	TEST_ASSERT_EQUAL_INT(role, a->role);
+	TEST_ASSERT_TRUE(a->alive);
+	for (n = 0; n < NEED_COUNT; n++) {
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.value[n]);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.panic[n]);
+	}
+	/* Competencies are their own (shorter) vector: pinned over SKILL_COUNT,
+	 * not NEED_COUNT, so this never reads past skills[] / flaws[]. */
+	for (n = 0; n < SKILL_COUNT; n++) {
+		TEST_ASSERT_EQUAL_UINT(0, a->skills[n]);
+		TEST_ASSERT_EQUAL_UINT(0, a->flaws[n]);
+	}
+	/* needSetInit starts every panic channel at 1.0, so a fresh agent is
+	 * born panicking on every need: the mask mirrors it exactly. */
+	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
+	TEST_ASSERT_EQUAL_INT(ENTITY_INVALID, a->entity);
+	TEST_ASSERT_EQUAL_INT(-1, a->personalBoard);
+	TEST_ASSERT_EQUAL_INT(-1, a->engagedJob);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->dwellLeft);
+}
+
+/* ---- registry ----------------------------------------------------------- */
+
+static void test_registry_init_resets(void)
+{
+	AgentRegistry reg;
+	AgentHandle h;
+
+	agentsInit(&reg);
+	TEST_ASSERT_EQUAL_INT(0, reg.liveCount);
+
+	h = agentCreate(&reg, ROLE_CUSTOMER);
+	TEST_ASSERT_TRUE(h != AGENT_INVALID);
+	TEST_ASSERT_EQUAL_INT(1, reg.liveCount);
+
+	/* Re-init empties the registry and restarts the id stamp, so a fresh
+	 * run produces a byte-identical registry. */
+	agentsInit(&reg);
+	TEST_ASSERT_EQUAL_INT(0, reg.liveCount);
+	TEST_ASSERT_NULL(agentGet(&reg, h));
+	h = agentCreate(&reg, ROLE_CUSTOMER);
+	TEST_ASSERT_EQUAL_INT(0, agentGet(&reg, h)->id);
+
+	agentsInit(NULL);
+}
+
+static void test_registry_create_to_capacity(void)
+{
+	AgentRegistry reg;
+	int i;
+
+	agentsInit(&reg);
+	for (i = 0; i < AGENT_MAX; i++) {
+		AgentHandle h = agentCreate(&reg, ROLE_CUSTOMER);
+
+		TEST_ASSERT_EQUAL_INT(i, h);	/* first free slot, lowest first */
+		TEST_ASSERT_EQUAL_INT(i + 1, reg.liveCount);
+	}
+	/* Full: the next create refuses cleanly and changes nothing. */
+	TEST_ASSERT_EQUAL_INT(AGENT_INVALID, agentCreate(&reg, ROLE_CUSTOMER));
+	TEST_ASSERT_EQUAL_INT(AGENT_MAX, reg.liveCount);
+	TEST_ASSERT_EQUAL_INT(AGENT_INVALID, agentCreate(NULL, ROLE_CUSTOMER));
+	TEST_ASSERT_EQUAL_INT(AGENT_MAX, reg.liveCount);
+}
+
+static void test_registry_get_guards(void)
+{
+	AgentRegistry reg;
+	AgentHandle h;
+
+	agentsInit(&reg);
+	h = agentCreate(&reg, ROLE_CUSTOMER);
+	TEST_ASSERT_NOT_NULL(agentGet(&reg, h));
+	TEST_ASSERT_NULL(agentGet(NULL, h));
+	TEST_ASSERT_NULL(agentGet(&reg, -1));
+	TEST_ASSERT_NULL(agentGet(&reg, AGENT_MAX));
+	TEST_ASSERT_NULL(agentGet(&reg, AGENT_MAX + 99));
+	TEST_ASSERT_NULL(agentGet(&reg, h + 1));	/* never created */
+
+	agentDestroy(&reg, h);
+	TEST_ASSERT_NULL(agentGet(&reg, h));
+
+	/* Destroying twice, or destroying nonsense, is a no-op. */
+	agentDestroy(&reg, h);
+	agentDestroy(&reg, -1);
+	agentDestroy(&reg, AGENT_MAX);
+	agentDestroy(NULL, h);
+	TEST_ASSERT_EQUAL_INT(0, reg.liveCount);
+}
+
+static void test_registry_destroy_frees_slot(void)
+{
+	AgentRegistry reg;
+	AgentHandle a, b, c;
+
+	agentsInit(&reg);
+	a = agentCreate(&reg, ROLE_CUSTOMER);
+	b = agentCreate(&reg, ROLE_STAFF);
+	c = agentCreate(&reg, ROLE_CRITTER);
+	TEST_ASSERT_EQUAL_INT(3, reg.liveCount);
+
+	agentDestroy(&reg, b);
+	TEST_ASSERT_EQUAL_INT(2, reg.liveCount);
+	TEST_ASSERT_NULL(agentGet(&reg, b));
+	/* The slot is scrubbed, so a dead handle can never read a live agent. */
+	TEST_ASSERT_FALSE(reg.alive[b]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, reg.slots[b].needs.value[NEED_SURVIVAL]);
+	/* The neighbours are untouched. */
+	TEST_ASSERT_NOT_NULL(agentGet(&reg, a));
+	TEST_ASSERT_NOT_NULL(agentGet(&reg, c));
+	TEST_ASSERT_EQUAL_INT(ROLE_CUSTOMER, agentGet(&reg, a)->role);
+	TEST_ASSERT_EQUAL_INT(ROLE_CRITTER, agentGet(&reg, c)->role);
+}
+
+/* A reused slot is a NEW agent: fresh id, content needs, no aliasing. */
+static void test_registry_slot_reuse_is_fresh(void)
+{
+	AgentRegistry reg;
+	AgentHandle a, b, reused;
+	int i, j;
+	int liveIds[AGENT_MAX];
+	int n = 0;
+
+	agentsInit(&reg);
+	a = agentCreate(&reg, ROLE_CUSTOMER);
+	b = agentCreate(&reg, ROLE_STAFF);
+	TEST_ASSERT_EQUAL_INT(0, a);
+	TEST_ASSERT_EQUAL_INT(1, b);
+
+	/* Pollute the agent we are about to kill, so reuse would be visible. */
+	agentGet(&reg, a)->skills[SKILL_REPAIR] = 900;
+	agentGet(&reg, a)->needs.value[NEED_SURVIVAL] = 0.1f;
+
+	agentDestroy(&reg, a);
+	reused = agentCreate(&reg, ROLE_CUSTOMER);
+	TEST_ASSERT_EQUAL_INT(a, reused);	/* same slot */
+	TEST_ASSERT_EQUAL_INT(1, b);		/* the live agent kept its slot */
+
+	/* The new occupant is not the old one: new id, default needs. */
+	TEST_ASSERT_TRUE(agentGet(&reg, b)->id != agentGet(&reg, reused)->id);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f,
+				 agentGet(&reg, reused)->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_EQUAL_UINT(0, agentGet(&reg, reused)->skills[SKILL_REPAIR]);
+
+	/* No two live agents share an id or a slot. */
+	for (i = 0; i < AGENT_MAX; i++) {
+		Agent *ag;
+
+		if (!reg.alive[i])
+			continue;
+		ag = &reg.slots[i];
+		TEST_ASSERT_EQUAL_PTR(&reg.slots[i], agentGet(&reg, i));
+		TEST_ASSERT_TRUE(ag->alive);
+		liveIds[n] = ag->id;
+		for (j = 0; j < n; j++)
+			TEST_ASSERT_TRUE(liveIds[j] != ag->id);
+		n++;
+	}
+	TEST_ASSERT_EQUAL_INT(2, n);
+	TEST_ASSERT_EQUAL_INT(2, reg.liveCount);
+}
+
+static void test_registry_ids_are_monotonic(void)
+{
+	AgentRegistry reg;
+	int first, second, third;
+
+	agentsInit(&reg);
+	first = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER))->id;
+	second = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER))->id;
+	third = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER))->id;
+	TEST_ASSERT_EQUAL_INT(0, first);
+	TEST_ASSERT_EQUAL_INT(1, second);
+	TEST_ASSERT_EQUAL_INT(2, third);
+
+	/* A destroyed slot's id is never reissued — the stable tie-break key. */
+	agentDestroy(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	TEST_ASSERT_EQUAL_INT(4, agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER))->id);
+}
+
+static void test_create_defaults(void)
+{
+	AgentRegistry reg;
+	Agent *cust, *staff, *critter;
+
+	agentsInit(&reg);
+	cust = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	staff = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	critter = agentGet(&reg, agentCreate(&reg, ROLE_CRITTER));
+	TEST_ASSERT_NOT_NULL(cust);
+	TEST_ASSERT_NOT_NULL(staff);
+	TEST_ASSERT_NOT_NULL(critter);
+
+	assertAgentDefaults(cust, ROLE_CUSTOMER, 0);
+	assertAgentDefaults(staff, ROLE_STAFF, 1);
+	assertAgentDefaults(critter, ROLE_CRITTER, 2);
+
+	/* Agency fields the framework fills in later are writable and hold.
+	 * entityCreate on a throwaway registry hands back slot 0 — a real
+	 * handle, distinct from the ENTITY_INVALID birth value pinned above. */
+	cust->entity = entityCreate(&(EntityRegistry){ 0 });
+	cust->personalBoard = 3;
+	cust->engagedJob = 7;
+	cust->dwellLeft = 1.5f;
+	TEST_ASSERT_EQUAL_INT(0, cust->entity);
+	TEST_ASSERT_TRUE(cust->entity != ENTITY_INVALID);
+	TEST_ASSERT_EQUAL_INT(3, cust->personalBoard);
+	TEST_ASSERT_EQUAL_INT(7, cust->engagedJob);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.5f, cust->dwellLeft);
+}
+
+/* ---- role profiles ------------------------------------------------------ */
+
+static void test_role_profile_customer(void)
+{
+	/* The baseline row: nothing is tuned, every need trips at 0.15. */
+	assertProfileRow(agentRoleProfile(ROLE_CUSTOMER), 1.0f, 0.15f, 0, NULL,
+			 NULL);
+}
+
+static void test_role_profile_staff(void)
+{
+	/* A staffer runs on social contact and burns out faster on the floor. */
+	static const int exceptNeeds[] = { NEED_SOCIAL, NEED_FULFILMENT,
+					   NEED_ENERGY };
+	static const float exceptDecays[] = { 0.5f, 0.5f, 1.5f };
+
+	assertProfileRow(agentRoleProfile(ROLE_STAFF), 1.0f, 0.15f, 3, exceptNeeds,
+			 exceptDecays);
+}
+
+static void test_role_profile_critter(void)
+{
+	/* Needs little company, is not bothered by esteem (0.0 = never decays,
+	 * so it can never panic), and is less annoyed by being blocked. */
+	static const int exceptNeeds[] = { NEED_SOCIAL, NEED_SATISFACTION,
+					   NEED_ESTEEM };
+	static const float exceptDecays[] = { 0.25f, 0.5f, 0.0f };
+
+	assertProfileRow(agentRoleProfile(ROLE_CRITTER), 1.0f, 0.10f, 3,
+			 exceptNeeds, exceptDecays);
+}
+
+static void test_role_profile_unknown_is_null(void)
+{
+	TEST_ASSERT_NULL(agentRoleProfile(ROLE_COUNT));
+	TEST_ASSERT_NULL(agentRoleProfile(-1));
+	TEST_ASSERT_NULL(agentRoleProfile(99));
+	/* The table is static: the same row every call, no allocation. */
+	TEST_ASSERT_EQUAL_PTR(agentRoleProfile(ROLE_CUSTOMER),
+			      agentRoleProfile(ROLE_CUSTOMER));
+	TEST_ASSERT_TRUE(agentRoleProfile(ROLE_CUSTOMER) !=
+			 agentRoleProfile(ROLE_STAFF));
+	TEST_ASSERT_EQUAL_INT(3, ROLE_COUNT);
+	TEST_ASSERT_EQUAL_INT(3, SKILL_COUNT);
+}
+
+/* ---- agentsDecay -------------------------------------------------------- */
+
+static void test_decay_applies_role_multipliers(void)
+{
+	AgentRegistry reg;
+	Agent *cust, *staff, *critter;
+
+	agentsInit(&reg);
+	cust = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	staff = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	critter = agentGet(&reg, agentCreate(&reg, ROLE_CRITTER));
+
+	agentsDecay(&reg, 0.0625f);
+
+	/* Customer: base rate, 1.0 - 1 * (1/16). */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9375f, cust->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9375f, staff->needs.value[NEED_SURVIVAL]);
+	/* Staff: the shift tires you (1.5) and company matters less (0.5). */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.90625f, staff->needs.value[NEED_ENERGY]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.96875f, staff->needs.value[NEED_SOCIAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.96875f, staff->needs.value[NEED_FULFILMENT]);
+	/* Critter: needs little company, cares not for esteem. */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.984375f, critter->needs.value[NEED_SOCIAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.96875f,
+				 critter->needs.value[NEED_SATISFACTION]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, critter->needs.value[NEED_ESTEEM]);
+	/* A need already below 1.0 ramps, so it loses more than the same need
+	 * on a content agent — the per-need curve is the role's, the ramp is
+	 * shared. */
+	TEST_ASSERT_TRUE(critter->needs.value[NEED_ESTEEM] >
+			 staff->needs.value[NEED_ESTEEM]);
+}
+
+static void test_decay_advances_only_live_agents(void)
+{
+	AgentRegistry reg;
+	AgentHandle h;
+	Agent *live;
+
+	agentsInit(&reg);
+	h = agentCreate(&reg, ROLE_CUSTOMER);
+	live = agentGet(&reg, h);
+	agentDestroy(&reg, agentCreate(&reg, ROLE_STAFF));
+
+	agentsDecay(&reg, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9375f, live->needs.value[NEED_SURVIVAL]);
+	/* The dead slot stays scrubbed at zero — a dead agent never decays. */
+	TEST_ASSERT_EQUAL_INT(1, reg.liveCount);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, reg.slots[1].needs.value[NEED_SURVIVAL]);
+}
+
+static void test_decay_refreshes_panic_mask(void)
+{
+	AgentRegistry reg;
+	Agent *a;
+
+	agentsInit(&reg);
+	a = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	/* needSetInit starts every channel at 1.0: the born state is panicking. */
+	TEST_ASSERT_EQUAL_INT((1 << NEED_COUNT) - 1, a->panicMask);
+	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
+
+	/* Clear every channel; the mask follows on the next decay. */
+	{
+		int n;
+
+		for (n = 0; n < NEED_COUNT; n++)
+			a->needs.panic[n] = 0.0f;
+	}
+	agentsDecay(&reg, 0.0625f);
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
+
+	/* One channel panicking: only its bit is set. */
+	a->needs.panic[NEED_SOCIAL] = 0.5f;
+	agentsDecay(&reg, 0.0625f);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SOCIAL, a->panicMask);
+	TEST_ASSERT_TRUE(a->needs.panic[NEED_SOCIAL] > 0.0f);
+
+	/* Panic decays to zero (its value is above the role threshold), and the
+	 * mask clears with it. */
+	a->needs.value[NEED_SOCIAL] = 1.0f;
+	a->needs.panic[NEED_SOCIAL] = 0.01f;
+	agentsDecay(&reg, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SOCIAL]);
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
+}
+
+static void test_decay_panic_held_below_role_threshold(void)
+{
+	AgentRegistry reg;
+	Agent *a;
+
+	agentsInit(&reg);
+	a = agentGet(&reg, agentCreate(&reg, ROLE_CRITTER));
+	a->needs.value[NEED_ESTEEM] = 0.05f;	/* under the 0.10 threshold */
+	a->needs.panic[NEED_ESTEEM] = 0.8f;
+	agentsDecay(&reg, NEED_MAX_DT);
+	agentsDecay(&reg, NEED_MAX_DT);
+	/* Held: the cause (an empty esteem need) persists. Only the ESTEEM bit
+	 * is pinned here — the other channels are still bleeding off from the
+	 * born 1.0 and stay set for a couple of seconds. */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.8f, a->needs.panic[NEED_ESTEEM]);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_ESTEEM,
+			      a->panicMask & (1 << NEED_ESTEEM));
+	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
+}
+
+static void test_decay_clamps_dt(void)
+{
+	AgentRegistry atMax, huge;
+	Agent *a, *b;
+
+	agentsInit(&atMax);
+	agentsInit(&huge);
+	a = agentGet(&atMax, agentCreate(&atMax, ROLE_CUSTOMER));
+	b = agentGet(&huge, agentCreate(&huge, ROLE_CUSTOMER));
+
+	agentsDecay(&atMax, AGENT_MAX_DT);
+	agentsDecay(&huge, 100.0f);	/* clamped to AGENT_MAX_DT */
+	TEST_ASSERT_FLOAT_WITHIN(EPS, a->needs.value[NEED_SURVIVAL],
+				 b->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_TRUE(a->needs.value[NEED_SURVIVAL] < 1.0f);
+
+	/* An empty registry is a no-op, and so is a NULL one. */
+	agentsDecay(NULL, 0.1f);
+	agentsInit(&atMax);
+	agentsDecay(&atMax, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, atMax.liveCount);
+}
+
+static void test_decay_ignores_nonpositive_and_nan_dt(void)
+{
+	AgentRegistry reg;
+	Agent *a;
+	float zero = 0.0f;
+
+	agentsInit(&reg);
+	a = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	agentsDecay(&reg, 0.0f);
+	agentsDecay(&reg, -1.0f);
+	agentsDecay(&reg, zero / zero);	/* NaN */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.panic[NEED_SURVIVAL]);
+}
+
+/* An agent whose role has no profile is skipped rather than dereferenced:
+ * roles are data, and a bad row must not take the whole loop down. */
+static void test_decay_unknown_role_is_skipped(void)
+{
+	AgentRegistry reg;
+	Agent *a, *b;
+
+	agentsInit(&reg);
+	a = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	b = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	b->role = ROLE_COUNT;
+
+	agentsDecay(&reg, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9375f, a->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, b->needs.value[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, b->needs.panic[NEED_SURVIVAL]);
+
+	b->role = -1;
+	agentsDecay(&reg, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, b->needs.value[NEED_SURVIVAL]);
+}
+
+static void test_decay_is_deterministic(void)
+{
+	AgentRegistry a, b;
+	AgentHandle ha[8], hb[8];
+	int i;
+
+	agentsInit(&a);
+	agentsInit(&b);
+	for (i = 0; i < 8; i++) {
+		ha[i] = agentCreate(&a, i % ROLE_COUNT);
+		hb[i] = agentCreate(&b, i % ROLE_COUNT);
+	}
+	agentDestroy(&a, 3);
+	agentDestroy(&b, 3);
+	agentGet(&a, ha[0])->needs.value[NEED_SURVIVAL] = 0.3f;
+	agentGet(&b, hb[0])->needs.value[NEED_SURVIVAL] = 0.3f;
+	agentGet(&a, ha[1])->engagedJob = 4;
+	agentGet(&b, hb[1])->engagedJob = 4;
+
+	for (i = 0; i < 100; i++)
+		agentsDecay(&a, 1.0f / 60.0f);
+	for (i = 0; i < 100; i++)
+		agentsDecay(&b, 1.0f / 60.0f);
+
+	TEST_ASSERT_EQUAL_MEMORY(&a, &b, sizeof(a));
+}
+
+/* ---- stats -------------------------------------------------------------- */
+
+static void test_agents_stats(void)
+{
+	AgentStats s;
+
+	s.agentDecisions = 1234u;
+	s.pathfindCalls = 56u;
+	agentsStats(&s);
+	/* Phase 1 does not act yet, so both counters read zero — and a read
+	 * zeroes them for the phase that follows. */
+	TEST_ASSERT_EQUAL_UINT(0u, s.agentDecisions);
+	TEST_ASSERT_EQUAL_UINT(0u, s.pathfindCalls);
+
+	agentsStats(&s);
+	TEST_ASSERT_EQUAL_UINT(0u, s.agentDecisions);
+	TEST_ASSERT_EQUAL_UINT(0u, s.pathfindCalls);
+
+	agentsStats(NULL);
+}
+
+void run_test_agent(void);
+
+void run_test_agent(void)
+{
+	RUN_TEST(test_registry_init_resets);
+	RUN_TEST(test_registry_create_to_capacity);
+	RUN_TEST(test_registry_get_guards);
+	RUN_TEST(test_registry_destroy_frees_slot);
+	RUN_TEST(test_registry_slot_reuse_is_fresh);
+	RUN_TEST(test_registry_ids_are_monotonic);
+	RUN_TEST(test_create_defaults);
+	RUN_TEST(test_role_profile_customer);
+	RUN_TEST(test_role_profile_staff);
+	RUN_TEST(test_role_profile_critter);
+	RUN_TEST(test_role_profile_unknown_is_null);
+	RUN_TEST(test_decay_applies_role_multipliers);
+	RUN_TEST(test_decay_advances_only_live_agents);
+	RUN_TEST(test_decay_refreshes_panic_mask);
+	RUN_TEST(test_decay_panic_held_below_role_threshold);
+	RUN_TEST(test_decay_clamps_dt);
+	RUN_TEST(test_decay_ignores_nonpositive_and_nan_dt);
+	RUN_TEST(test_decay_unknown_role_is_skipped);
+	RUN_TEST(test_decay_is_deterministic);
+	RUN_TEST(test_agents_stats);
+}

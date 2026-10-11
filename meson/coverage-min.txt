@@ -286,3 +286,26 @@ src/sim/garments.c		100
 src/sim/plan.c			95
 src/sim/selection.c		95
 src/sim/brain.c			80
+
+# Agent framework, task 1: the want ladder (need.c) and the agent record
+# (agent.c). Both are pure, allocation-free twin suites, and both close
+# EVERY branch on the first cut — the measured values are 58/58 and 40/40, so
+# the floors are ratcheted to 100 rather than parked at the measured figure.
+#
+# need.c's arms are all taken because the suite pins the ladder's arithmetic
+# rather than walking it: the exact band table (every need at content / half
+# / empty, and both sides of the [0,1] deficit clamp), the unknown-slot and
+# NULL-set fallbacks, the panic mask's set/clear/negative arms, the ramped
+# decay at three fill levels, the dt clamp and the NaN/zero/negative dt
+# no-ops, the panic hold / decay / floor arms, and the exact
+# NEED_PANIC_SUPPRESS rescale (which pins that suppression rounds AFTER
+# scaling, not before).
+#
+# agent.c's arms are all taken by the full registry sweep (create to
+# AGENT_MAX, the overflow refusal, every agentGet guard, destroy and
+# double-destroy, slot reuse, monotonic never-reissued ids), the three role
+# rows pinned cell by cell in both columns, and agentsDecay's per-role
+# multipliers, live-only walk, AGENT_MAX_DT clamp, NaN dt and the
+# unknown-role skip.
+src/agents/need.c		100
+src/agents/agent.c		100
