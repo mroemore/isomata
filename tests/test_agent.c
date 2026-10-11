@@ -5,13 +5,14 @@
  * the flat-slot registry (create to AGENT_MAX, the AGENT_INVALID overflow,
  * destroy, the AGENT_INVALID get guards, slot reuse never aliasing a live
  * agent, a reused slot getting a FRESH id); agentCreate's defaults (content
- * needs, zeroed skills/flaws, unlinked entity, no board / job, dwell 0,
- * panicMask matching the freshly initialised panic channel); the exact
- * RoleProfile row for every role (every need slot, both columns);
- * agentRoleProfile's NULL for an unknown role; agentsDecay (per-role decay
- * multipliers, live agents only, panicMask refresh, AGENT_MAX_DT clamp,
- * NaN-safe dt, the unknown-role skip); agentsStats; and run-to-run
- * determinism.
+ * needs, every panic channel CLEAR, zeroed skills/flaws, unlinked entity, no
+ * board / job, dwell 0, empty panicMask); the exact RoleProfile row for every
+ * role (every need slot, both columns) plus the reservation that confines a
+ * real panic threshold to NEED_SURVIVAL; agentRoleProfile's NULL for an
+ * unknown role; agentsDecay (per-role decay multipliers, live agents only,
+ * panicMask refresh, the panic RAISE below a role threshold and the BLEED back
+ * to zero above it, AGENT_MAX_DT clamp, NaN-safe dt, the unknown-role skip);
+ * agentsStats; and run-to-run determinism.
  *
  * dt values are dyadic (1/16 s) with dyadic role multipliers, so the expected
  * floats are exact — TEST_ASSERT_FLOAT_WITHIN(0.0f, ...) is a bit-exact pin.
@@ -32,24 +33,29 @@
 /* ---- helpers ------------------------------------------------------------ */
 
 /* Pin every decay multiplier / panic threshold of a profile: the role's base
- * decay everywhere except the slots named in exceptNeeds, and one threshold
- * for the whole role. Naming the exceptions (rather than "all rows are the
- * base") is what makes a STAFF row checkable at all — it has three. */
-static void assertProfileRow(const RoleProfile *p, float decay, float threshold,
-			     int exceptCount, const int *exceptNeeds,
-			     const float *exceptDecays)
+ * decay everywhere except the slots named in exceptNeeds, and a threshold
+ * that is real on NEED_SURVIVAL only — every other slot is reserved at -1.0f,
+ * because panic is the tier-0 alarm. Naming the exceptions (rather than "all
+ * rows are the base") is what makes a STAFF row checkable at all — it has
+ * three decay exceptions. */
+static void assertProfileRow(const RoleProfile *p, float decay,
+			     float survivalThreshold, int exceptCount,
+			     const int *exceptNeeds, const float *exceptDecays)
 {
 	int n, i;
 
 	TEST_ASSERT_NOT_NULL(p);
 	for (n = 0; n < NEED_COUNT; n++) {
 		float wantDecay = decay;
+		float wantThreshold = (n == NEED_SURVIVAL) ? survivalThreshold
+							   : -1.0f;
 
 		for (i = 0; i < exceptCount; i++)
 			if (exceptNeeds[i] == n)
 				wantDecay = exceptDecays[i];
 		TEST_ASSERT_FLOAT_WITHIN(0.0f, wantDecay, p->decayMul[n]);
-		TEST_ASSERT_FLOAT_WITHIN(0.0f, threshold, p->panicThreshold[n]);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, wantThreshold,
+					 p->panicThreshold[n]);
 	}
 }
 
@@ -62,7 +68,9 @@ static void assertAgentDefaults(const Agent *a, int role, int id)
 	TEST_ASSERT_TRUE(a->alive);
 	for (n = 0; n < NEED_COUNT; n++) {
 		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.value[n]);
-		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.panic[n]);
+		/* needSetInit starts every panic channel CLEAR, so a fresh
+		 * agent is born content and calm — the mask mirrors that. */
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[n]);
 	}
 	/* Competencies are their own (shorter) vector: pinned over SKILL_COUNT,
 	 * not NEED_COUNT, so this never reads past skills[] / flaws[]. */
@@ -70,8 +78,8 @@ static void assertAgentDefaults(const Agent *a, int role, int id)
 		TEST_ASSERT_EQUAL_UINT(0, a->skills[n]);
 		TEST_ASSERT_EQUAL_UINT(0, a->flaws[n]);
 	}
-	/* needSetInit starts every panic channel at 1.0, so a fresh agent is
-	 * born panicking on every need: the mask mirrors it exactly. */
+	TEST_ASSERT_EQUAL_INT(0, needPanicMask(&a->needs));
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
 	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
 	TEST_ASSERT_EQUAL_INT(ENTITY_INVALID, a->entity);
 	TEST_ASSERT_EQUAL_INT(-1, a->personalBoard);
@@ -273,7 +281,7 @@ static void test_create_defaults(void)
 
 static void test_role_profile_customer(void)
 {
-	/* The baseline row: nothing is tuned, every need trips at 0.15. */
+	/* The baseline row: nothing tuned, survival trips at 0.15. */
 	assertProfileRow(agentRoleProfile(ROLE_CUSTOMER), 1.0f, 0.15f, 0, NULL,
 			 NULL);
 }
@@ -291,14 +299,33 @@ static void test_role_profile_staff(void)
 
 static void test_role_profile_critter(void)
 {
-	/* Needs little company, is not bothered by esteem (0.0 = never decays,
-	 * so it can never panic), and is less annoyed by being blocked. */
+	/* Needs little company, is not bothered by esteem (0.0 = never decays),
+	 * and trips EARLIER on survival: 0.10. */
 	static const int exceptNeeds[] = { NEED_SOCIAL, NEED_SATISFACTION,
 					   NEED_ESTEEM };
 	static const float exceptDecays[] = { 0.25f, 0.5f, 0.0f };
 
 	assertProfileRow(agentRoleProfile(ROLE_CRITTER), 1.0f, 0.10f, 3,
 			 exceptNeeds, exceptDecays);
+}
+
+/* Panic is reserved for tier-0 survival in every shipped row, so the spec's
+ * "a dryer is on fire" can reprioritise everyone without an emptied
+ * SATISFACTION silencing the whole ladder. */
+static void test_role_panic_is_reserved_to_survival(void)
+{
+	int role;
+	int n;
+
+	for (role = 0; role < ROLE_COUNT; role++) {
+		const RoleProfile *p = agentRoleProfile(role);
+
+		TEST_ASSERT_TRUE(p->panicThreshold[NEED_SURVIVAL] > 0.0f);
+		for (n = 0; n < NEED_COUNT; n++)
+			if (n != NEED_SURVIVAL)
+				TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f,
+							 p->panicThreshold[n]);
+	}
 }
 
 static void test_role_profile_unknown_is_null(void)
@@ -373,53 +400,95 @@ static void test_decay_refreshes_panic_mask(void)
 
 	agentsInit(&reg);
 	a = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
-	/* needSetInit starts every channel at 1.0: the born state is panicking. */
-	TEST_ASSERT_EQUAL_INT((1 << NEED_COUNT) - 1, a->panicMask);
+	/* needSetInit starts every channel clear: the born state is content,
+	 * not panic, so the mask starts empty. */
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
 	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
 
-	/* Clear every channel; the mask follows on the next decay. */
-	{
-		int n;
-
-		for (n = 0; n < NEED_COUNT; n++)
-			a->needs.panic[n] = 0.0f;
-	}
-	agentsDecay(&reg, 0.0625f);
-	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
-
-	/* One channel panicking: only its bit is set. */
-	a->needs.panic[NEED_SOCIAL] = 0.5f;
-	agentsDecay(&reg, 0.0625f);
-	TEST_ASSERT_EQUAL_INT(1 << NEED_SOCIAL, a->panicMask);
-	TEST_ASSERT_TRUE(a->needs.panic[NEED_SOCIAL] > 0.0f);
-
-	/* Panic decays to zero (its value is above the role threshold), and the
-	 * mask clears with it. */
-	a->needs.value[NEED_SOCIAL] = 1.0f;
-	a->needs.panic[NEED_SOCIAL] = 0.01f;
+	/* Emptying SURVIVAL trips its threshold: the alarm rises and the mask
+	 * follows on the next decay. */
+	a->needs.value[NEED_SURVIVAL] = 0.0f;
 	agentsDecay(&reg, NEED_MAX_DT);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SOCIAL]);
+	TEST_ASSERT_TRUE(a->needs.panic[NEED_SURVIVAL] > 0.0f);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SURVIVAL, a->panicMask);
+	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
+
+	/* Restoring it above the threshold bleeds the panic back to zero and
+	 * the bit clears with it. */
+	a->needs.value[NEED_SURVIVAL] = 1.0f;
+	agentsDecay(&reg, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SURVIVAL]);
 	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
 }
 
-static void test_decay_panic_held_below_role_threshold(void)
+static void test_decay_panic_rises_below_role_threshold(void)
 {
 	AgentRegistry reg;
 	Agent *a;
 
 	agentsInit(&reg);
 	a = agentGet(&reg, agentCreate(&reg, ROLE_CRITTER));
-	a->needs.value[NEED_ESTEEM] = 0.05f;	/* under the 0.10 threshold */
-	a->needs.panic[NEED_ESTEEM] = 0.8f;
+	a->needs.value[NEED_SURVIVAL] = 0.05f;	/* under the 0.10 threshold */
 	agentsDecay(&reg, NEED_MAX_DT);
+	/* RISING, not held: the cause is live, so the alarm climbs a step
+	 * per tick instead of merely staying put. */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, NEED_PANIC_RISE * NEED_MAX_DT,
+				 a->needs.panic[NEED_SURVIVAL]);
 	agentsDecay(&reg, NEED_MAX_DT);
-	/* Held: the cause (an empty esteem need) persists. Only the ESTEEM bit
-	 * is pinned here — the other channels are still bleeding off from the
-	 * born 1.0 and stay set for a couple of seconds. */
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.8f, a->needs.panic[NEED_ESTEEM]);
-	TEST_ASSERT_EQUAL_INT(1 << NEED_ESTEEM,
-			      a->panicMask & (1 << NEED_ESTEEM));
-	TEST_ASSERT_EQUAL_INT(needPanicMask(&a->needs), a->panicMask);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 2.0f * NEED_PANIC_RISE * NEED_MAX_DT,
+				 a->needs.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SURVIVAL, a->panicMask);
+}
+
+/* A fresh agent is calm, so its wants are NOT suppressed; and only survival
+ * is allowed to raise an alarm. */
+static void test_decay_only_survival_panics(void)
+{
+	AgentRegistry reg, ref;
+	Agent *a, *b;
+	int n;
+
+	agentsInit(&reg);
+	agentsInit(&ref);
+	a = agentGet(&reg, agentCreate(&reg, ROLE_CUSTOMER));
+	b = agentGet(&ref, agentCreate(&ref, ROLE_CUSTOMER));
+
+	/* Born calm, and one decay tick does not manufacture a panic out of a
+	 * content agent: its needs are still well above their thresholds. */
+	for (n = 0; n < NEED_COUNT; n++)
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[n]);
+	agentsDecay(&reg, NEED_MAX_DT);
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9f, a->needs.value[NEED_SURVIVAL]);
+
+	/* Emptied SURVIVAL (armed) vs emptied SATISFACTION (reserved). */
+	a->needs.value[NEED_SURVIVAL] = 0.0f;
+	a->needs.value[NEED_SATISFACTION] = 0.0f;
+	b->needs.value[NEED_SATISFACTION] = 0.0f;
+	agentsDecay(&reg, NEED_MAX_DT);
+
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, NEED_PANIC_RISE * NEED_MAX_DT,
+				 a->needs.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SATISFACTION]);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SURVIVAL, a->panicMask);
+	TEST_ASSERT_EQUAL_INT(15, wantUrgency(&a->needs, NEED_SURVIVAL));
+
+	/* Reserved, yet still fully urgent through its tier weight: band 9 on
+	 * its own, stepped down to 7 only because survival is panicking —
+	 * exactly the NEED_PANIC_SUPPRESS rounding measured against the same
+	 * need with no panic active. */
+	TEST_ASSERT_EQUAL_INT(9, needBand(&a->needs, NEED_SATISFACTION));
+	TEST_ASSERT_EQUAL_INT(9, wantUrgency(&b->needs, NEED_SATISFACTION));
+	TEST_ASSERT_EQUAL_INT(7, wantUrgency(&a->needs, NEED_SATISFACTION));
+	TEST_ASSERT_TRUE(wantUrgency(&a->needs, NEED_SATISFACTION) <
+			 wantUrgency(&b->needs, NEED_SATISFACTION));
+
+	/* ...and once survival recovers, the suppression lifts. */
+	a->needs.value[NEED_SURVIVAL] = 1.0f;
+	agentsDecay(&reg, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_EQUAL_INT(0, a->panicMask);
+	TEST_ASSERT_EQUAL_INT(9, wantUrgency(&a->needs, NEED_SATISFACTION));
 }
 
 static void test_decay_clamps_dt(void)
@@ -457,7 +526,7 @@ static void test_decay_ignores_nonpositive_and_nan_dt(void)
 	agentsDecay(&reg, -1.0f);
 	agentsDecay(&reg, zero / zero);	/* NaN */
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.value[NEED_SURVIVAL]);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, a->needs.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->needs.panic[NEED_SURVIVAL]);
 }
 
 /* An agent whose role has no profile is skipped rather than dereferenced:
@@ -475,7 +544,7 @@ static void test_decay_unknown_role_is_skipped(void)
 	agentsDecay(&reg, 0.0625f);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.9375f, a->needs.value[NEED_SURVIVAL]);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, b->needs.value[NEED_SURVIVAL]);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, b->needs.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b->needs.panic[NEED_SURVIVAL]);
 
 	b->role = -1;
 	agentsDecay(&reg, 0.0625f);
@@ -544,11 +613,13 @@ void run_test_agent(void)
 	RUN_TEST(test_role_profile_customer);
 	RUN_TEST(test_role_profile_staff);
 	RUN_TEST(test_role_profile_critter);
+	RUN_TEST(test_role_panic_is_reserved_to_survival);
 	RUN_TEST(test_role_profile_unknown_is_null);
 	RUN_TEST(test_decay_applies_role_multipliers);
 	RUN_TEST(test_decay_advances_only_live_agents);
 	RUN_TEST(test_decay_refreshes_panic_mask);
-	RUN_TEST(test_decay_panic_held_below_role_threshold);
+	RUN_TEST(test_decay_panic_rises_below_role_threshold);
+	RUN_TEST(test_decay_only_survival_panics);
 	RUN_TEST(test_decay_clamps_dt);
 	RUN_TEST(test_decay_ignores_nonpositive_and_nan_dt);
 	RUN_TEST(test_decay_unknown_role_is_skipped);

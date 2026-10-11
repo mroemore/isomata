@@ -1,15 +1,18 @@
 /*
  * Need vector + want-ladder tests (CTOL rung 1: unit + boundary).
  *
- * Covers: needSetInit's content default; the six EXACT tier weights and their
- * monotone non-increasing falloff in spec-tier order; the band mapping's exact
- * table (every need at content / half / empty, the [0,1] deficit clamp and the
- * unknown-slot fallback); the panic mask; wantUrgency's soft falloff, the
- * panicking-need override and the NEED_PANIC_SUPPRESS cross-need suppression
- * (all pinned to exact integers, not to inequalities); needDecay's dt clamp,
- * panic ramp, multiplier, non-negativity, NaN-safe dt and NULL guards;
- * needPanicDecay's hold / decay / floor with the module default threshold and
- * with a role-supplied threshold vector.
+ * Covers: needSetInit's content-and-calm default (panic starts clear, so a
+ * fresh vector is not suppressed); the six EXACT tier weights and their
+ * monotone non-increasing falloff in spec-tier order; the band mapping's
+ * exact table (every need at content / half / empty, the [0,1] deficit clamp
+ * and the unknown-slot fallback); the panic mask; wantUrgency's soft falloff,
+ * the panicking-need override and the NEED_PANIC_SUPPRESS cross-need
+ * suppression (all pinned to exact integers, not to inequalities); needDecay's
+ * dt clamp, panic ramp, multiplier, non-negativity, NaN-safe dt and NULL
+ * guards; needPanicDecay's full lifecycle — the RISE while a need sits under
+ * its threshold (clamped at 1.0), the BLEED once it is back above (floored at
+ * 0.0), the negative-threshold RESERVATION that silences every non-survival
+ * need, and the dt clamp / NaN guard on the rise.
  *
  * Arithmetic notes: every band expectation is an exact integer, and the decay
  * probes use a dyadic dt (1/16 s) with dyadic multipliers so the floats are
@@ -68,23 +71,36 @@ static void test_need_constants(void)
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.1f, NEED_MAX_DT);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, NEED_PANIC_RAMP);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.5f, NEED_PANIC_DECAY);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.5f, NEED_PANIC_RISE);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.75f, NEED_PANIC_SUPPRESS);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.15f, NEED_PANIC_HOLD_DEFAULT);
 }
 
-static void test_need_set_init_is_content(void)
+static void test_need_set_init_is_content_and_calm(void)
 {
-	NeedSet s;
+	NeedSet s = uniformSet(0.0f, 0.0f);
 	int n;
 
-	for (n = 0; n < NEED_COUNT; n++) {
-		s.value[n] = 0.0f;
-		s.panic[n] = 0.0f;
-	}
 	needSetInit(&s);
 	for (n = 0; n < NEED_COUNT; n++) {
 		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.value[n]);
-		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[n]);
+		/* Panic starts CLEAR: it is an alarm the world raises, not a
+		 * content quantity. Starting it at 1.0 pinned every want at
+		 * its maximum and never recovered. */
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, s.panic[n]);
 	}
+	TEST_ASSERT_EQUAL_INT(0, needPanicMask(&s));
+
+	/* A fresh set is NOT suppressed: wantUrgency is the plain band, for
+	 * a content need and for an emptied one alike. */
+	for (n = 0; n < NEED_COUNT; n++) {
+		TEST_ASSERT_EQUAL_INT(0, needBand(&s, n));
+		TEST_ASSERT_EQUAL_INT(0, wantUrgency(&s, n));
+	}
+	s.value[NEED_SURVIVAL] = 0.0f;
+	TEST_ASSERT_EQUAL_INT(NEED_BANDS - 1, wantUrgency(&s, NEED_SURVIVAL));
+	TEST_ASSERT_EQUAL_INT(needBand(&s, NEED_SURVIVAL),
+			      wantUrgency(&s, NEED_SURVIVAL));
 
 	needSetInit(NULL);	/* NULL is a no-op, not a crash */
 }
@@ -548,43 +564,197 @@ static void test_panic_decay_dyadic_amount(void)
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.96875f, s.panic[NEED_SURVIVAL]);
 }
 
-static void test_panic_decay_holds_below_threshold(void)
+/* Below the default threshold the panic RISES — the cause is live, so the
+ * alarm climbs. dyadic dt and rate: the expectation is bit-exact. */
+static void test_panic_rises_below_threshold(void)
 {
-	NeedSet s = uniformSet(NEED_PANIC_HOLD_DEFAULT / 2.0f, 1.0f);
+	NeedSet s = uniformSet(NEED_PANIC_HOLD_DEFAULT / 2.0f, 0.0f);
 
-	needPanicDecay(&s, NEED_MAX_DT);
-	needPanicDecay(&s, NEED_MAX_DT);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_SURVIVAL]);
+	needPanicDecay(&s, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, NEED_PANIC_RISE * 0.0625f,
+				 s.panic[NEED_SURVIVAL]);
+	needPanicDecay(&s, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 2.0f * NEED_PANIC_RISE * 0.0625f,
+				 s.panic[NEED_SURVIVAL]);
 
-	/* Above the threshold the cause has cleared and panic bleeds off. */
+	/* Repeatedly driven, it saturates at the 1.0 ceiling and stops. */
+	{
+		int i;
+
+		for (i = 0; i < 200; i++)
+			needPanicDecay(&s, NEED_MAX_DT);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_SURVIVAL]);
+		needPanicDecay(&s, NEED_MAX_DT);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_SURVIVAL]);
+	}
+
+	/* Above the threshold the alarm has nothing to climb toward: it
+	 * bleeds instead. */
 	s.value[NEED_SURVIVAL] = 1.0f;
-	needPanicDecay(&s, NEED_MAX_DT);
-	TEST_ASSERT_TRUE(s.panic[NEED_SURVIVAL] < 1.0f);
+	needPanicDecay(&s, 0.0625f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f,
+				 1.0f - NEED_PANIC_DECAY * 0.0625f,
+				 s.panic[NEED_SURVIVAL]);
+}
+
+/* A negative threshold RESERVES the need: emptied and still silent, and a
+ * hand-written panic level is left exactly where it stands. */
+static void test_reserved_need_never_panics(void)
+{
+	float reserved[NEED_COUNT];
+	NeedSet s;
+	int n;
+
+	mulAll(reserved, -1.0f);
+
+	s = uniformSet(0.0f, 0.0f);
+	needPanicDecayRole(&s, reserved, NEED_MAX_DT);
+	for (n = 0; n < NEED_COUNT; n++)
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, s.panic[n]);
+
+	/* The reservation is not a "never rise" rule but a "never touch"
+	 * rule: even a panic someone wrote by hand survives untouched. */
+	s = uniformSet(0.0f, 0.6f);
+	needPanicDecayRole(&s, reserved, NEED_MAX_DT);
+	for (n = 0; n < NEED_COUNT; n++)
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.6f, s.panic[n]);
+
+	/* The role-shaped vector: survival armed, the rest reserved. */
+	mulAll(reserved, -1.0f);
+	reserved[NEED_SURVIVAL] = NEED_PANIC_HOLD_DEFAULT;
+	s = uniformSet(0.0f, 0.0f);
+	needPanicDecayRole(&s, reserved, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, NEED_PANIC_RISE * NEED_MAX_DT,
+				 s.panic[NEED_SURVIVAL]);
+	for (n = 0; n < NEED_COUNT; n++)
+		if (n != NEED_SURVIVAL)
+			TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, s.panic[n]);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SURVIVAL, needPanicMask(&s));
+
+	/* A reserved need is still fully urgent — through its band. */
+	s = uniformSet(0.0f, 0.0f);
+	TEST_ASSERT_EQUAL_INT(NEED_BANDS - 1,
+			      needBand(&s, NEED_SURVIVAL));
+	TEST_ASSERT_EQUAL_INT(2, needBand(&s, NEED_FULFILMENT));
+	TEST_ASSERT_EQUAL_INT(2, wantUrgency(&s, NEED_FULFILMENT));
+}
+
+/* The rise obeys the same dt clamp and NaN guard as every decay entry. */
+static void test_panic_rise_clamps_dt_and_ignores_nan(void)
+{
+	NeedSet atMax = uniformSet(0.0f, 0.0f);
+	NeedSet huge = uniformSet(0.0f, 0.0f);
+	NeedSet nan = uniformSet(0.0f, 0.3f);
+	float zero = 0.0f;
+
+	needPanicDecay(&atMax, NEED_MAX_DT);
+	needPanicDecay(&huge, 100.0f);	/* clamped to NEED_MAX_DT */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, NEED_PANIC_RISE * NEED_MAX_DT,
+				 atMax.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, atMax.panic[NEED_SURVIVAL],
+				 huge.panic[NEED_SURVIVAL]);
+	/* A 100 s stall is one clamped step, nowhere near the 1.0 ceiling. */
+	TEST_ASSERT_TRUE(huge.panic[NEED_SURVIVAL] < 0.2f);
+
+	/* A huge dt cannot overshoot the ceiling either. */
+	huge = uniformSet(0.0f, 0.99f);
+	needPanicDecay(&huge, 100.0f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, huge.panic[NEED_SURVIVAL]);
+
+	needPanicDecay(&nan, zero / zero);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.3f, nan.panic[NEED_SURVIVAL]);
+}
+
+/* The full lifecycle: empty the need, the alarm rises and suppresses
+ * everything else; restore it, the alarm bleeds off and the ladder returns to
+ * its unsuppressed ordering. */
+static void test_panic_lifecycle_raise_then_bleed(void)
+{
+	NeedSet panicking = uniformSet(0.0f, 0.0f);
+	NeedSet calm = uniformSet(0.0f, 0.0f);
+
+	/* Emptying survival raises its alarm; ENERGY (reserved) stays clear. */
+	needPanicDecay(&panicking, NEED_MAX_DT);
+	TEST_ASSERT_TRUE(panicking.panic[NEED_SURVIVAL] > 0.0f);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, panicking.panic[NEED_ENERGY]);
+	TEST_ASSERT_EQUAL_INT(1 << NEED_SURVIVAL,
+			      needPanicMask(&panicking));
+	TEST_ASSERT_EQUAL_INT(15, wantUrgency(&panicking, NEED_SURVIVAL));
+
+	/* An emptied ENERGY is band 9 alone, band 7 once survival panics —
+	 * the documented NEED_PANIC_SUPPRESS rounding, measured against the
+	 * same need with no panic active. */
+	panicking.value[NEED_ENERGY] = 0.0f;
+	calm.value[NEED_ENERGY] = 0.0f;
+	TEST_ASSERT_EQUAL_INT(9, wantUrgency(&calm, NEED_ENERGY));
+	TEST_ASSERT_EQUAL_INT(7, wantUrgency(&panicking, NEED_ENERGY));
+	TEST_ASSERT_TRUE(wantUrgency(&panicking, NEED_ENERGY) <
+			 wantUrgency(&calm, NEED_ENERGY));
+
+	/* Cause cleared: the alarm bleeds to zero and the suppression lifts. */
+	panicking.value[NEED_SURVIVAL] = 1.0f;
+	{
+		int i;
+
+		for (i = 0; i < 8; i++)
+			needPanicDecay(&panicking, 0.25f);
+	}
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, panicking.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_EQUAL_INT(0, needPanicMask(&panicking));
+	TEST_ASSERT_EQUAL_INT(9, wantUrgency(&panicking, NEED_ENERGY));
 }
 
 static void test_panic_decay_floors_at_zero(void)
 {
 	NeedSet s = uniformSet(1.0f, 0.01f);
 
+	/* Only the armed slot bleeds; the reserved ones are left exactly as
+	 * they were, so they still contribute their bits. */
 	needPanicDecay(&s, NEED_MAX_DT);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, s.panic[NEED_SURVIVAL]);
-	TEST_ASSERT_EQUAL_INT(0, needPanicMask(&s));
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.01f, s.panic[NEED_ENERGY]);
+	TEST_ASSERT_EQUAL_INT(((1 << NEED_COUNT) - 1) &
+			      ~(1 << NEED_SURVIVAL), needPanicMask(&s));
 
 	/* Idempotent at zero. */
 	needPanicDecay(&s, NEED_MAX_DT);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, s.panic[NEED_SURVIVAL]);
 }
 
-/* Only the needs whose value is under the threshold are held; the others keep
- * decaying. */
-static void test_panic_decay_is_per_need(void)
+/* Each need moves on its own threshold: under it the alarm rises, over it the
+ * alarm bleeds. Pinned through the role-aware entry point so more than one
+ * slot can be armed at once (the shipped profiles arm survival only). */
+static void test_panic_move_is_per_need(void)
 {
-	NeedSet s = uniformSet(1.0f, 1.0f);
+	float threshold[NEED_COUNT];
+	NeedSet s = uniformSet(1.0f, 0.5f);
 
-	s.value[NEED_SURVIVAL] = 0.05f;
-	needPanicDecay(&s, NEED_MAX_DT);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_SURVIVAL]);
-	TEST_ASSERT_FLOAT_WITHIN(EPS, 1.0f - NEED_PANIC_DECAY * NEED_MAX_DT,
+	mulAll(threshold, -1.0f);
+	threshold[NEED_SURVIVAL] = 0.20f;
+	threshold[NEED_ENERGY] = 0.80f;
+
+	/* SURVIVAL under its threshold rises; ENERGY over its bleeds; the
+	 * reserved slots are untouched. */
+	s.value[NEED_SURVIVAL] = 0.10f;
+	s.value[NEED_ENERGY] = 0.90f;
+	needPanicDecayRole(&s, threshold, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.5f + NEED_PANIC_RISE * NEED_MAX_DT,
+				 s.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.5f - NEED_PANIC_DECAY * NEED_MAX_DT,
+				 s.panic[NEED_ENERGY]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.5f, s.panic[NEED_SOCIAL]);
+	/* Every slot is still above zero here — the reserved ones were never
+	 * touched — so the mask stays full. */
+	TEST_ASSERT_EQUAL_INT((1 << NEED_COUNT) - 1, needPanicMask(&s));
+
+	/* Swap them: the same two needs now take the other branch. */
+	s = uniformSet(1.0f, 0.5f);
+	s.value[NEED_SURVIVAL] = 0.30f;
+	s.value[NEED_ENERGY] = 0.70f;
+	needPanicDecayRole(&s, threshold, NEED_MAX_DT);
+	TEST_ASSERT_FLOAT_WITHIN(EPS, 0.5f - NEED_PANIC_DECAY * NEED_MAX_DT,
+				 s.panic[NEED_SURVIVAL]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.5f + NEED_PANIC_RISE * NEED_MAX_DT,
 				 s.panic[NEED_ENERGY]);
 }
 
@@ -594,17 +764,21 @@ static void test_panic_decay_role_thresholds(void)
 	NeedSet s = uniformSet(1.0f, 1.0f);
 	float threshold[NEED_COUNT];
 
-	mulAll(threshold, 0.50f);	/* a strict role: panic holds until 0.5 */
+	/* A strict role: the need must recover past 0.5 before the alarm
+	 * starts bleeding, and below 0.5 the alarm RISES. */
+	mulAll(threshold, -1.0f);
+	threshold[NEED_ENERGY] = 0.50f;
 
 	s.value[NEED_ENERGY] = 0.30f;
 	needPanicDecayRole(&s, threshold, NEED_MAX_DT);
-	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_ENERGY]);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, s.panic[NEED_ENERGY]);	/* ceiling */
 
+	s = uniformSet(1.0f, 1.0f);
 	s.value[NEED_ENERGY] = 0.60f;
 	needPanicDecayRole(&s, threshold, NEED_MAX_DT);
 	TEST_ASSERT_TRUE(s.panic[NEED_ENERGY] < 1.0f);
 
-	/* A NULL threshold vector falls back to the module default in every slot, so
+	/* A NULL threshold vector falls back to the module default vector, so
 	 * the two entry points agree on the same input. Each step below is a
 	 * single call from a full 1.0 panic, so the expectation is exact. */
 	s = uniformSet(1.0f, 1.0f);
@@ -653,7 +827,7 @@ void run_test_need(void);
 void run_test_need(void)
 {
 	RUN_TEST(test_need_constants);
-	RUN_TEST(test_need_set_init_is_content);
+	RUN_TEST(test_need_set_init_is_content_and_calm);
 	RUN_TEST(test_tier_weights_exact);
 	RUN_TEST(test_tier_weights_fall_off_with_tier);
 	RUN_TEST(test_band_endpoints);
@@ -680,9 +854,12 @@ void run_test_need(void)
 	RUN_TEST(test_decay_null_guards);
 	RUN_TEST(test_decay_is_per_need);
 	RUN_TEST(test_panic_decay_dyadic_amount);
-	RUN_TEST(test_panic_decay_holds_below_threshold);
+	RUN_TEST(test_panic_rises_below_threshold);
+	RUN_TEST(test_reserved_need_never_panics);
+	RUN_TEST(test_panic_rise_clamps_dt_and_ignores_nan);
+	RUN_TEST(test_panic_lifecycle_raise_then_bleed);
 	RUN_TEST(test_panic_decay_floors_at_zero);
-	RUN_TEST(test_panic_decay_is_per_need);
+	RUN_TEST(test_panic_move_is_per_need);
 	RUN_TEST(test_panic_decay_role_thresholds);
 	RUN_TEST(test_panic_decay_clamps_dt);
 	RUN_TEST(test_panic_decay_ignores_nonpositive_and_nan_dt);

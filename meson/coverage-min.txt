@@ -297,15 +297,17 @@ src/sim/brain.c			80
 # / empty, and both sides of the [0,1] deficit clamp), the unknown-slot and
 # NULL-set fallbacks, the panic mask's set/clear/negative arms, the ramped
 # decay at three fill levels, the dt clamp and the NaN/zero/negative dt
-# no-ops, the panic hold / decay / floor arms, and the exact
-# NEED_PANIC_SUPPRESS rescale (which pins that suppression rounds AFTER
-# scaling, not before).
+# no-ops, the panic lifecycle in full (the RISE below a threshold up to its
+# 1.0 ceiling, the BLEED above it down to its 0.0 floor, the negative-
+# threshold RESERVATION that silences every non-survival need, and the rise's
+# own dt clamp / NaN guard), and the exact NEED_PANIC_SUPPRESS rescale (which
+# pins that suppression rounds AFTER scaling, not before).
 #
 # agent.c's arms are all taken by the full registry sweep (create to
 # AGENT_MAX, the overflow refusal, every agentGet guard, destroy and
 # double-destroy, slot reuse, monotonic never-reissued ids), the three role
-# rows pinned cell by cell in both columns, and agentsDecay's per-role
-# multipliers, live-only walk, AGENT_MAX_DT clamp, NaN dt and the
-# unknown-role skip.
+# rows pinned cell by cell in both columns plus the survival-only panic
+# reservation, and agentsDecay's per-role multipliers, live-only walk,
+# AGENT_MAX_DT clamp, NaN dt and the unknown-role skip.
 src/agents/need.c		100
 src/agents/agent.c		100

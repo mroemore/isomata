@@ -64,29 +64,26 @@ typedef struct NeedSet {
 #define NEED_PANIC_RAMP 1.0f
 /* Panic levels bleed off at this rate per second once the cause clears. */
 #define NEED_PANIC_DECAY 0.5f
+/* ...and climb at this rate per second while the cause is live, so an
+ * emptied need actually enters panic instead of merely sitting there. */
+#define NEED_PANIC_RISE 0.5f
 /* While ANY need panics, every non-panicking want is scaled by this, so a
  * panic outranks the filler it interrupts. */
 #define NEED_PANIC_SUPPRESS 0.75f
-/* The threshold needPanicDecay (the threshold-less entry point) holds panic
- * at: the shipped CUSTOMER/STAFF rows. Role-tuned roles go through
- * needPanicDecayRole with their own vector instead. */
+/* The default threshold for a panicking-CAPABLE need (the survival slot).
+ * A NEGATIVE threshold is the reserved marker: that need never panics at
+ * all. */
 #define NEED_PANIC_HOLD_DEFAULT 0.15f
 
-/* Fill a vector with content: every value AND every panic channel 1.0.
+/* Fill a vector with content: every value 1.0 and every panic channel 0.0.
  * NULL is a no-op.
  *
- * WARNING — the panic side of this is a birth condition, not a sane steady
- * state, and the two interact. A fresh vector is panicking on every need, so
- * wantUrgency returns NEED_BANDS - 1 for all six and the ladder cannot order
- * anything. It does NOT bleed off on its own: needPanicDecay holds a panic
- * while that need sits under its threshold, and a decaying need crosses the
- * threshold BEFORE the 0.5/s panic level reaches zero. Measured on a plain
- * CUSTOMER agent under agentsDecay, the panic settles at 0.70 and stays
- * there indefinitely, so the agent panics on all six needs forever. The
- * birth state is pinned here because the spec asks for it (panic 1.0 ==
- * content), but something upstream — agentCreate, or the spawn path — is
- * responsible for driving the panic channel down at birth, or the ladder is
- * dead for every agent it creates. */
+ * Panic starts CLEAR on purpose. Panic is an alarm level, not a content
+ * quantity — the spec's dryer-fire example raises it from the outside, and a
+ * born panic of 1.0 would pin wantUrgency at NEED_BANDS - 1 for all six
+ * needs and leave the ladder inert forever (a decaying need crosses its
+ * threshold before the panic level could ever bleed off). A fresh agent is
+ * content and calm, so its wants band and order normally from tick one. */
 void needSetInit(NeedSet *s);
 
 /* Decay every need by its multiplier, ramped near empty, floored at 0.0.
@@ -95,11 +92,22 @@ void needSetInit(NeedSet *s);
  * guess one. */
 void needDecay(NeedSet *s, const float decayMul[NEED_COUNT], float dt);
 
-/* Bleed every panic level off at NEED_PANIC_DECAY per second, floored at
- * 0.0, EXCEPT while that need's value is under the module default threshold
- * (NEED_PANIC_HOLD_DEFAULT) — the cause persists, so the panic is held.
- * dt is clamped and NaN-safe like needDecay; panicThreshold == NULL means
- * every slot uses NEED_PANIC_HOLD_DEFAULT. */
+/* Move every panic level one tick: RISE at NEED_PANIC_RISE per second while
+ * the need sits under its threshold (the cause is live, so the alarm
+ * climbs), and BLEED at NEED_PANIC_DECAY once it is back above (the cause
+ * cleared). The rise is clamped at 1.0f and the bleed floored at 0.0f.
+ *
+ * A NEGATIVE threshold reserves the need: it never rises, never holds, and
+ * its panic channel is left exactly as it stands (0.0f from needSetInit).
+ * Panic is the tier-0 mechanism — the spec's dryer-fire example reprioritises
+ * everyone through survival — so every non-survival slot is reserved. An
+ * emptied non-survival need is still fully urgent through its tier weight; it
+ * just never sets off the alarm, because a satisfied-in-nothing agent that
+ * panics on everything is the same inert ladder by another route.
+ *
+ * dt is clamped to NEED_MAX_DT and a non-positive or NaN dt is a no-op.
+ * panicThreshold == NULL means every slot uses the module default vector
+ * (NEED_PANIC_HOLD_DEFAULT for survival, reserved for the rest). */
 void needPanicDecayRole(NeedSet *s, const float panicThreshold[NEED_COUNT],
 			float dt);
 

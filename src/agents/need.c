@@ -1,6 +1,14 @@
 /*
  * The want ladder's arithmetic (see agents/need.h for the model).
  *
+ * PANIC IS AN ALARM, NOT A CONTENT QUANTITY. It starts at 0.0 and is raised
+ * by the world acting on a need. It is also RESERVED FOR TIER-0 SURVIVAL:
+ * a need whose panic threshold is negative never panics at all, because the
+ * spec's reprioritising-alarm story is "a dryer is on fire", and an agent
+ * that panicked on every emptied need would suppress its whole ladder and
+ * be just as inert. An emptied non-survival need is still maximally urgent
+ * through its tier weight — the band is what orders wants, not the alarm.
+ *
  * Pure: no SDL, no allocation, no time source, no libm. Every entry point
  * clamps dt the way entities.c does — `!(dt > 0.0f)` catches zero, negative
  * AND NaN in one comparison, so a bad frame can never advance a need or, far
@@ -25,6 +33,20 @@ static const float g_tierWeight[NEED_COUNT] = {
 	[NEED_FULFILMENT]	= 0.15f
 };
 
+/* The module default threshold vector: panic is reserved for tier-0
+ * survival, so survival carries the real threshold and every other slot is
+ * the negative "reserved" marker. Written out in full because a designated
+ * initialiser would leave the rest at 0.0f — a REAL threshold, i.e. the
+ * exact opposite of the reservation. */
+static const float g_defaultPanicThreshold[NEED_COUNT] = {
+	[NEED_SURVIVAL]		= NEED_PANIC_HOLD_DEFAULT,
+	[NEED_ENERGY]		= -1.0f,
+	[NEED_SOCIAL]		= -1.0f,
+	[NEED_SATISFACTION]	= -1.0f,
+	[NEED_ESTEEM]		= -1.0f,
+	[NEED_FULFILMENT]	= -1.0f
+};
+
 /* An unknown slot carries no weight and reads as band 0, so a bad index can
  * never invent urgency — and never reads out of bounds either. */
 static int needSlotValid(int need)
@@ -38,9 +60,12 @@ void needSetInit(NeedSet *s)
 
 	if (s == NULL)
 		return;
+	/* Content and calm: panic is an alarm the world raises, not a birth
+	 * condition. Starting it high would pin every want at its maximum and
+	 * never recover. */
 	for (n = 0; n < NEED_COUNT; n++) {
 		s->value[n] = 1.0f;
-		s->panic[n] = 1.0f;
+		s->panic[n] = 0.0f;
 	}
 }
 
@@ -80,15 +105,36 @@ void needPanicDecayRole(NeedSet *s, const float panicThreshold[NEED_COUNT],
 	for (n = 0; n < NEED_COUNT; n++) {
 		float threshold = (panicThreshold != NULL)
 					? panicThreshold[n]
-					: NEED_PANIC_HOLD_DEFAULT;
+					: g_defaultPanicThreshold[n];
 		float next;
 
-		/* Held, not decayed: the need is still under its threshold, so
-		 * the cause of the panic persists and the panic stays. */
-		if (s->value[n] < threshold)
+		/* RESERVED (negative threshold): this need is not allowed to
+		 * panic, so it neither holds, nor rises, nor bleeds — its
+		 * channel is left exactly as it stands. Testing the threshold
+		 * SIGN first keeps the reservation explicit: routing it
+		 * through the value comparison below would work by accident
+		 * (an empty 0.0 still compares >= -1.0) and would start
+		 * quietly decaying as soon as someone wrote a panic level by
+		 * hand. */
+		if (threshold < 0.0f)
 			continue;
-		next = s->panic[n] - NEED_PANIC_DECAY * dt;
-		s->panic[n] = next > 0.0f ? next : 0.0f;
+		if (s->value[n] < threshold) {
+			/* Cause live: the alarm climbs toward full. Without the
+			 * rise an emptied need would band high and then sit
+			 * there forever, and the panic mode would never be
+			 * reachable in a running game. */
+			next = s->panic[n] + NEED_PANIC_RISE * dt;
+			/* Ceiling 1.0f. !(x <= y) also folds NaN up to the
+			 * ceiling rather than letting it through. */
+			if (!(next <= 1.0f))
+				next = 1.0f;
+		} else {
+			/* Cause cleared: the alarm bleeds off toward nothing. */
+			next = s->panic[n] - NEED_PANIC_DECAY * dt;
+			if (!(next > 0.0f))
+				next = 0.0f;
+		}
+		s->panic[n] = next;
 	}
 }
 

@@ -14,27 +14,31 @@
 #include <string.h>
 
 /* The per-role curve table. A role is a ROW: adding one is a value here plus
- * an AgentRole constant, and no call site changes. Order matches Need. */
+ * an AgentRole constant, and no call site changes. Order matches Need.
+ *
+ * panicThreshold is -1.0f on every non-survival slot: panic is reserved for
+ * tier-0 survival (see agents/need.h), so the only knob a role actually has
+ * here is WHERE an emptied survival need trips its alarm. */
 static const RoleProfile g_roleProfiles[ROLE_COUNT] = {
-	/* CUSTOMER: the baseline. Everything decays at the base rate and every
-	 * need counts as panicking below 0.15. */
+	/* CUSTOMER: the baseline. Base decay rate; survival trips at 0.15. */
 	[ROLE_CUSTOMER] = {
 		.decayMul = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
-		.panicThreshold = { 0.15f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f },
+		.panicThreshold = { 0.15f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f },
 	},
 	/* STAFF: a shift tires you (energy 1.5), and someone is always around
 	 * plus the job itself supplies the sense of purpose (social and
-	 * fulfilment 0.5). */
+	 * fulfilment 0.5). Same survival threshold as the customer. */
 	[ROLE_STAFF] = {
 		.decayMul = { 1.0f, 1.5f, 0.5f, 1.0f, 1.0f, 0.5f },
-		.panicThreshold = { 0.15f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f },
+		.panicThreshold = { 0.15f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f },
 	},
 	/* CRITTER: needs little company (social 0.25), is not bothered by
-	 * esteem at all (0.0 — it never decays, so it never panics), and being
-	 * blocked annoys it half as much. It also trips earlier: 0.10. */
+	 * esteem at all (0.0 — it never decays, so it can never panic), and is
+	 * less annoyed by being blocked. It trips EARLIER on survival, 0.10:
+	 * a critter reacts to danger sooner than a customer does. */
 	[ROLE_CRITTER] = {
 		.decayMul = { 1.0f, 1.0f, 0.25f, 0.5f, 0.0f, 1.0f },
-		.panicThreshold = { 0.10f, 0.10f, 0.10f, 0.10f, 0.10f, 0.10f },
+		.panicThreshold = { 0.10f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f },
 	},
 };
 

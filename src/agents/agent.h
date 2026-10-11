@@ -75,7 +75,14 @@ typedef enum AgentSkill {
 } AgentSkill;
 
 /* One row of the per-role curve table: how fast each need decays for this
- * role, and how low it must fall before that need counts as panicking. */
+ * role, and how low it must fall before that need counts as panicking.
+ *
+ * A NEGATIVE panicThreshold reserves that need: it never panics. Panic is the
+ * tier-0 survival alarm (the spec's "a dryer is on fire" reprioritises
+ * everyone through survival), so every shipped row carries a real threshold
+ * on NEED_SURVIVAL ONLY and -1.0f elsewhere. A role therefore tunes WHERE an
+ * emptied survival need trips, not which needs are allowed to set off an
+ * alarm. */
 typedef struct RoleProfile {
 	float decayMul[NEED_COUNT];
 	float panicThreshold[NEED_COUNT];
@@ -123,17 +130,12 @@ typedef struct AgentStats {
  * a fresh run byte-identical. NULL is a no-op. */
 void agentsInit(AgentRegistry *r);
 
-/* Claim the lowest free slot and initialise it: content needs, zeroed
- * skills and flaws, no body, no board, no job, zero dwell, and panicMask
- * taken from the freshly initialised needs. Returns AGENT_INVALID when the
- * registry is full or NULL — the registry is then unchanged.
- *
- * WARNING — needSetInit starts every panic channel at 1.0, so a new agent
- * is born panicking on all six needs (see the needSetInit note in
- * agents/need.h): wantUrgency is NEED_BANDS - 1 for every want and never
- * recovers, because the decaying need crosses its panic threshold before the
- * panic level bleeds to zero. This call follows the spec as written; a spawn
- * path is responsible for clearing the panic channel at birth. */
+/* Claim the lowest free slot and initialise it: content needs with every
+ * panic channel clear, zeroed skills and flaws, no body, no board, no job,
+ * zero dwell, and panicMask taken from the freshly initialised needs. Returns
+ * AGENT_INVALID when the registry is full or NULL — the registry is then
+ * unchanged. A new agent is content and calm, so its wants band and order
+ * normally from its first tick; see needSetInit in agents/need.h. */
 AgentHandle agentCreate(AgentRegistry *r, int role);
 
 /* Borrow a live agent, or NULL for a NULL registry, an out-of-range handle
@@ -146,10 +148,11 @@ Agent *agentGet(AgentRegistry *r, AgentHandle h);
 void agentDestroy(AgentRegistry *r, AgentHandle h);
 
 /* Advance every LIVE agent one tick: needDecay with the role's multipliers,
- * then needPanicDecayRole with the role's thresholds, then refresh
- * panicMask. dt is clamped to AGENT_MAX_DT and a non-positive or NaN dt is a
- * no-op. An agent whose role has no profile row is skipped (see the header
- * note on why). NULL is a no-op. */
+ * then needPanicDecayRole with the role's thresholds (so an emptied survival
+ * need raises its alarm), then refresh panicMask. dt is clamped to
+ * AGENT_MAX_DT and a non-positive or NaN dt is a no-op for the decay itself.
+ * An agent whose role has no profile row is skipped (see the header note on
+ * why). NULL is a no-op. */
 void agentsDecay(AgentRegistry *r, float dt);
 
 /* The role's curve row, or NULL when `role` is out of range. The returned
