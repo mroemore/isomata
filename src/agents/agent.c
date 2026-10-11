@@ -86,6 +86,14 @@ AgentHandle agentCreate(AgentRegistry *r, int role)
 		a->engagedShared = false;
 		a->dwellLeft = 0.0f;
 		a->pathLen = -1;
+		/* Every activity pickable, and nothing the world offers: a born
+		 * agent is content and has done nothing, so the only fills it
+		 * can reach are the in-place ones (agents/activity.h). */
+		activityCooldownsInit(&a->cooldown);
+		a->places.othersInRange = 0;
+		a->places.arcadeTile = JOB_INVALID;
+		a->places.machineId = JOB_INVALID;
+		a->clock = 0.0f;
 		r->alive[i] = true;
 		r->liveCount++;
 		return i;
@@ -243,6 +251,20 @@ static void agentDenyJob(Agent *a, Job *j)
 	jobStep(j, JOB_DENIED);
 }
 
+/* An IN-PLACE activity binds JOB_TARGET_NONE deliberately: it happens where
+ * the agent stands, so there is nothing to walk to and no route to refuse.
+ * The lifecycle has exactly the cells for this — CLAIMED + ARRIVED enters
+ * WALKING, and WALKING + ARRIVED binds the activity — so two ARRIVEDs in a
+ * row land in INTERACTING with no MOVE_TO ever issued and no body needed. The
+ * job then parks on the activity's duration, exactly as the demo's timed wait
+ * always did. */
+static void agentStartInPlaceJob(Job *j)
+{
+	jobStep(j, JOB_START);
+	jobStep(j, JOB_ARRIVED);	/* CLAIMED -> WALKING */
+	jobStep(j, JOB_ARRIVED);	/* WALKING  -> INTERACTING */
+}
+
 static void agentStartJob(Agent *a, EntityRegistry *ents, Job *j,
 			  const Voxmap *map)
 {
@@ -251,6 +273,11 @@ static void agentStartJob(Agent *a, EntityRegistry *ents, Job *j,
 	int tz = 0;
 	int len;
 
+	/* An in-place activity is never walked to. */
+	if (j->targetKind == JOB_TARGET_NONE) {
+		agentStartInPlaceJob(j);
+		return;
+	}
 	jobStep(j, JOB_START);
 	jobStep(j, JOB_ARRIVED);
 	if (!jobTargetTile(j, VOXMAP_MAX_DIM, &tx, &tz)) {
@@ -325,6 +352,57 @@ static void agentDropJob(Agent *a, JobBoard *b, Job *j)
 	a->engagedShared = false;
 }
 
+/* REFRESH ONE BOARD'S BANDS, for the agent about to decide. A job's urgency
+ * is COMPUTED from the needs it serves (agents/activity.h) — never assigned
+ * by whoever queued it — and the needs moved this tick, so every cached band
+ * is stale by construction. A freshly enqueued job arrives with band -1
+ * ("dirty"), so skipping this would make new work permanently ineligible
+ * rather than merely mis-banded.
+ *
+ * The cost is one walk of the board the agent can already see, per decision,
+ * and only on the two boards that agent can read: the spec's "decision
+ * points, not per-tick rescoring" is preserved because an agent with no
+ * candidate never gets here.
+ *
+ * A job whose activity is unknown scores -1, which is an ERROR rather than a
+ * boring band, so it is failed here and now through the lifecycle: the
+ * caller sees the release and no claim is left hanging. That is the Review
+ * Focus #5 contract, enforced at the only place a band is written.
+ *
+ * WHY A SHARED BOARD'S BANDS ARE THE READER'S. Band is a function of WHO is
+ * asking — the same job is band 8 to one agent and band 2 to another — so a
+ * shared job has no single true band, only one true band PER AGENT. The
+ * personal board sidesteps this by being exclusively owned. Here the band is
+ * refreshed immediately before this agent's scan and consumed by that same
+ * scan, so the decision is always made on this agent's own arithmetic; the
+ * stored value afterwards describes whoever read it last and no decision
+ * ever trusts a stored band it did not just compute. Giving a shared job a
+ * per-agent band that persists would need a second data structure, and that
+ * is a staffing question for the shared-board task, not this one. */
+static void agentRefreshBands(Agent *a, JobBoard *b)
+{
+	int slot;
+
+	for (slot = 0; slot < BOARD_MAX; slot++) {
+		Job *j;
+		int band;
+
+		if (!b->alive[slot])
+			continue;
+		j = &b->slots[slot];
+		/* Terminal work is finished business: leave it be. */
+		if (j->state == JOB_DONE || j->state == JOB_FAILED)
+			continue;
+		band = jobUrgency(a, j);
+		if (band < 0) {
+			/* A BROKEN JOB, not an urgent one. */
+			jobStep(j, JOB_DENIED);
+			continue;
+		}
+		j->band = band;
+	}
+}
+
 int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 const Voxmap *map, float dt, int *outDecisions)
 {
@@ -377,18 +455,36 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 			j = NULL;
 		} else if (j != NULL &&
 			   (j->state == JOB_DONE || j->state == JOB_FAILED)) {
+			/* A job that COMPLETED puts its activity on
+			 * cooldown for this agent (agents/activity.h), so
+			 * an agent that just napped does not immediately nap
+			 * again. A FAILED job did not happen and stamps
+			 * nothing: a nap refused by the world must not cost
+			 * the agent the real one. */
+			if (j->state == JOB_DONE)
+				activityMarkDone(&a->cooldown, j->kind,
+						 a->clock);
 			boardRelease(eb, a->engagedJob);
 			a->engagedJob = JOB_INVALID;
 			a->engagedShared = false;
 			j = NULL;
 		}
 
-		/* Step 3: staying power runs down, never below zero. */
+		/* Step 3: staying power runs down, never below zero, and the
+		 * agent's own cooldown clock advances with it. The clock is
+		 * accumulated dt, never a wall clock, so the same dt sequence
+		 * always produces the same cooldowns (agents/activity.h). */
+		a->clock += dt;
 		if (a->dwellLeft > 0.0f) {
 			a->dwellLeft -= dt;
 			if (a->dwellLeft < 0.0f)
 				a->dwellLeft = 0.0f;
 		}
+
+		/* Step 3b: refresh this agent's own bands before anything
+		 * reads one (see agentRefreshBands for why the shared board
+		 * is refreshed later, immediately before its scan). */
+		agentRefreshBands(a, &a->personal);
 
 		/* Step 4: the one question an agent may ask per tick. Nothing to
 		 * switch TO is not a decision at all — an agent that holds a
@@ -396,6 +492,12 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 * consulted once there is a candidate to move to. Note that
 		 * "no decision" is NOT "do nothing": the job it already
 		 * holds still advances below, decision or not. */
+		/* The shared board's bands are refreshed HERE, immediately
+		 * before the scan that consumes them, so a job queued there
+		 * by a producer that never computed a band is still eligible
+		 * and still compared on this agent's own arithmetic. */
+		if (boards != NULL)
+			agentRefreshBands(a, &boards->shared);
 		pskip[0] = a->engagedShared ? JOB_INVALID : a->engagedJob;
 		pskip[1] = JOB_INVALID;
 		sskip[0] = a->engagedShared ? a->engagedJob : JOB_INVALID;
@@ -426,6 +528,66 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 				/* Step 6: claim the lifecycle, then route the
 				 * body. */
 				agentStartJob(a, ents, cj, map);
+			}
+		}
+
+		/* Step 6b: IF NOTHING ELSE IS AVAILABLE, DO SOMETHING. An agent
+		 * with an empty board and nothing to pick would stand still
+		 * forever, and "an agent does secondary activities when
+		 * blocked" is the spec's whole second half.
+		 *
+		 * A GENERATED FILL ONLY FILLS A GENUINELY EMPTY BOARD. The
+		 * condition is liveCount == 0, not merely "the agent is
+		 * idle": a personal board holding queued or running work is
+		 * being fed by a PRODUCER — an errand advancing, or the
+		 * demo's own patrol queueing the next leg — and an agent must
+		 * never talk over its producer by inventing filler beside
+		 * work that is already coming. A board with nothing on it is
+		 * the one case where standing still is the wrong answer.
+		 *
+		 * The pick is agentBestFill: the same jobUrgency fold every
+		 * other job is scored with, so a self-chosen fill competes on
+		 * identical terms with an errand's job (agents/activity.h).
+		 * Nothing here is a per-role behaviour switch; adding a
+		 * behaviour is adding a row. */
+		if (a->engagedJob == JOB_INVALID &&
+		    a->personal.liveCount == 0) {
+			int fill = agentBestFill(a, &a->personal, a->clock);
+
+			if (fill != JOB_INVALID) {
+				Job fj;
+				int h;
+
+				/* Neither call below can fail, and neither is
+				 * defended against, because both preconditions
+				 * are this block's own invariants:
+				 * agentBestFill returns only ids the catalogue
+				 * actually has, so activityBindJob cannot
+				 * refuse; and liveCount == 0 is exactly the
+				 * condition that means the board has room. A
+				 * guard here would be a branch that can never
+				 * be false, which is worse than the
+				 * invariant being stated. */
+				activityBindJob(&fj, fill);
+				fj.band = jobUrgency(a, &fj);
+				h = boardEnqueue(&a->personal, &fj, JOB_PRIO_FILL);
+				/* Enqueued AND claimed in the same breath, exactly
+				 * as a job taken off a board is: a fill the agent
+				 * had to wait a tick for would be a visible
+				 * stall in the running demo. The claim is guarded
+				 * because this IS the race the board's contract
+				 * is about, and a refused claim must leave the
+				 * agent idle rather than half-attached. */
+				if (boardClaim(&a->personal, h, a->id)) {
+					a->engagedJob = h;
+					a->engagedShared = false;
+					a->dwellLeft = AGENT_MIN_DWELL;
+					agentStartJob(a, ents,
+						       boardJob(&a->personal, h),
+						       map);
+					decisions++;
+					g_stats.agentDecisions++;
+				}
 			}
 		}
 

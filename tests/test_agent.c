@@ -24,6 +24,7 @@
 #include "unity.h"
 
 #include "agents/agent.h"
+#include "agents/activity.h"
 #include "agents/board.h"
 #include "ai/nav.h"
 #include "entities/entities.h"
@@ -622,8 +623,105 @@ static void test_agents_stats(void)
 	agentsStats(NULL);
 }
 
-/* A wander job for a tile target: kind, hand-set band (Task 4 computes it),
- * and the demo's timed wait as the job's duration. */
+/* ---- Task 4: bands are COMPUTED, so a test sets NEEDS, not integers --- *
+ *
+ * Before the activity catalogue a job's band was a number a producer wrote
+ * onto the record. It is now computed by jobUrgency from the needs the
+ * job's ACTIVITY serves (agents/activity.h), so these tests reach a band the
+ * way the framework does: pick the activity, then set the need so that
+ * wantUrgency x serves lands on the wanted band. Nothing is weakened — the
+ * band an assertion talks about is still a real computed band, and
+ * pushScored FAILS if the requested one is unreachable, rather than letting a
+ * test quietly assert against a band it did not get.
+ *
+ * Two consequences worth stating, because they are properties of the design
+ * rather than of the tests:
+ *
+ *   - TWO JOBS OF THE SAME KIND ALWAYS SCORE THE SAME for one agent. One
+ *     activity, one fold. So a margin is only ever measured between
+ *     DIFFERENT activities, which is what a real margin is.
+ *   - THE BAND CEILING IS THE CATALOGUE'S. No row serves tier-0 SURVIVAL,
+ *     so wantUrgency tops out at 9 on the strongest served need and the
+ *     largest band any activity can reach is round(9 x 0.9) = 8. The bands
+ *     below are real ones. */
+
+/* Set one need so that wantUrgency reads exactly `want` for it (0..NEED_BANDS-1).
+ * wantUrgency is round(tierWeight * deficit * (NEED_BANDS - 1)), so the
+ * deficit that yields `want` is want / (bands-1) / weight, clamped to the
+ * deficit's own 0..1 range. */
+static void tuneNeed(Agent *a, int need, int want)
+{
+	float w = needTierWeight(need);
+	float deficit = (float)want / ((float)(NEED_BANDS - 1) * w);
+
+	if (!(deficit > 0.0f))
+		deficit = 0.0f;
+	else if (deficit > 1.0f)
+		deficit = 1.0f;
+	a->needs.value[need] = 1.0f - deficit;
+	a->panicMask = needPanicMask(&a->needs);
+}
+
+/* Pin `a`'s needs so that a job of `kind` would score exactly `band`. NEEDS
+ * DECAY, so a band pinned before a long run of ticks has drifted by the time
+ * that run ends (a hand-set band never would have). This re-pins one without
+ * pushing a job. */
+static void tuneToBand(Agent *a, int kind, int band)
+{
+	const Activity *act = activitiesGet(kind);
+	int drive = -1;
+	int n;
+
+	TEST_ASSERT_NOT_NULL(act);
+	for (n = NEED_COUNT - 1; n >= 0; n--) {
+		if (act->serves[n] > 0.0f) {
+			drive = n;
+			break;
+		}
+	}
+	TEST_ASSERT_TRUE(drive >= 0);
+	tuneNeed(a, drive, (int)((float)band / act->serves[drive] + 0.5f));
+}
+
+/* Push a job of `kind` whose COMPUTED band is exactly `band`, bound to a
+ * tile so it walks. The activity's own place flag does not constrain a job's
+ * target — a nap may still name a tile and be walked to — which is what lets
+ * these tests measure the switch rule without also measuring walking.
+ *
+ * The need driven is the activity's LAST served slot, so two activities that
+ * overlap on one need still stay independent (the nap drives ENERGY, the
+ * coffee break drives SATISFACTION). */
+static int pushScored(Agent *a, JobBoard *b, int kind, int x, int z, int band,
+		      float duration)
+{
+	const Activity *act = activitiesGet(kind);
+	Job j;
+	int drive = -1;
+	int n;
+
+	TEST_ASSERT_NOT_NULL(act);
+	for (n = NEED_COUNT - 1; n >= 0; n--) {
+		if (act->serves[n] > 0.0f) {
+			drive = n;
+			break;
+		}
+	}
+	TEST_ASSERT_TRUE(drive >= 0);
+	tuneNeed(a, drive, (int)((float)band / act->serves[drive] + 0.5f));
+	jobInit(&j, kind);
+	j.duration = duration;
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(x, z));
+	/* The band is COMPUTED here, exactly as the tick computes it. */
+	j.band = jobUrgency(a, &j);
+	/* An unreachable request is a broken test, and says so here rather
+	 * than letting the assertions below quietly measure a different
+	 * band than the one they name. */
+	TEST_ASSERT_EQUAL_INT(band, j.band);
+	return boardEnqueue(b, &j, JOB_PRIO_FILL);
+}
+
+/* A wander job for a tile target: kind, a COMPUTED band (task 4 — see
+ * pushScored), and the demo's timed wait as the job's duration. */
 static int pushWander(JobBoard *b, int x, int z, int band, float duration)
 {
 	Job j;
@@ -900,8 +998,10 @@ static void test_update_engages_the_best_job(void)
 	int decisions = 0;
 
 	worldInit(w, 1, 1);
-	pushWander(&w->a->personal, 3, 1, 3, 0.4f);
-	pushWander(&w->a->personal, 9, 1, 7, 0.4f);
+	/* A weak wander and a decisive nap, on two different activities so
+	 * the two computed bands really do differ (see pushScored). */
+	pushScored(w->a, &w->a->personal, ACT_PLAY_ARCADE, 3, 1, 2, 0.4f);
+	pushScored(w->a, &w->a->personal, ACT_NAP, 9, 1, 8, 0.4f);
 
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
@@ -984,11 +1084,14 @@ static void test_update_preempts_once_on_a_decisive_challenger(void)
 	int i;
 
 	worldInit(w, 1, 1);
-	pushWander(&w->a->personal, 2, 1, 9, 4.0f);	/* the engaged one */
+	/* The engaged one: band 5. */
+	pushScored(w->a, &w->a->personal, ACT_COFFEE, 2, 1, 5, 4.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, w->a->engagedJob);
-	/* The urgent work turns up while the dwell is still running. */
-	pushWander(&w->a->personal, 2, 3, 9 + AGENT_PREEMPT_MARGIN, 4.0f);
+	/* The urgent work turns up while the dwell is still running: band 8,
+	 * which clears AGENT_PREEMPT_MARGIN (2) off the incumbent's 5. */
+	pushScored(w->a, &w->a->personal, ACT_NAP, 2, 3, 5 + AGENT_PREEMPT_MARGIN,
+		   4.0f);
 	TEST_ASSERT_FLOAT_WITHIN(0.0f, AGENT_MIN_DWELL, w->a->dwellLeft);
 
 	/* The dwell runs out after AGENT_MIN_DWELL seconds; before that the
@@ -1176,6 +1279,7 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	TickWorld *w = &g_world;
 	Agent *other;
 	int decisions = 0;
+	int i;
 
 	worldInit(w, 1, 1);
 	pushWander(&w->boards.shared, 5, 1, 12, 0.4f);
@@ -1190,14 +1294,48 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	jobStep(&w->boards.shared.slots[0], JOB_START);
 	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, w->boards.shared.slots[0].state);
 
-	/* Our critter sees an empty candidate set and does nothing. */
+	/* The staffer is ticked in the same call and must stay idle, so give
+	 * it one TERMINAL job of its own: terminal work is not a candidate,
+	 * and a non-empty board is not a licence to generate a fill (see
+	 * agentsUpdate). Without this the staffer would correctly invent its
+	 * own filler, and this test would be measuring the filler rather
+	 * than the claim. */
+	{
+		Job done;
+
+		jobInit(&done, JOB_PAY);
+		jobStep(&done, JOB_PHASE_DONE);
+		TEST_ASSERT_TRUE(boardEnqueue(&other->personal, &done,
+					      JOB_PRIO_FILL) != JOB_INVALID);
+	}
+
+	/* Our critter sees an empty candidate set — the only job on either
+	 * board is held by somebody else — and takes NOTHING. Its own board
+	 * is empty, so the tick generates its own filler instead, which is a
+	 * decision the perf counter counts but emphatically not a theft:
+	 * the shared claim is untouched. */
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
 			 &decisions);
-	TEST_ASSERT_EQUAL_INT(0, decisions);
+	TEST_ASSERT_EQUAL_INT(other->id, w->boards.shared.slots[0].claimer);
+	TEST_ASSERT_FALSE(w->a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, w->boards.shared.slots[0].state);
+
+	/* Let the critter's own filler run to completion so it is idle again
+	 * (the generated wander is in place and parks on its 3s), and retire
+	 * it: an idle agent with an empty board is the state this test needs
+	 * to show what it does with a lapsed claim. */
+	for (i = 0; i < 80 && w->a->engagedJob != JOB_INVALID; i++)
+		runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
+	for (i = 0; i < BOARD_MAX; i++) {
+		if (w->a->personal.alive[i])
+			boardRetire(&w->a->personal, i);
+	}
+	TEST_ASSERT_EQUAL_INT(0, w->a->personal.liveCount);
 
 	/* Once the reservation lapses, the job is available again and the
 	 * same tick takes it. */
+	decisions = 0;
 	boardExpire(&w->boards.shared, 1.0f + BOARD_RESERVE_SECS + 0.5f);
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->boards.shared.slots[0].claimer);
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
@@ -1228,17 +1366,17 @@ static void test_update_sees_the_other_board_behind_its_slot_number(void)
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
 	/* The agent's own work is personal slot 0 ... */
-	pushWander(&a->personal, 3, 1, 3, 4.0f);
+	pushScored(a, &a->personal, ACT_PLAY_ARCADE, 3, 1, 2, 4.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
 	TEST_ASSERT_FALSE(a->engagedShared);
 
 	/* ... and the urgent work is shared slot 0 — the same NUMBER. It is
-	 * band 9 against the incumbent's 3, so it clears the margin, and
+	 * band 8 against the incumbent's 2, so it clears the margin, and
 	 * shared slot 1 (band 1) is left alone. 20 ticks: the AGENT_MIN_DWELL
 	 * (1.5s) has to expire before ANY preemption, on either board. */
-	pushWander(&w->boards.shared, 6, 5, 9, 4.0f);
-	pushWander(&w->boards.shared, 7, 5, 1, 4.0f);
+	pushScored(a, &w->boards.shared, ACT_NAP, 6, 5, 8, 4.0f);
+	pushScored(a, &w->boards.shared, ACT_TIDY, 7, 5, 1, 4.0f);
 	runTicks(w, 20, 0.1f);
 	TEST_ASSERT_TRUE(a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);	/* shared slot 0 */
@@ -1259,14 +1397,14 @@ static void test_update_sees_the_personal_board_behind_its_slot_number(void)
 	worldInit(w, 1, 1);
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
-	pushWander(&w->boards.shared, 6, 5, 3, 4.0f);
+	pushScored(a, &w->boards.shared, ACT_PLAY_ARCADE, 6, 5, 2, 4.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
 	TEST_ASSERT_TRUE(a->engagedShared);
 
-	/* Personal slot 0 — the same NUMBER again — at band 11, which clears
+	/* Personal slot 0 — the same NUMBER again — at band 8, which clears
 	 * the margin once the dwell has run out. */
-	pushWander(&a->personal, 3, 1, 11, 4.0f);
+	pushScored(a, &a->personal, ACT_NAP, 3, 1, 8, 4.0f);
 	runTicks(w, 20, 0.1f);
 	TEST_ASSERT_FALSE(a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
@@ -1287,11 +1425,14 @@ static void test_update_holds_the_margin_across_boards(void)
 	worldInit(w, 1, 1);
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
-	pushWander(&a->personal, 3, 1, 9, 4.0f);
+	/* A long duration: this test is about the MARGIN, and a job that
+	 * finished inside the 40-tick loop would let the agent go idle and
+	 * wander off to the shared challenger before the decisive push. */
+	pushScored(a, &a->personal, ACT_TALK, 3, 1, 3, 60.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
 	/* One band better, on the other board: not a reason to move. */
-	pushWander(&w->boards.shared, 6, 5, 10, 4.0f);
+	pushScored(a, &w->boards.shared, ACT_COFFEE, 6, 5, 4, 4.0f);
 
 	/* Well past AGENT_MIN_DWELL, so the dwell is not what holds it. */
 	for (i = 0; i < 40; i++) {
@@ -1302,7 +1443,11 @@ static void test_update_holds_the_margin_across_boards(void)
 	/* One more band and it moves: the rule reads the band, not the board
 	 * the two jobs happen to sit on. */
 	boardRetire(&w->boards.shared, 0);
-	pushWander(&w->boards.shared, 7, 5, 11, 4.0f);
+	/* Re-pin the incumbent: its computed band drifted as its need decayed
+	 * through the 40 ticks above, so the decisive gap is measured against
+	 * a freshly pinned 3. */
+	tuneToBand(a, ACT_TALK, 3);
+	pushScored(a, &w->boards.shared, ACT_NAP, 7, 5, 5, 4.0f);
 	runTicks(w, 2, 0.1f);
 	TEST_ASSERT_TRUE(a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
@@ -1370,9 +1515,9 @@ static void test_update_compares_bands_across_boards(void)
 
 	worldInit(w, 1, 1);
 	boardExpire(&w->boards.shared, 1.0f);
-	pushWander(&w->a->personal, 3, 1, 4, 0.4f);
-	pushWander(&w->boards.shared, 6, 5, 6, 0.4f);
-	pushWander(&w->boards.shared, 7, 5, 11, 0.4f);
+	pushScored(w->a, &w->a->personal, ACT_PLAY_ARCADE, 3, 1, 2, 0.4f);
+	pushScored(w->a, &w->boards.shared, ACT_TALK, 6, 5, 4, 0.4f);
+	pushScored(w->a, &w->boards.shared, ACT_NAP, 7, 5, 8, 0.4f);
 
 	/* The first critter's own job is the weakest of the three, so the
 	 * urgent shared job is what it takes. */
@@ -1388,16 +1533,96 @@ static void test_update_compares_bands_across_boards(void)
 	second = agentGet(&w->reg, agentCreate(&w->reg, ROLE_CRITTER));
 	TEST_ASSERT_NOT_NULL(second);
 	second->entity = makeBody(&w->ents, w->map, 1, 1);
-	pushWander(&second->personal, 3, 3, 12, 0.4f);
+	pushScored(second, &second->personal, ACT_COFFEE, 3, 3, 5, 0.4f);
 	decisions = 0;
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
 			 &decisions);
 	/* The first critter holds its urgent job through its dwell (its
-	 * only challenger is the weaker band 6), so the one decision this
-	 * tick is the second critter taking its own job. */
+	 * only challenger is the weaker band 4 talk), so the one decision
+	 * this tick is the second critter taking its own band-5 job. */
 	TEST_ASSERT_EQUAL_INT(1, decisions);
 	TEST_ASSERT_EQUAL_INT(0, second->engagedJob);
 	TEST_ASSERT_FALSE(second->engagedShared);
+	worldFree(w);
+}
+
+/* An idle agent with an EMPTY board generates its own fill — the spec's
+ * "when blocked, do secondary activities". Nothing here was queued by a
+ * producer, so nothing is being talked over. */
+static void test_update_generates_a_fill_on_an_empty_board(void)
+{
+	TickWorld *w = &g_world;
+	Job *j;
+
+	worldInit(w, 1, 1);
+	/* Nothing queued, nothing engaged. */
+	TEST_ASSERT_EQUAL_INT(0, w->a->personal.liveCount);
+
+	runTicks(w, 1, 0.1f);
+
+	/* The agent generated exactly one job of its own accord ... */
+	TEST_ASSERT_EQUAL_INT(1, w->a->personal.liveCount);
+	j = boardJob(&w->a->personal, 0);
+	TEST_ASSERT_NOT_NULL(j);
+	/* ... a real activity, taken and started ... */
+	TEST_ASSERT_NOT_NULL(activitiesGet(j->kind));
+	TEST_ASSERT_EQUAL_INT(w->a->id, j->claimer);
+	/* ... and scored from the needs it serves, not hand-set. */
+	TEST_ASSERT_EQUAL_INT(jobUrgency(w->a, j), j->band);
+	worldFree(w);
+}
+
+/* A cooling-down activity is not re-picked: the fill the tick generates is
+ * the best one the COOLDOWNS allow, not the best one in the catalogue. */
+static void test_update_fills_with_something_the_cooldown_allows(void)
+{
+	TickWorld *w = &g_world;
+	Job *j;
+
+	worldInit(w, 1, 1);
+	/* Energy is empty, so the nap (band 8) would win ... */
+	w->a->needs.value[NEED_ENERGY] = 0.0f;
+	/* ... but it is on cooldown, so the coffee break (band 5) is taken
+	 * instead. A fill that ignored the cooldown would sit there for the
+	 * whole cooldown doing nothing. */
+	TEST_ASSERT_TRUE(activityMarkDone(&w->a->cooldown, ACT_NAP, 0.0f));
+
+	runTicks(w, 1, 0.1f);
+
+	j = boardJob(&w->a->personal, 0);
+	TEST_ASSERT_NOT_NULL(j);
+	TEST_ASSERT_EQUAL_INT(ACT_COFFEE, j->kind);
+	TEST_ASSERT_EQUAL_INT(w->a->id, j->claimer);
+	worldFree(w);
+}
+
+/* A job whose activity id no row claims is a BROKEN JOB, and the tick fails
+ * it rather than leaving it on the board to be compared against a margin it
+ * can never win. This is Review Focus #5 end to end: the -1 out of jobUrgency
+ * reaches the one place a band is written, and becomes JOB_FAILED rather than
+ * a plausible-looking band 0. */
+static void test_update_fails_a_job_whose_activity_is_unknown(void)
+{
+	TickWorld *w = &g_world;
+	Job j;
+
+	worldInit(w, 1, 1);
+	jobInit(&j, 9999);	/* no catalogue row claims this kind */
+	j.duration = 1.0f;
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(2, 1));
+	j.band = -1;
+	TEST_ASSERT_EQUAL_INT(0, boardEnqueue(&w->a->personal, &j, JOB_PRIO_FILL));
+
+	runTicks(w, 1, 0.1f);
+	/* Failed on the very tick the band was computed, never engaged, and no
+	 * path was ever attempted for work that cannot be scored. */
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, w->a->personal.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(-1, w->a->pathLen);
+	/* It holds: the tick keeps re-failing it, never resurrecting it. */
+	runTicks(w, 20, 0.1f);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, w->a->personal.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
 	worldFree(w);
 }
 
@@ -1440,10 +1665,14 @@ static void test_update_releases_a_vanished_board(void)
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
 
 	/* The next tick is handed no boards at all — the slot the agent was
-	 * holding is unreachable, so the agent lets go of it. */
+	 * holding is unreachable, so the agent lets go of it. Its own board
+	 * is empty afterwards, so the tick legitimately hands it a generated
+	 * filler; what matters is that the filler is a PERSONAL one and the
+	 * shared job it could no longer reach was dropped, not adopted. */
 	agentsUpdate(&w->reg, &w->ents, NULL, w->map, 0.1f, NULL);
-	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->engagedJob);
 	TEST_ASSERT_FALSE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(1, a->personal.liveCount);
 	worldFree(w);
 }
 
@@ -1554,6 +1783,9 @@ void run_test_agent(void)
 	RUN_TEST(test_update_releases_a_finished_job);
 	RUN_TEST(test_update_denies_an_unreachable_target);
 	RUN_TEST(test_update_denies_an_unresolvable_target);
+	RUN_TEST(test_update_generates_a_fill_on_an_empty_board);
+	RUN_TEST(test_update_fills_with_something_the_cooldown_allows);
+	RUN_TEST(test_update_fails_a_job_whose_activity_is_unknown);
 	RUN_TEST(test_update_denies_a_void_tile);
 	RUN_TEST(test_update_is_not_arrived_on_a_queued_step);
 	RUN_TEST(test_update_ignores_a_job_another_agent_holds);

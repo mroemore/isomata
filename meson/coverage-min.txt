@@ -310,19 +310,51 @@ src/sim/brain.c			80
 # reservation, and agentsDecay's per-role multipliers, live-only walk,
 # AGENT_MAX_DT clamp, NaN dt and the unknown-role skip.
 src/agents/need.c		100
-# Task 3: agent.c gains agentsUpdate, the switch rule and the execute half.
-# Every branch is taken on the first cut (126/126, 199/199 lines, 14/14
-# functions), so the floor stays at 100 rather than dropping: the switch rule
-# cell by cell, the oscillation property over 200 ticks through the real
-# tick, the near-miss / decisive preemption pair, both dwell boundaries, the
-# cross-board comparison, the four refusal paths (unresolvable target, void
-# tile, no body, unreachable body mid-walk), the finished-job release, the
-# vanished-slot and vanished-board releases, the dt clamp and the NaN dt,
-# and the guards. The lost-claim guard is reached honestly: an agent that
-# HOLDS a job still sees it as its own best candidate, and boardClaim
-# refuses to re-claim it (START is not a re-claim), so the tick does not
-# engage it.
-src/agents/agent.c		100
+# Task 4: agent.c gains the BAND REFRESH and the self-generated FILL, and the
+# switch rule now consumes a computed band rather than a hand-set one.
+# Measured 158/160 branches, 245/245 lines, 17/17 functions — so the floor
+# drops from 100 to 98 rather than staying at a figure the change no longer
+# supports. Exactly TWO arms are unreachable, and both are unreachable BY
+# CONSTRUCTION rather than untested:
+#
+#   - `if (fill != JOB_INVALID)` going false. The fill only fires on a board
+#     with liveCount == 0, and ACT_WANDER is in place with a zero cooldown,
+#     so an empty board ALWAYS has at least one candidate. Closing this arm
+#     needs a catalogue with no always-available activity, which would be a
+#     worse catalogue.
+#   - boardClaim refusing a just-enqueued fill. The job was enqueued on an
+#     empty board one statement earlier and nothing runs between the two, so
+#     nobody can have claimed it. The guard is KEPT anyway: it is the same
+#     race agentsUpdate's own step 5 guards, and a refused claim must leave
+#     the agent idle rather than half-attached to a job it does not hold.
+#
+# Everything else is taken: the band refresh on both boards (personal, and the
+# shared board refreshed immediately before its scan), the broken-job DENIED
+# path (a job whose activity no row claims), the in-place start that never
+# routes, the cooldown stamp on DONE and NOT on FAILED, the empty-board fill
+# generation with its claim and start, and the fill gate's own condition.
+src/agents/agent.c		98
+# Task 4: the activity catalogue and the urgency fold — the module that makes
+# "an activity is never primary or secondary" true in code.
+# Measured 90/91 branches, 126/127 lines, 13/13 functions, so the floor is 98
+# and not 100. The ONE uncovered arm is the skill-gate skip inside the fill
+# scan, and it is unreachable through the shipped catalogue: the only gated row
+# is ACT_TIDY at skillMin 0, and an agent's skills are uint16_t, so the gate is
+# open for every agent and can never close. activitySkillOpen's closed path IS
+# tested directly, against a raised floor, so the gate's logic is pinned even
+# though the filter above it cannot fire yet; a future row with skillMin > 0
+# closes this arm.
+#
+# Everything else is taken: the catalogue walk (a hit, and the miss that is the
+# Review Focus #5 NULL), the out-of-range index, the max-not-sum fold with its
+# NaN-safe serves guard, the panic channel, the unknown-activity -1 and its
+# NULL-job / NULL-agent siblings, the in-place / place-required split including
+# the broken row that names no way to satisfy itself, the skill gate in all
+# four of its states, binding in place vs needs-place plus the band left dirty,
+# the cooldown stamp, the inclusive boundary, the per-agent isolation, and
+# every guard on the fill pick (NULL agent, NULL board, cooling down, place
+# unsatisfied, already queued, and a terminal job of that kind queued).
+src/agents/activity.c		98
 # Task 3: the job board. Every arm is taken (74/74 branches, 104/104 lines,
 # 10/10 functions — 74 since fix round 1 added the reservation-vs-lease state
 # guard, which is exactly the behaviour that fix pinned), so the floor is

@@ -21,6 +21,7 @@
 #include "scenes/level_scene.h"
 
 #include "achievement.h"
+#include "agents/activity.h"
 #include "agents/agent.h"
 #include "agents/board.h"
 #include "agents/job.h"
@@ -85,13 +86,9 @@ static const int DEMO_DESTS_B[2][2] = { { 10, 13 }, { 10, 3 } };
 static const int DEMO_DESTS_C[2][2] = { { 11, 10 }, { 2, 7 } };
 
 /* The demo's timed WAIT phase, unchanged from the executor FSM's: a job
- * parks on its `duration` for this long before completing. */
+ * parks on its `duration` for this long before completing. It overrides the
+ * wander activity's own 3s runtime so a demo leg stays a demo leg. */
 #define DEMO_WAIT_SECONDS 0.4f
-/* The urgency band the demo's wander job carries, hand-set until the
- * activity catalogue (task 4) computes a job's band from the needs it serves.
- * Nothing competes with it today: a critter's personal board holds one leg at
- * a time, so the band only has to be stable and equal. */
-#define DEMO_WANDER_BAND 1
 
 /* --- T22 machines ------------------------------------------------------- *
  *
@@ -148,6 +145,14 @@ typedef struct DemoCritter {
 	int destIndex;		/* which destination is next */
 	int job;		/* the leg job on the personal board, or -1 */
 	int lastState;		/* last observed job state, for the log */
+	/* The demo paces its own patrol so the framework's FILL gets airtime
+	 * (see levelQueueNextLeg). A critter alternates between its queued leg
+	 * and a self-generated fill, which is the visible evidence that an
+	 * idle agent does something of its own accord. Without it the producer
+	 * would always have a leg ready and the fill path would never be
+	 * reached — the framework behaving correctly, since a producer is never
+	 * talked over, but leaving the mechanism unwitnessed. */
+	bool fillTurn;
 } DemoCritter;
 
 /* --- T23 customers ------------------------------------------------------ *
@@ -289,6 +294,22 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 	}
 }
 
+/* The ACTIVITY a job is an instance of, by name. The debug log names the
+ * activity rather than the raw job kind because the catalogue is what the
+ * demo is now demonstrating: an idle critter running a COFFEE BREAK is doing
+ * an activity of its own accord, and printing the kind slot it happens to be
+ * declared on ("PAY") would say nothing true about what the critter did.
+ *
+ * A kind no row claims falls back to the bare job kind — the only way to get
+ * here is a job the tick has already failed for being unscoreable, so this
+ * names a dead job rather than a live one. */
+static const char *levelActivityName(int kind)
+{
+	const Activity *act = activitiesGet(kind);
+
+	return (act != NULL) ? act->name : jobKindName(kind);
+}
+
 /* Queue the critter's next leg on its personal board. It is taken on the NEXT
  * tick: this runs after agentsUpdate, so the queue lands with the frame's
  * decisions already made — one frame per leg, the same one-frame-per-leg the
@@ -306,51 +327,83 @@ static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
 
 	if (a == NULL || c->job != JOB_INVALID || a->engagedJob != JOB_INVALID)
 		return;
+	/* THE CRITTER'S TURN TO FILL: stand aside and let the framework's own
+	 * agentBestFill put something on the empty board. agentsUpdate fills
+	 * only a genuinely empty board, so standing aside is exactly what makes
+	 * the self-generated activity happen. */
+	if (c->fillTurn)
+		return;
 	d = c->dests[c->destIndex];
-	jobInit(&j, JOB_WANDER);
-	/* Hand-set band: the activity catalogue (task 4) computes it from the
-	 * needs a wander serves. It never has to beat anything today, because
-	 * a critter's board holds exactly one job at a time. */
-	j.band = DEMO_WANDER_BAND;
-	/* The demo's old timed WAIT phase, unchanged: the job parks on it
-	 * before completing, exactly as the executor FSM used to. */
+	/* The declaration comes from the catalogue, so the demo's leg is the
+	 * same row an errand or a self-chosen fill would be — one
+	 * declaration, two producers (agents/activity.h). Only the DESTINATION
+	 * is the demo's own, and only the wait length is overridden so a demo
+	 * leg stays a demo leg. */
+	activityBindJob(&j, ACT_WANDER);
 	j.duration = DEMO_WAIT_SECONDS;
 	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(d[0], d[1]));
+	/* The band is COMPUTED from the needs a wander serves. Nothing here
+	 * assigns it, which is the whole point: the demo no longer knows what
+	 * its own job is worth. */
+	j.band = jobUrgency(a, &j);
 	c->job = boardEnqueue(&a->personal, &j, JOB_PRIO_FILL);
 	if (c->job == JOB_INVALID)
 		return;		/* board full: retried next tick */
 	c->destIndex = (c->destIndex + 1) % c->destCount;
 }
 
-/* Retire the finished leg so the board does not fill with dead rows (the
+/* Retire finished work so the board does not fill with dead rows (the
  * board's bounded drop would eventually start refusing work), and log the
- * lifecycle as it stands. */
+ * lifecycle as it stands.
+ *
+ * It sweeps EVERY terminal job on the board, not just the demo's own leg:
+ * since task 4 the framework generates its own fill jobs there, and an owner
+ * that retires only the rows it remembers leaving would leak the rest. A
+ * job the agent is still holding is left for the tick to let go of next
+ * frame — the ownership check in agentsUpdate is what makes that safe.
+ *
+ * Each retirement flips the critter's fill turn, so the demo alternates
+ * between a queued leg and a self-generated fill (see levelQueueNextLeg). */
 static void levelReapLeg(LevelState *st, DemoCritter *c)
 {
 	Agent *a = agentGet(&st->agents, c->agent);
-	Job *j = (a != NULL) ? boardJob(&a->personal, c->job) : NULL;
+	int h;
 
-	if (a == NULL || c->job == JOB_INVALID)
+	if (a == NULL)
 		return;
-	if (j != NULL && j->state != c->lastState) {
-		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-			     "isomata: agent %d job %d (%s) state %s -> %s",
-			     a->id, c->job, jobKindName(j->kind),
-			     jobStateName(c->lastState),
-			     jobStateName(j->state));
-		c->lastState = j->state;
+	if (c->job != JOB_INVALID) {
+		Job *j = boardJob(&a->personal, c->job);
+
+		if (j != NULL && j->state != c->lastState) {
+			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+				     "isomata: agent %d job %d (%s) state %s -> %s",
+				     a->id, c->job, levelActivityName(j->kind),
+				     jobStateName(c->lastState),
+				     jobStateName(j->state));
+			c->lastState = j->state;
+		}
 	}
-	if (j != NULL && j->state != JOB_DONE && j->state != JOB_FAILED)
-		return;
-	if (a->engagedJob == c->job)
-		return;		/* still held: the tick lets go of it next frame */
-	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-		     "isomata: agent %d leg %d %s; retiring it from the board",
-		     a->id, c->job, jobStateName(j != NULL ? j->state
-							 : JOB_FAILED));
-	boardRetire(&a->personal, c->job);
-	c->job = JOB_INVALID;
-	c->lastState = JOB_UNCLAIMED;
+	for (h = 0; h < BOARD_MAX; h++) {
+		Job *j = boardJob(&a->personal, h);
+		bool wasLeg;
+
+		if (j == NULL || (j->state != JOB_DONE && j->state != JOB_FAILED))
+			continue;
+		if (a->engagedJob == h)
+			continue;	/* still held: released next frame */
+		wasLeg = (c->job == h);
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: agent %d job %d (%s band %d) %s;"
+			     " retiring it",
+			     a->id, h, levelActivityName(j->kind), j->band,
+			     jobStateName(j->state));
+		boardRetire(&a->personal, h);
+		c->fillTurn = !c->fillTurn;
+		if (wasLeg) {
+			c->job = JOB_INVALID;
+			c->lastState = JOB_UNCLAIMED;
+		}
+	}
 }
 
 /* The why-this-job log (the spec's highest-value observability artifact): the
@@ -406,7 +459,7 @@ static void levelLogDecision(LevelState *st, DemoCritter *c, int before)
 	SDL_Log("isomata: agent %d (entity %d) job %d %s -> (%d,%d) band %d"
 		" (from %d, challenger %d, margin %d, dwell %.2fs) path %d"
 		" straight %d%s",
-		a->id, c->handle, a->engagedJob, jobKindName(to->kind), tx, tz,
+		a->id, c->handle, a->engagedJob, levelActivityName(to->kind), tx, tz,
 		toBand, fromBand, challengerBand, AGENT_PREEMPT_MARGIN,
 		(double)a->dwellLeft, a->pathLen, straight,
 		a->pathLen > straight ? " DETOUR" : "");
@@ -496,10 +549,36 @@ static void levelBuildMachines(LevelState *st)
 	}
 }
 
+/* THE BAND-TINT OVERLAY (the spec's observability item): an agent's own TOP
+ * wantUrgency — the most pressing thing it wants, across all six needs — as a
+ * colour, so a crowd going restless or panicking is visible as colour rather
+ * than as a log line nobody is watching. Cool blue is nothing pressing, hot
+ * red is the top of the ladder.
+ *
+ * It reads the needs DIRECTLY rather than the job's band, so it keeps
+ * telling the truth while an agent is between jobs, and it costs one six-slot
+ * scan per critter per frame, only while the debug view is on. */
+static uint32_t levelUrgencyTint(const Agent *a)
+{
+	int top = 0;
+	int n;
+
+	for (n = 0; n < NEED_COUNT; n++) {
+		int u = wantUrgency(&a->needs, n);
+
+		if (u > top)
+			top = u;
+	}
+	/* NEED_BANDS is a compile-time constant >= 2, so the divisor is safe. */
+	return DRAW_TINT((unsigned char)(top * 255 / (NEED_BANDS - 1)), 0,
+			 (unsigned char)(255 - top * 255 / (NEED_BANDS - 1)), 255);
+}
+
 static void levelSyncSprites(LevelState *st)
 {
 	EntityHandle h;
 	size_t n = 0;
+	int i;
 
 	for (h = entityFirst(&st->sim.entities); h != ENTITY_INVALID;
 	     h = entityNext(&st->sim.entities, h)) {
@@ -514,6 +593,34 @@ static void levelSyncSprites(LevelState *st)
 		st->sprites[n].height = e->height;
 		st->sprites[n].tint = e->tint;
 		st->sprites[n].material = e->material;
+		/* Band-tint overlay: a critter's billboard is recoloured by its
+		 * own top want under the debug view only — zero cost when the
+		 * view is off, and the tint is the agent's own needs rather
+		 * than whatever entity colour it happens to carry.
+		 *
+		 * IT ALSO SWAPS THE MATERIAL, and that is the part that makes
+		 * it work. The critters normally draw through "sprite", which
+		 * is a RED ball, so a tint can only scale the red channel and
+		 * the whole ramp collapses to "black or red". The overlay
+		 * therefore borrows the flat-white material the machines use
+		 * for exactly the same reason — so the tint IS the colour, and
+		 * a crowd going restless reads as one. Debug view only; the
+		 * normal view keeps the critters' own sprite. */
+		if (st->lightDebug) {
+			for (i = 0; i < st->critterCount; i++) {
+				const Agent *a;
+
+				if (st->critters[i].handle != h)
+					continue;
+				a = agentGet(&st->agents,
+					     st->critters[i].agent);
+				if (a != NULL) {
+					st->sprites[n].tint = levelUrgencyTint(a);
+					st->sprites[n].material =
+						st->machineMaterial;
+				}
+			}
+		}
 		n++;
 	}
 	/* T22: append each machine as a billboard standing on its tile (bottom-

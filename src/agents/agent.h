@@ -46,6 +46,7 @@
  * AgentStats accumulator, and no decision reads it.
  */
 
+#include "agents/activity.h"
 #include "agents/board.h"
 #include "agents/need.h"
 #include "entities/entities.h"
@@ -150,6 +151,25 @@ typedef struct Agent {
 	int pathLen;
 	/* Cached needPanicMask(&needs), refreshed by every agentsDecay. */
 	int panicMask;
+	/* WHEN THIS AGENT MAY NEXT DO WHAT. The catalogue's per-agent
+	 * bookkeeping (agents/activity.h): "I just napped" is a fact about
+	 * ONE mind, and a process-wide cooldown table would let one agent's
+	 * rest suppress every other agent's. Seconds, on the agent's own
+	 * clock below — this module has no time source and never reads a
+	 * wall clock. */
+	ActivityCooldowns cooldown;
+	/* WHAT THE WORLD OFFERS THIS AGENT, cached. Refilled by the world
+	 * (a later task supplies it from the entity and machine
+	 * registries); until then every field reads JOB_INVALID or zero, so
+	 * place-requiring activities are simply unavailable and the
+	 * in-place ones are all that can be picked. Read-only here: no
+	 * decision writes it. */
+	ActivityPlaces places;
+	/* Seconds of ticked dt this agent has lived — the cooldown clock,
+	 * advanced by agentsUpdate and read by activityMarkDone and
+	 * agentBestFill. Accumulated dt, never a wall clock, so the same
+	 * dt sequence always yields the same clock. */
+	float clock;
 } Agent;
 
 typedef struct AgentRegistry {

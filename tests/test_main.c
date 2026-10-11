@@ -90,6 +90,7 @@ void run_test_need(void);
 void run_test_agent(void);
 void run_test_job(void);
 void run_test_board(void);
+void run_test_activity(void);
 
 
 int main(void)
@@ -136,5 +137,6 @@ int main(void)
 	run_test_agent();
 	run_test_job();
 	run_test_board();
+	run_test_activity();
 	return UNITY_END();
 }
