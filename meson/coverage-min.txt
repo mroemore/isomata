@@ -289,7 +289,7 @@ src/sim/brain.c			80
 
 # Agent framework, task 1: the want ladder (need.c) and the agent record
 # (agent.c). Both are pure, allocation-free twin suites, and both close
-# EVERY branch on the first cut — the measured values are 58/58 and 40/40, so
+# EVERY branch on the first cut — the measured values are 62/62 and 40/40, so
 # the floors are ratcheted to 100 rather than parked at the measured figure.
 #
 # need.c's arms are all taken because the suite pins the ladder's arithmetic

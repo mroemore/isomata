@@ -105,6 +105,17 @@ void needDecay(NeedSet *s, const float decayMul[NEED_COUNT], float dt);
  * just never sets off the alarm, because a satisfied-in-nothing agent that
  * panics on everything is the same inert ladder by another route.
  *
+ * ARM ONLY TIER-0 NEEDS. Panic is a maximal, suppressing override: the
+ * panicking need returns NEED_BANDS - 1 outright, and every OTHER want is
+ * scaled by NEED_PANIC_SUPPRESS while it holds. Arming a lower-tier need
+ * therefore inverts the ladder — an emptied NEED_FULFILMENT panicking reads 15
+ * while an emptied, unarmed NEED_SURVIVAL is pushed from 15 down to 11, so the
+ * agent abandons a critical survival need for a leisure one. That is exactly
+ * what the tier weights exist to prevent, and the override does not care about
+ * them. Unreachable through the three shipped role profiles, which reserve every
+ * non-survival need — but needPanicDecayRole is public, so it is one row in the
+ * role table away. Change the role table before arming anything else.
+ *
  * dt is clamped to NEED_MAX_DT and a non-positive or NaN dt is a no-op.
  * panicThreshold == NULL means every slot uses the module default vector
  * (NEED_PANIC_HOLD_DEFAULT for survival, reserved for the rest). */
