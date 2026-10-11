@@ -49,6 +49,33 @@ static int push(JobBoard *b, int band)
 	return boardEnqueue(b, &j, JOB_PRIO_FILL);
 }
 
+/* Take a job the way an agent does: boardClaim stamps the reservation and
+ * jobStep(START) claims the lifecycle. The result is the lifecycle's
+ * JOB_CLAIMED — "reserved, not yet walking" — which is the state a
+ * reservation is ABOUT, and the only state boardExpire frees. */
+static bool take(JobBoard *b, int handle, int agentId)
+{
+	if (!boardClaim(b, handle, agentId))
+		return false;
+	jobStep(&b->slots[handle], JOB_START);
+	return true;
+}
+
+/* Walk a taken job forward with the lifecycle's own cells, so the expiry
+ * rules can be checked against a job that is genuinely under way. The ladder
+ * is explicit rather than a loop: ARRIVED is a no-op from INTERACTING, so a
+ * "step until you get there" loop never terminates. */
+static void stepTo(JobBoard *b, int handle, int state)
+{
+	Job *j = &b->slots[handle];
+
+	jobStep(j, JOB_ARRIVED);		/* CLAIMED -> WALKING */
+	if (state > JOB_WALKING)
+		jobStep(j, JOB_ARRIVED);	/* WALKING -> INTERACTING */
+	if (state > JOB_INTERACTING)
+		jobStep(j, JOB_PHASE_DONE);	/* -> WAITING */
+}
+
 /* ---- init and record size ----------------------------------------------- */
 
 static void test_board_init_resets(void)
@@ -300,7 +327,8 @@ static void test_expiry_releases_a_lapsed_reservation(void)
 	boardInit(&b, true);
 	jh = push(&b, 5);
 	boardExpire(&b, 10.0f);
-	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+	TEST_ASSERT_TRUE(take(&b, jh, 7));
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, b.slots[jh].state);
 
 	/* Not yet: the window is still open, nothing is released. */
 	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 10.0f + BOARD_RESERVE_SECS));
@@ -344,7 +372,7 @@ static void test_expiry_counts_every_lapsed_claim(void)
 	 * apart (deadline = claim time + BOARD_RESERVE_SECS). */
 	for (i = 0; i < 5; i++) {
 		boardExpire(&b, (float)i);
-		TEST_ASSERT_TRUE(boardClaim(&b, i, i + 1));
+		TEST_ASSERT_TRUE(take(&b, i, i + 1));
 	}
 
 	/* The count is the number RELEASED, not the number swept. */
@@ -357,6 +385,129 @@ static void test_expiry_counts_every_lapsed_claim(void)
 		TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[i].claimer);
 }
 
+/* THE RESERVATION, NOT THE LEASE. A job that is claimed and never leaves
+ * JOB_CLAIMED is freed by the window however long ago it was taken, and goes
+ * back on the board for anybody — that is the whole point of a reservation:
+ * nobody sits on a job forever without starting it. */
+static void test_expiry_frees_a_claim_that_never_started(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 100.0f);
+	TEST_ASSERT_TRUE(take(&b, jh, 7));
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, b.slots[jh].state);
+
+	/* The window is honoured to its full length: nothing is freed at the
+	 * deadline itself, and the job is freed just after it. */
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 100.0f + BOARD_RESERVE_SECS));
+	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+	TEST_ASSERT_EQUAL_INT(1,
+			      boardExpire(&b, 100.0f + BOARD_RESERVE_SECS + 0.1f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.slots[jh].claimExpiry);
+
+	/* ...and the freed job is claimable, not merely unmarked: the
+	 * lifecycle still reads CLAIMED, which is a job somebody started,
+	 * so the new owner revives nothing — it just walks it (START is a
+	 * no-op on a live job, then ARRIVED issues the move). */
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 8));
+	TEST_ASSERT_EQUAL_INT(8, b.slots[jh].claimer);
+	jobStep(&b.slots[jh], JOB_START);
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, b.slots[jh].state);
+	jobStep(&b.slots[jh], JOB_ARRIVED);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, b.slots[jh].state);
+}
+
+/* THE LEASE. A job that has left JOB_CLAIMED is the owner's: no sweep, at
+ * any elapsed time, frees it, and nobody else can take it. This is what keeps
+ * a long job (a 30-second machine wash) exclusive. */
+static void test_expiry_never_frees_a_running_job(void)
+{
+	JobBoard b;
+	int states[3];
+	int i;
+
+	states[0] = JOB_WALKING;
+	states[1] = JOB_INTERACTING;
+	states[2] = JOB_WAITING;
+	boardInit(&b, true);
+	for (i = 0; i < 3; i++) {
+		int jh = push(&b, 5);
+		float deadline;
+
+		boardExpire(&b, 10.0f * (float)i);
+		TEST_ASSERT_TRUE(take(&b, jh, 7));
+		stepTo(&b, jh, states[i]);
+		TEST_ASSERT_EQUAL_INT(states[i], b.slots[jh].state);
+		deadline = b.slots[jh].claimExpiry;
+
+		/* Far past the deadline — an hour, say — and still held. */
+		TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 3600.0f));
+		TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, deadline,
+					 b.slots[jh].claimExpiry);
+		/* Nobody else can have it while it runs. */
+		TEST_ASSERT_FALSE(boardClaim(&b, jh, 8));
+		TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+	}
+}
+
+/* ...so a running job's claim ends the way every other one does: the owner
+ * gives it up (preemption, cancel, abandon), or the job finishes and its
+ * owner releases it. */
+static void test_release_is_how_a_running_job_frees_its_claim(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 10.0f);
+	TEST_ASSERT_TRUE(take(&b, jh, 7));
+	stepTo(&b, jh, JOB_WALKING);
+
+	/* Minutes later, still exclusively the owner's... */
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 400.0f));
+	TEST_ASSERT_FALSE(boardClaim(&b, jh, 8));
+
+	/* ...until the owner releases it, which is the preempt/cancel path. */
+	boardRelease(&b, jh);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, b.slots[jh].state);  /* not reset */
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 8));
+	TEST_ASSERT_EQUAL_INT(8, b.slots[jh].claimer);
+}
+
+/* A long job stepped through a minute of simulated time is never stolen: the
+ * sweep runs every second and the claimer never changes. */
+static void test_a_long_running_job_is_never_stolen(void)
+{
+	JobBoard b;
+	int jh;
+	int sec;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 0.0f);
+	TEST_ASSERT_TRUE(take(&b, jh, 7));
+	stepTo(&b, jh, JOB_INTERACTING);
+
+	for (sec = 1; sec <= 60; sec++) {
+		/* The job is under way the whole time (it spends 20s
+		 * interacting and 40s waiting on its machine phase). */
+		if (sec == 20)
+			jobStep(&b.slots[jh], JOB_PHASE_DONE);
+		TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, (float)sec));
+		TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+		TEST_ASSERT_FALSE(boardClaim(&b, jh, 8));
+		TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+	}
+	TEST_ASSERT_EQUAL_INT(JOB_WAITING, b.slots[jh].state);
+}
+
 /* The window is honoured for its FULL length: a claim taken at 10s is still
  * held at exactly 15s and is released only after it. */
 static void test_expiry_boundary_is_the_window_end(void)
@@ -367,7 +518,7 @@ static void test_expiry_boundary_is_the_window_end(void)
 	boardInit(&b, true);
 	jh = push(&b, 5);
 	boardExpire(&b, 10.0f);
-	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+	TEST_ASSERT_TRUE(take(&b, jh, 7));
 	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 15.0f));
 	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
 	TEST_ASSERT_EQUAL_INT(1, boardExpire(&b, 15.0f + 0.05f));
@@ -477,7 +628,7 @@ static void test_best_for_skips_another_agents_claim(void)
 	boardExpire(&b, 1.0f);
 
 	/* Somebody else holds the best job: it is not a candidate. */
-	TEST_ASSERT_TRUE(boardClaim(&b, 0, 3));
+	TEST_ASSERT_TRUE(take(&b, 0, 3));
 	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, NULL, 8));
 	/* The holder may still see it (it is its own best candidate). */
 	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 3));
@@ -580,6 +731,10 @@ void run_test_board(void)
 	RUN_TEST(test_claim_guards);
 	RUN_TEST(test_expiry_releases_a_lapsed_reservation);
 	RUN_TEST(test_expiry_counts_every_lapsed_claim);
+	RUN_TEST(test_expiry_frees_a_claim_that_never_started);
+	RUN_TEST(test_expiry_never_frees_a_running_job);
+	RUN_TEST(test_release_is_how_a_running_job_frees_its_claim);
+	RUN_TEST(test_a_long_running_job_is_never_stolen);
 	RUN_TEST(test_expiry_boundary_is_the_window_end);
 	RUN_TEST(test_release_makes_a_claim_able_again);
 	RUN_TEST(test_best_for_takes_the_highest_band);

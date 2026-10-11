@@ -884,7 +884,7 @@ static int runTicks(TickWorld *w, int ticks, float dt)
 	for (i = 0; i < ticks; i++) {
 		int decisions = 0;
 
-		total += agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, dt,
+		total += agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, dt,
 				      &decisions);
 		entitiesUpdate(&w->ents, dt);
 	}
@@ -904,7 +904,8 @@ static void test_update_engages_the_best_job(void)
 	pushWander(&w->a->personal, 9, 1, 7, 0.4f);
 
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
-	agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, 0.1f, &decisions);
+	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
+			 &decisions);
 
 	TEST_ASSERT_EQUAL_INT(1, decisions);
 	TEST_ASSERT_EQUAL_INT(1, w->a->engagedJob);
@@ -1167,7 +1168,9 @@ static void test_update_is_not_arrived_on_a_queued_step(void)
 }
 
 /* A job another agent holds is not a candidate, and a claim lost in the race
- * is not a decision. */
+ * is not a decision. The staffer's own tick is the race case: it still sees
+ * the job it holds as its own best candidate and is refused, because START is
+ * not a re-claim. */
 static void test_update_ignores_a_job_another_agent_holds(void)
 {
 	TickWorld *w = &g_world;
@@ -1178,20 +1181,27 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	pushWander(&w->boards.shared, 5, 1, 12, 0.4f);
 	boardExpire(&w->boards.shared, 1.0f);
 
-	/* Somebody else takes it first. */
+	/* Somebody else takes it first, and the reservation is the kind the
+	 * window is FOR: claimed, STARTed, and left sitting in JOB_CLAIMED
+	 * ("reserved, not yet walking"). */
 	other = agentGet(&w->reg, agentCreate(&w->reg, ROLE_STAFF));
 	TEST_ASSERT_NOT_NULL(other);
 	TEST_ASSERT_TRUE(boardClaim(&w->boards.shared, 0, other->id));
+	jobStep(&w->boards.shared.slots[0], JOB_START);
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, w->boards.shared.slots[0].state);
 
 	/* Our critter sees an empty candidate set and does nothing. */
-	agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, 0.1f, &decisions);
+	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
+			 &decisions);
 	TEST_ASSERT_EQUAL_INT(0, decisions);
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
 
 	/* Once the reservation lapses, the job is available again and the
 	 * same tick takes it. */
 	boardExpire(&w->boards.shared, 1.0f + BOARD_RESERVE_SECS + 0.5f);
-	agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, 0.1f, &decisions);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->boards.shared.slots[0].claimer);
+	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
+			 &decisions);
 	TEST_ASSERT_EQUAL_INT(1, decisions);
 	TEST_ASSERT_EQUAL_INT(0, w->a->engagedJob);
 	TEST_ASSERT_TRUE(w->a->engagedShared);
@@ -1222,7 +1232,8 @@ static void test_update_compares_bands_across_boards(void)
 
 	/* The first critter's own job is the weakest of the three, so the
 	 * urgent shared job is what it takes. */
-	agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, 0.1f, &decisions);
+	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
+			 &decisions);
 	TEST_ASSERT_EQUAL_INT(1, decisions);
 	TEST_ASSERT_EQUAL_INT(1, w->a->engagedJob);	/* shared slot 1 */
 	TEST_ASSERT_TRUE(w->a->engagedShared);
@@ -1235,7 +1246,8 @@ static void test_update_compares_bands_across_boards(void)
 	second->entity = makeBody(&w->ents, w->map, 1, 1);
 	pushWander(&second->personal, 3, 3, 12, 0.4f);
 	decisions = 0;
-	agentsUpdate(&w->reg, &w->boards, &w->ents, w->map, 0.1f, &decisions);
+	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
+			 &decisions);
 	/* The first critter holds its urgent job through its dwell (its
 	 * only challenger is the weaker band 6), so the one decision this
 	 * tick is the second critter taking its own job. */
@@ -1284,7 +1296,7 @@ static void test_update_releases_a_vanished_board(void)
 
 	/* The next tick is handed no boards at all — the slot the agent was
 	 * holding is unreachable, so the agent lets go of it. */
-	agentsUpdate(&w->reg, NULL, &w->ents, w->map, 0.1f, NULL);
+	agentsUpdate(&w->reg, &w->ents, NULL, w->map, 0.1f, NULL);
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->engagedJob);
 	TEST_ASSERT_FALSE(a->engagedShared);
 	worldFree(w);
@@ -1296,7 +1308,7 @@ static void test_update_guards_and_clamping(void)
 	AgentStats s;
 
 	/* NULL registry: a no-op that reports no decisions. */
-	TEST_ASSERT_EQUAL_INT(0, agentsUpdate(NULL, &w->boards, &w->ents,
+	TEST_ASSERT_EQUAL_INT(0, agentsUpdate(NULL, &w->ents, &w->boards,
 					      w->map, 0.1f, NULL));
 
 	worldInit(w, 1, 1);

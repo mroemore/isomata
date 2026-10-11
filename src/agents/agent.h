@@ -229,20 +229,26 @@ int agentShouldSwitch(const Agent *a, int engagedBand, int challengerBand,
  *      activity step runs, and `duration` is spent as a timed WAIT before
  *      the job completes.
  *
- * `ents` is the shared entity registry the bodies live in (NULL = agents
- * with no reachable body are denied any move, never crashed into); `boards`
- * carries the one board agents share (NULL = personal boards only);
+ * `ents` is the shared entity registry the bodies live in, and it is the one
+ * parameter the tick cannot do without: `Agent.entity` is an EntityHandle, the
+ * registry that owns it belongs to the world (the level's SimWorld), and
+ * entityPathTo needs the Entity* — so the registry is passed in rather than
+ * guessed at. NULL means no body is reachable, and a movement job is then
+ * DENIED rather than crashed into. `boards` carries the one board agents share
+ * (NULL = personal boards only);
  * `outDecisions`, when given, accumulates the number of switches taken.
  * Returns this tick's switch count as well, so a caller that does not want
  * the running total still gets the delta. `dt` is clamped to AGENT_MAX_DT,
  * NaN-safe, exactly as agentsDecay and entitiesUpdate clamp theirs.
  *
- * The board clock is the CALLER's: sweep claims with boardExpire(b, now)
- * before calling, or reservations will never lapse (see agents/board.h).
+ * The board clock is the CALLER's: sweep with boardExpire(b, now) before
+ * calling, or a reservation nobody converted into a running job will never
+ * lapse (see agents/board.h — a running job's claim is not swept at all, so
+ * this sweep is about reservations only).
  *
  * NULL registry is a no-op returning 0. Everything else is per-agent: one
  * agent's bad row or refused move never takes the loop down. */
-int agentsUpdate(AgentRegistry *r, AgentBoards *boards, EntityRegistry *ents,
+int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 const Voxmap *map, float dt, int *outDecisions);
 
 /* Zero the counters on read, so a phase reports the delta across its own

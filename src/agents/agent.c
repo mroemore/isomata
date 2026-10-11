@@ -317,7 +317,7 @@ static void agentDropJob(Agent *a, JobBoard *b, Job *j)
 	a->engagedShared = false;
 }
 
-int agentsUpdate(AgentRegistry *r, AgentBoards *boards, EntityRegistry *ents,
+int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 const Voxmap *map, float dt, int *outDecisions)
 {
 	int decisions = 0;

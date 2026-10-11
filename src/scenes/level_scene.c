@@ -422,7 +422,9 @@ static void levelUpdateAgents(LevelState *st, float dt)
 	st->clock += dt;
 	/* The board clock is stamped before any claim, so a reservation is
 	 * measured from the tick it was taken on and a claim nobody starts
-	 * lapses instead of sitting on a job forever. */
+	 * lapses instead of sitting on a job forever. A critter's own claim
+	 * is never swept: it starts its job in the same tick, so the sweep
+	 * sees a running job and leaves it alone. */
 	boardExpire(&st->boards.shared, st->clock);
 	for (i = 0; i < st->critterCount; i++) {
 		Agent *a = agentGet(&st->agents, st->critters[i].agent);
@@ -432,7 +434,7 @@ static void levelUpdateAgents(LevelState *st, float dt)
 		before[i] = (a != NULL) ? a->engagedJob : JOB_INVALID;
 	}
 
-	agentsUpdate(&st->agents, &st->boards, &st->sim.entities, st->map, dt,
+	agentsUpdate(&st->agents, &st->sim.entities, &st->boards, st->map, dt,
 		     NULL);
 
 	/* Retire what finished, then queue the next leg: the agent has let

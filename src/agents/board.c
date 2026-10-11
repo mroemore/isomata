@@ -171,6 +171,21 @@ int boardExpire(JobBoard *b, float now)
 
 		if (!b->alive[i] || j->claimer == JOB_INVALID)
 			continue;
+		/* A RESERVATION IS NOT A LEASE. The window frees a job
+		 * nobody STARTED — the lifecycle still reads JOB_CLAIMED,
+		 * "reserved, not yet walking" — so nobody sits on a job
+		 * forever without beginning it.
+		 *
+		 * Once the job is under way (WALKING, INTERACTING, WAITING)
+		 * the claim is the OWNER's and no sweep touches it, however
+		 * long the job runs: a job may take as long as it takes, and
+		 * the exclusivity that keeps one job from being executed
+		 * twice must not expire underneath it. Such a claim ends the
+		 * way every other one does — the job reaches DONE/FAILED and
+		 * its owner releases it, or the owner releases it early
+		 * (preemption, cancel, abandon). */
+		if (j->state != JOB_CLAIMED)
+			continue;
 		/* AFTER the deadline, never at it: the claim is honoured
 		 * for its full window. */
 		if (now > j->claimExpiry) {
