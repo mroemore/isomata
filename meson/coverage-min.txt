@@ -323,13 +323,14 @@ src/agents/need.c		100
 # refuses to re-claim it (START is not a re-claim), so the tick does not
 # engage it.
 src/agents/agent.c		100
-# Task 3: the job board. Every arm is taken on the first cut (72/72
-# branches, 102/102 lines, 10/10 functions) by the exclusivity / expiry /
-# release / selection contract tests, so the floor is ratcheted to 100
-# rather than parked at the measured figure: the claim stamps, the deadline
-# boundary, the NaN clock, the lowest-slot tie-break, the sentinel-terminated
-# skip list, another agent's live claim, the terminal-state exclusion, the
-# enqueue/retire scrubs and every guard.
+# Task 3: the job board. Every arm is taken (74/74 branches, 104/104 lines,
+# 10/10 functions — 74 since fix round 1 added the reservation-vs-lease state
+# guard, which is exactly the behaviour that fix pinned), so the floor is
+# ratcheted to 100 rather than parked at the measured figure: the claim stamps,
+# the reservation/lease split, the deadline boundary, the NaN clock, the
+# lowest-slot tie-break, the sentinel-terminated skip list, another agent's
+# live claim, the terminal-state exclusion, the enqueue/retire scrubs and
+# every guard.
 src/agents/board.c		100
 # Agent framework, task 2: the job record and the table-driven per-job
 # lifecycle machine (job.c). Pure, allocation-free twin suite; every branch is

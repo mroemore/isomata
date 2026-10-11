@@ -289,13 +289,15 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 	}
 }
 
-/* Queue the critter's next leg on its personal board. The agent takes it on
- * this same tick (it is idle and this is the only job on the board), which is
- * what the old hardcoded loop did by calling demoStartLeg on every IDLE
- * frame — only now the decision goes through the ladder. The destination
- * advances when the leg is QUEUED, exactly as the old code advanced it when
- * the leg STARTED (including when A* refused the route: the next leg is the
- * one after, either way). */
+/* Queue the critter's next leg on its personal board. It is taken on the NEXT
+ * tick: this runs after agentsUpdate, so the queue lands with the frame's
+ * decisions already made — one frame per leg, the same one-frame-per-leg the
+ * activity step costs, and the same shape as the old hardcoded loop, which
+ * called demoStartLeg from an IDLE frame and therefore also started a leg on
+ * the frame after the previous one finished. The destination advances when
+ * the leg is QUEUED, exactly as the old code advanced it when the leg
+ * STARTED (including when A* refused the route: the next leg is the one
+ * after, either way). */
 static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
 {
 	Agent *a = agentGet(&st->agents, c->agent);

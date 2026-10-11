@@ -188,11 +188,19 @@ static JobBoard *agentBoardOf(Agent *a, AgentBoards *boards)
  * personal board is scanned first and WINS a band tie (it is the agent's own
  * work), so the answer is deterministic either way — provenance never
  * outranks a band (see agents/board.h). Returns NULL when there is nothing
- * to take. */
-static Job *agentBestJob(Agent *a, AgentBoards *boards, const int *skip,
+ * to take.
+ *
+ * THE TWO SKIP LISTS ARE SEPARATE ON PURPOSE. A handle is a slot index ON
+ * ITS OWN BOARD, so personal slot 0 and shared slot 0 are different jobs: the
+ * job the agent already holds may only hide the same slot of the same board,
+ * and each list says exactly that. One shared list would make an agent
+ * engaged on personal slot 0 blind to shared slot 0, which is a coupling
+ * between two boards that share nothing but a number. */
+static Job *agentBestJob(Agent *a, AgentBoards *boards,
+			 const int *personalSkip, const int *sharedSkip,
 			 int *outHandle, JobBoard **outBoard)
 {
-	int personal = boardBestFor(&a->personal, skip, a->id);
+	int personal = boardBestFor(&a->personal, personalSkip, a->id);
 	int shared = JOB_INVALID;
 	int personalBand = JOB_INVALID;
 	int sharedBand = JOB_INVALID;
@@ -200,7 +208,7 @@ static Job *agentBestJob(Agent *a, AgentBoards *boards, const int *skip,
 	*outHandle = JOB_INVALID;
 	*outBoard = &a->personal;
 	if (boards != NULL) {
-		shared = boardBestFor(&boards->shared, skip, a->id);
+		shared = boardBestFor(&boards->shared, sharedSkip, a->id);
 		sharedBand = (shared != JOB_INVALID)
 				     ? boards->shared.slots[shared].band
 				     : JOB_INVALID;
@@ -340,7 +348,8 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		Job *j;
 		int engagedBand = JOB_INVALID;
 		int challenger = JOB_INVALID;
-		int skip[2];
+		int pskip[2];
+		int sskip[2];
 		JobBoard *cb = &a->personal;
 		Job *cj;
 
@@ -351,15 +360,21 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 * again. The job itself stays on its board — retiring it is
 		 * the owner's call (boardRetire), not the tick's.
 		 *
-		 * A handle whose slot has gone (the owner retired the job)
-		 * is the same case: the work is gone, so the agent lets go
-		 * rather than holding a dead slot forever. A stale handle
-		 * must never wedge an agent. */
+		 * engagedJob ASSERTS OWNERSHIP, it is not a hint: a handle
+		 * names a SLOT, and a slot can be retired and refilled
+		 * between two ticks. Anything in that slot this agent does
+		 * not hold a claim on is therefore not its job — stepping it
+		 * would execute somebody else's work and releasing it would
+		 * clear their live claim. Gone, refilled or sold, it reads
+		 * as vanished, and a stale handle must never wedge an agent
+		 * nor cost another agent its claim. */
 		eb = agentBoardOf(a, boards);
 		j = boardJob(eb, a->engagedJob);
-		if (a->engagedJob != JOB_INVALID && j == NULL) {
+		if (a->engagedJob != JOB_INVALID &&
+		    (j == NULL || j->claimer != a->id)) {
 			a->engagedJob = JOB_INVALID;
 			a->engagedShared = false;
+			j = NULL;
 		} else if (j != NULL &&
 			   (j->state == JOB_DONE || j->state == JOB_FAILED)) {
 			boardRelease(eb, a->engagedJob);
@@ -381,9 +396,11 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 * consulted once there is a candidate to move to. Note that
 		 * "no decision" is NOT "do nothing": the job it already
 		 * holds still advances below, decision or not. */
-		skip[0] = a->engagedJob;
-		skip[1] = JOB_INVALID;
-		cj = agentBestJob(a, boards, skip, &challenger, &cb);
+		pskip[0] = a->engagedShared ? JOB_INVALID : a->engagedJob;
+		pskip[1] = JOB_INVALID;
+		sskip[0] = a->engagedShared ? a->engagedJob : JOB_INVALID;
+		sskip[1] = JOB_INVALID;
+		cj = agentBestJob(a, boards, pskip, sskip, &challenger, &cb);
 		if (cj != NULL) {
 			engagedBand = (j != NULL) ? j->band : JOB_INVALID;
 			/* The claim is the race: a job another agent took

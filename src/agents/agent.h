@@ -129,7 +129,15 @@ typedef struct Agent {
 	/* The job this agent is running and the board it lives on:
 	 * engagedJob is a slot index into `personal`, or into
 	 * `boards->shared` when engagedShared is set (a handle alone cannot
-	 * say which of two boards it names). JOB_INVALID when idle. */
+	 * say which of two boards it names). JOB_INVALID when idle.
+	 *
+	 * IT ASSERTS OWNERSHIP, IT IS NOT A HINT. A handle names a SLOT,
+	 * and slots are reused: a job can be retired and refilled between
+	 * two ticks, so the job in that slot may no longer be this agent's.
+	 * agentsUpdate therefore treats anything the slot holds that this
+	 * agent has no claim on as VANISHED — dropping the handle rather
+	 * than adopting the new job, which would execute somebody else's
+	 * work and then release their claim on it. */
 	int engagedJob;
 	bool engagedShared;
 	/* Staying power: seconds left before a challenger may preempt

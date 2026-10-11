@@ -597,8 +597,10 @@ static void test_best_for_honours_the_skip_list(void)
 	 * is already handling (the engaged job), never a count. */
 	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, skip, 1));
 	{
-		/* Skipping the best leaves the second best. */
-		static const int onlyFirst[] = { 0 };
+		/* Skipping the best leaves the second best. The list is
+		 * SENTINEL-TERMINATED, so the terminator is part of the
+		 * test data: without it boardBestFor reads past the end. */
+		static const int onlyFirst[] = { 0, JOB_INVALID };
 		TEST_ASSERT_EQUAL_INT(2, boardBestFor(&b, onlyFirst, 1));
 	}
 	{

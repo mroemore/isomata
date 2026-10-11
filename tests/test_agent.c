@@ -1215,6 +1215,150 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	worldFree(w);
 }
 
+/* TWO BOARDS, TWO NAMESPACEES. A handle is a slot index ON ITS BOARD, so the
+ * job an agent already holds must only ever hide the SAME slot of the SAME
+ * board. Personal slot 0 and shared slot 0 are different jobs, and an agent
+ * engaged on one must still see the other. */
+static void test_update_sees_the_other_board_behind_its_slot_number(void)
+{
+	TickWorld *w = &g_world;
+	Agent *a;
+
+	worldInit(w, 1, 1);
+	boardExpire(&w->boards.shared, 1.0f);
+	a = w->a;
+	/* The agent's own work is personal slot 0 ... */
+	pushWander(&a->personal, 3, 1, 3, 4.0f);
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_FALSE(a->engagedShared);
+
+	/* ... and the urgent work is shared slot 0 — the same NUMBER. It is
+	 * band 9 against the incumbent's 3, so it clears the margin, and
+	 * shared slot 1 (band 1) is left alone. 20 ticks: the AGENT_MIN_DWELL
+	 * (1.5s) has to expire before ANY preemption, on either board. */
+	pushWander(&w->boards.shared, 6, 5, 9, 4.0f);
+	pushWander(&w->boards.shared, 7, 5, 1, 4.0f);
+	runTicks(w, 20, 0.1f);
+	TEST_ASSERT_TRUE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);	/* shared slot 0 */
+	TEST_ASSERT_EQUAL_INT(a->id, w->boards.shared.slots[0].claimer);
+	/* The displaced personal job was released, not claimed by anyone. */
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, a->personal.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->personal.slots[0].claimer);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->boards.shared.slots[1].claimer);
+}
+
+/* The mirror image: engaged on SHARED slot 0, the agent must still see
+ * personal slot 0, and a personal job that clears the margin preempts. */
+static void test_update_sees_the_personal_board_behind_its_slot_number(void)
+{
+	TickWorld *w = &g_world;
+	Agent *a;
+
+	worldInit(w, 1, 1);
+	boardExpire(&w->boards.shared, 1.0f);
+	a = w->a;
+	pushWander(&w->boards.shared, 6, 5, 3, 4.0f);
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_TRUE(a->engagedShared);
+
+	/* Personal slot 0 — the same NUMBER again — at band 11, which clears
+	 * the margin once the dwell has run out. */
+	pushWander(&a->personal, 3, 1, 11, 4.0f);
+	runTicks(w, 20, 0.1f);
+	TEST_ASSERT_FALSE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(a->id, a->personal.slots[0].claimer);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, w->boards.shared.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->boards.shared.slots[0].claimer);
+}
+
+/* The margin is the margin ACROSS boards: a shared challenger one band short
+ * of it never moves a personal incumbent, however long the dwell has run
+ * out. (The anti-oscillation property does not stop at the board boundary.) */
+static void test_update_holds_the_margin_across_boards(void)
+{
+	TickWorld *w = &g_world;
+	Agent *a;
+	int i;
+
+	worldInit(w, 1, 1);
+	boardExpire(&w->boards.shared, 1.0f);
+	a = w->a;
+	pushWander(&a->personal, 3, 1, 9, 4.0f);
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	/* One band better, on the other board: not a reason to move. */
+	pushWander(&w->boards.shared, 6, 5, 10, 4.0f);
+
+	/* Well past AGENT_MIN_DWELL, so the dwell is not what holds it. */
+	for (i = 0; i < 40; i++) {
+		runTicks(w, 1, 0.1f);
+		TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+		TEST_ASSERT_FALSE(a->engagedShared);
+	}
+	/* One more band and it moves: the rule reads the band, not the board
+	 * the two jobs happen to sit on. */
+	boardRetire(&w->boards.shared, 0);
+	pushWander(&w->boards.shared, 7, 5, 11, 4.0f);
+	runTicks(w, 2, 0.1f);
+	TEST_ASSERT_TRUE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+}
+
+/* Finding 2: a handle names a SLOT, not a job. An agent may only hold work
+ * it owns, so a slot retired and refilled under it is not its job any more —
+ * stepping it would be executing somebody else's claim, and releasing it
+ * would clear their live claim. */
+static void test_update_drops_a_slot_it_no_longer_owns(void)
+{
+	TickWorld *w = &g_world;
+	Agent *thief;
+	Job *stolen;
+	float expiry;
+
+	worldInit(w, 1, 1);
+	thief = agentGet(&w->reg, agentCreate(&w->reg, ROLE_STAFF));
+	TEST_ASSERT_NOT_NULL(thief);
+	pushWander(&w->a->personal, 3, 1, 5, 4.0f);
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, w->a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(w->a->id, w->a->personal.slots[0].claimer);
+
+	/* The slot is retired under the holder and refilled with work the
+	 * thief has claimed AND started: it is parked on a timed phase. */
+	TEST_ASSERT_TRUE(boardRetire(&w->a->personal, 0));
+	pushWander(&w->a->personal, 9, 1, 12, 4.0f);
+	TEST_ASSERT_TRUE(boardClaim(&w->a->personal, 0, thief->id));
+	jobStep(&w->a->personal.slots[0], JOB_START);
+	jobStep(&w->a->personal.slots[0], JOB_ARRIVED);	/* -> WALKING */
+	jobStep(&w->a->personal.slots[0], JOB_ARRIVED);	/* -> INTERACTING */
+	jobStep(&w->a->personal.slots[0], JOB_PHASE_DONE);	/* -> WAITING */
+	w->a->personal.slots[0].timer = 4.0f;
+	expiry = w->a->personal.slots[0].claimExpiry;
+
+	/* Our agent is holding slot 0 and the slot is not its job. */
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
+	TEST_ASSERT_FALSE(w->a->engagedShared);
+
+	/* It did not execute the thief's work ... */
+	stolen = boardJob(&w->a->personal, 0);
+	TEST_ASSERT_NOT_NULL(stolen);
+	TEST_ASSERT_EQUAL_INT(JOB_WAITING, stolen->state);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 4.0f, stolen->timer);
+	/* ... and it did not release the thief's claim. */
+	TEST_ASSERT_EQUAL_INT(thief->id, stolen->claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, expiry, stolen->claimExpiry);
+	/* Which survives the whole timed phase the thief is parked on. */
+	runTicks(w, 30, 0.1f);
+	stolen = boardJob(&w->a->personal, 0);
+	TEST_ASSERT_EQUAL_INT(thief->id, stolen->claimer);
+	TEST_ASSERT_EQUAL_INT(JOB_WAITING, stolen->state);
+}
+
 /* Both boards are scanned and the BANDS decide, never the board a job
  * happens to sit on: a shared job beats a weaker personal one, and a
  * stronger personal one beats a shared one. */
@@ -1285,9 +1429,10 @@ static void test_update_denies_when_the_body_is_gone(void)
 static void test_update_releases_a_vanished_board(void)
 {
 	TickWorld *w = &g_world;
-	Agent *a = w->a;
+	Agent *a;
 
 	worldInit(w, 1, 1);
+	a = w->a;	/* read AFTER worldInit: g_world is reused per test */
 	boardExpire(&w->boards.shared, 1.0f);
 	pushWander(&w->boards.shared, 5, 5, 6, 4.0f);
 	runTicks(w, 1, 0.1f);
@@ -1412,6 +1557,10 @@ void run_test_agent(void)
 	RUN_TEST(test_update_denies_a_void_tile);
 	RUN_TEST(test_update_is_not_arrived_on_a_queued_step);
 	RUN_TEST(test_update_ignores_a_job_another_agent_holds);
+	RUN_TEST(test_update_sees_the_other_board_behind_its_slot_number);
+	RUN_TEST(test_update_sees_the_personal_board_behind_its_slot_number);
+	RUN_TEST(test_update_holds_the_margin_across_boards);
+	RUN_TEST(test_update_drops_a_slot_it_no_longer_owns);
 	RUN_TEST(test_update_compares_bands_across_boards);
 	RUN_TEST(test_update_denies_when_the_body_is_gone);
 	RUN_TEST(test_update_releases_a_vanished_board);
