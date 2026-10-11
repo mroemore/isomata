@@ -238,6 +238,13 @@ Per your instruction, the current demo critters keep their patrol loops as a
 "wander to a spot" *activity* (nothing thrown away), gaining needs and fill
 activities so they become the testbed before customers move over.
 
+**The observability work ships inside these phases** while the framework is
+fresh — it is the cheap part and it pays for itself immediately:
+phase 1 adds the per-agent needs overlay (bands + panic) and the perf counter;
+phase 2 adds the why-this-job log and the board view; phase 3 adds the
+band-tint overlay. Each phase reports its measured perf numbers (agent
+decisions/s, A\* invocations/s) so the 60fps target is evidenced, not assumed.
+
 ## Migration
 
 `src/sim/brain.c`'s `BrainPhase` switch and the parallel executor FSM both
@@ -245,6 +252,72 @@ dissolve into "jobs on a board". The customer's current hardcoded flow becomes
 an errand template; the machines model is reused as-is (a claimed machine *is*
 a claimed thing). The laundromat keeps working throughout — no phase may leave
 the running game without a working demo.
+
+## Performance
+
+The per-agent math is tiny (needs decay over a handful of floats, one band
+recompute, one integer comparison), so **the framework is not the perf risk —
+the renderer is**. The design keeps the hot path cheap by construction:
+
+- **Fixed capacity, flat arrays, no allocation in the tick** — the existing
+  pattern (`Agent slots[AGENT_MAX]`) extends directly; allocation in the hot
+  path is what we forbid.
+- **Decision points, not per-tick rescoring** — an agent only *decides* when
+  idle or when a challenger appears; otherwise it executes. Needs still decay
+  per tick, but that's a tight contiguous float loop.
+- **Dirty-flagged band recompute** — a job's band is recomputed only when a
+  need it serves crosses a band boundary that tick, making the common case
+  near-zero.
+- **One shared board for staff**, so N staff scan one board in one claim pass,
+  not N boards each.
+- **A\* remains the only expensive call**, already bounded (fixed node store,
+  TOO_LONG cap) and only invoked when an agent picks a new target — which the
+  dwell + preemption margin reduce by design (fewer redundant re-paths).
+- **Instrumentation, not guesswork** — a build-timed counter of agent decisions
+  and A\* invocations per second, added in phase 1, so any future frame-budget
+  concern has a number instead of a hunch.
+
+Target: real-time (60fps) for several hundred agents on the low-end Android
+target we already build for. This is **measured and reported, not a hard
+ratchet gate** — if a measured run falls short, we say so with numbers rather
+than blocking the build.
+
+## Developer usability (extension experience)
+
+The whole bet is that **adding behaviour is data**, so authoring is a feature:
+
+- **One registry table per category** (activities, errand templates, needs,
+  roles, skills), each a plain C table of named rows with a comment per row.
+  Adding "PLAY_PINBALL" is one row plus (if it needs art) a texture line.
+- **A uniform activity row** — id, name, needs-served + rate, location flag
+  (or in-place), duration, cooldown, competency gate. A fixed shape means new
+  activities are copy-and-edit and the compiler catches mistakes.
+- **Intent-revealing names** so the tables read like the design:
+  `ACT_PLAY_ARCADE`, `ERR_LAUNDRY_GET_CLOTHES_CLEAN`, `NEED_ENERGY`.
+- **The `legend.txt` discipline carries over** — this codebase already proved a
+  text/table manifest beats code for authoring.
+- **Unknown activity/template id is a hard error with a diagnostic** (like the
+  palette bug the review caught), never a silent no-op.
+
+## Observability
+
+The existing light-debug overlay and path overlay are the foundation; we grow
+them so the emergent behaviour is *watchable*, which is what a tycoon game
+needs:
+
+- **Per-agent needs readout** — each need's bar with its band, panic
+  highlighted; plus engaged job + band, errand + step, claim, competencies.
+  Selectable later for the UI; exposed now via the overlay.
+- **Why-this-job log** — when an agent picks or switches, log the two bands and
+  the margin that decided it. The single highest-value artifact: it turns "why
+  did that guy walk over there" from archaeology into a log line.
+- **Board view** — jobs by band, claimers, expiries; contention visible at a
+  glance.
+- **Band/tier tint overlay** — optional colour tinting agents by top urgency, so
+  a crowd going panicky is visible as colour.
+- **Honest logging discipline** — logs and reports state what was *observed*,
+  not what was intended; screenshot claims describe legibility honestly (a
+  lesson from the T23 review).
 
 ## Testing
 
@@ -256,6 +329,12 @@ world with a fixed dt and asserts the emergent story (agents adopt errands,
 block, fill time, pre-empt, and leave) is *replayable* — same input, same
 output — rather than asserting a specific interleaving, which would be
 brittle. Floors and the existing suite must stay green throughout.
+
+**Property-style checks** where cheap — the invariants that catch emergent bugs
+a fixed-assertion test misses: no agent oscillates (the engaged job's band is
+monotone non-decreasing within a dwell), no job is double-claimed, every claim
+is eventually released, no agent starves (every agent's needs stay above 0 for
+bounded stretches).
 
 ## Open / deferred
 
