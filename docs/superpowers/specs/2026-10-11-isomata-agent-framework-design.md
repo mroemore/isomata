@@ -231,8 +231,12 @@ the constant consumer and every general mechanism is exercised by it.
    customer's hardcoded flow becomes a template-driven errand.
 5. **Shared board + staff** — claims, time limits, competencies, a repairer;
    world-seeded errand for a machine fault.
-6. **Satisfaction → business** — satisfaction want, abandon-on-threshold,
-   money/reputation at exit.
+6. **Satisfaction → business** — the departure ledger: revenue, reputation,
+   return-visit memory, defection. *(The satisfaction need itself and the
+   abandon-on-threshold rule land with the customer migration in phase 4,
+   because a customer errand without an abandon path can hang forever — the
+   phase must be independently demonstrable. Phase 6 is the money and
+   reputation half of the same loop.)*
 
 Per your instruction, the current demo critters keep their patrol loops as a
 "wander to a spot" *activity* (nothing thrown away), gaining needs and fill
