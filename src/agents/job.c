@@ -155,6 +155,27 @@ void jobSetTarget(Job *j, int kind, int id)
 	j->targetId = id;
 }
 
+bool jobTargetTile(const Job *j, int dim, int *outX, int *outZ)
+{
+	int x;
+	int z;
+
+	if (j == NULL || outX == NULL || outZ == NULL)
+		return false;
+	/* Only a place resolves to a tile. An in-place activity has no
+	 * target, and an unknown kind is a data error the caller must hear
+	 * about — never a walk to tile (0,0). */
+	if (j->targetKind != JOB_TARGET_TILE || j->targetId < 0)
+		return false;
+	x = j->targetId % JOB_TILE_SPAN;
+	z = j->targetId / JOB_TILE_SPAN;
+	if (dim > 0 && (x >= dim || z >= dim))
+		return false;
+	*outX = x;
+	*outZ = z;
+	return true;
+}
+
 JobResult jobStep(Job *j, int event)
 {
 	int state;
@@ -175,6 +196,34 @@ JobResult jobStep(Job *j, int event)
 	action = JOB_TABLE[state][event][1];
 	j->state = JOB_TABLE[state][event][0];
 	return makeResult(j->state, action);
+}
+
+const char *jobKindName(int kind)
+{
+	switch (kind) {
+	case JOB_WANDER:
+		return "WANDER";
+	case JOB_USE_MACHINE:
+		return "USE_MACHINE";
+	case JOB_PAY:
+		return "PAY";
+	case JOB_LOAD:
+		return "LOAD";
+	case JOB_COLLECT:
+		return "COLLECT";
+	case JOB_TALK:
+		return "TALK";
+	case JOB_PLAY_ARCADE:
+		return "PLAY_ARCADE";
+	case JOB_NAP:
+		return "NAP";
+	case JOB_REPAIR:
+		return "REPAIR";
+	case JOB_LEAVE:
+		return "LEAVE";
+	default:
+		return "?";
+	}
 }
 
 const char *jobStateName(int state)

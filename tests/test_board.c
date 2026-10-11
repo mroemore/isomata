@@ -1,0 +1,592 @@
+/*
+ * Job boards: where jobs wait, and the exclusive expiring claim (CTOL rung 1:
+ * unit + boundary).
+ *
+ * Covers: boardInit's reset (and the shared flag); boardEnqueue (lowest free
+ * slot, the by-value copy, the board-owned claim fields scrubbed on entry,
+ * the JOB_INVALID refusals for a NULL / over-priority / full board — a bounded
+ * drop, never an overflow); boardRetire (the reclaim path for a finished job,
+ * slot scrubbing, reuse, guards); the claim rules that are the framework's
+ * exclusivity guarantee (first claim wins, a second agent is refused, the
+ * stamp is exactly now + BOARD_RESERVE_SECS, guards); boardExpire (the
+ * reservation lapses and nobody sits on a job forever, the count, an unexpired
+ * claim survives); boardRelease (cancel releases the claim, the job stays
+ * enqueued and is claimable again); boardBestFor (highest band, LOWEST SLOT
+ * on a tie, the skip list, dead slots, another agent's live claim, a lapsed
+ * claim, terminal jobs, empty boards, guards); and run-to-run determinism.
+ *
+ * The size pin matters here: with the personal board embedded by value in
+ * Agent (agents/agent.h), Job is multiplied by BOARD_MAX and again by
+ * AGENT_MAX, so a field added back to Job is a multi-megabyte regression that
+ * no behavioural assertion would notice.
+ *
+ * Pure: links board.c + job.c + the Unity subset. Harness convention: no
+ * main()/setUp()/tearDown(); exposes run_test_board().
+ */
+
+#include "unity.h"
+
+#include "agents/board.h"
+
+#include <string.h>
+
+/* A job as a producer hands it to a board: a kind, a hand-set band (Task 4
+ * computes it from the needs a job serves), and nothing else. */
+static Job makeJob(int kind, int band)
+{
+	Job j;
+
+	jobInit(&j, kind);
+	j.band = band;
+	return j;
+}
+
+/* Enqueue `band` on a fresh board and return the handle. */
+static int push(JobBoard *b, int band)
+{
+	Job j = makeJob(JOB_WANDER, band);
+
+	return boardEnqueue(b, &j, JOB_PRIO_FILL);
+}
+
+/* ---- init and record size ----------------------------------------------- */
+
+static void test_board_init_resets(void)
+{
+	JobBoard b;
+	int i;
+
+	boardInit(&b, true);
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+	TEST_ASSERT_TRUE(b.shared);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.now);
+	for (i = 0; i < BOARD_MAX; i++)
+		TEST_ASSERT_FALSE(b.alive[i]);
+
+	boardInit(&b, false);
+	TEST_ASSERT_FALSE(b.shared);
+
+	/* Re-init empties the board, so a fresh run is byte-identical. */
+	push(&b, 3);
+	TEST_ASSERT_EQUAL_INT(1, b.liveCount);
+	boardInit(&b, false);
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+
+	boardInit(NULL, false);
+}
+
+static void test_job_and_board_sizes_are_pinned(void)
+{
+	/* Task 2's deferred pin, taken here because Task 3 is what makes it
+	 * load-bearing: the personal board is embedded in Agent by value, so
+	 * sizeof(Job) x BOARD_MAX x AGENT_MAX is static memory. A re-added
+	 * path array would pass every behavioural test and cost megabytes. */
+	TEST_ASSERT_EQUAL_INT(60, sizeof(Job));
+	/* One board, bounded and modest. The AGENT_MAX multiply is pinned in
+	 * the agent suite, which is where Agent lives. */
+	TEST_ASSERT_TRUE(sizeof(JobBoard) < 8192);
+}
+
+/* ---- enqueue ------------------------------------------------------------ */
+
+static void test_enqueue_lands_on_the_lowest_free_slot(void)
+{
+	JobBoard b;
+	Job *stored;
+
+	boardInit(&b, false);
+	TEST_ASSERT_EQUAL_INT(0, push(&b, 1));
+	TEST_ASSERT_EQUAL_INT(1, push(&b, 1));
+	TEST_ASSERT_EQUAL_INT(2, b.liveCount);
+
+	/* Retire the middle slot: the next enqueue takes it back, not the
+	 * end — the scan is lowest-first, so handles stay dense and the
+	 * tie-break in boardBestFor stays meaningful. */
+	TEST_ASSERT_TRUE(boardRetire(&b, 0));
+	TEST_ASSERT_EQUAL_INT(0, push(&b, 1));
+	TEST_ASSERT_EQUAL_INT(2, b.liveCount);
+
+	/* The job is stored BY VALUE, verbatim, except for the fields the
+	 * board owns. */
+	{
+		Job j = makeJob(JOB_USE_MACHINE, 7);
+
+		TEST_ASSERT_EQUAL_INT(2, boardEnqueue(&b, &j, JOB_PRIO_ASSIGNED));
+	}
+	stored = boardJob(&b, 2);
+	TEST_ASSERT_NOT_NULL(stored);
+	TEST_ASSERT_EQUAL_INT(JOB_USE_MACHINE, stored->kind);
+	TEST_ASSERT_EQUAL_INT(7, stored->band);
+	TEST_ASSERT_EQUAL_INT(JOB_UNCLAIMED, stored->state);
+	/* The board owns the claim: an enqueued job is nobody's, whatever
+	 * the producer's record happened to carry. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, stored->claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, stored->claimExpiry);
+}
+
+static void test_enqueue_scrubs_a_reused_slot(void)
+{
+	JobBoard b;
+	Job stale = makeJob(JOB_WANDER, 5);
+	int h;
+
+	boardInit(&b, false);
+	h = boardEnqueue(&b, &stale, JOB_PRIO_FILL);
+	TEST_ASSERT_EQUAL_INT(0, h);
+	/* Claim it, then retire it with the claim still stamped. */
+	TEST_ASSERT_TRUE(boardClaim(&b, h, 4));
+	TEST_ASSERT_EQUAL_INT(4, b.slots[h].claimer);
+	TEST_ASSERT_TRUE(boardRetire(&b, h));
+
+	/* The reused slot must not show the previous occupant's claim. */
+	stale.kind = JOB_NAP;
+	boardEnqueue(&b, &stale, JOB_PRIO_FILL);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[0].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.slots[0].claimExpiry);
+	TEST_ASSERT_EQUAL_INT(JOB_NAP, b.slots[0].kind);
+
+	/* The scrub is the BOARD's, and it happens on every enqueue: a
+	 * producer handing over a record it already stamped (a revived job, a
+	 * reused template) does not get to smuggle its claim in with it. */
+	stale.kind = JOB_REPAIR;
+	stale.claimer = 9;
+	stale.claimExpiry = 99.0f;
+	h = boardEnqueue(&b, &stale, JOB_PRIO_ASSIGNED);
+	TEST_ASSERT_EQUAL_INT(1, h);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[1].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.slots[1].claimExpiry);
+	TEST_ASSERT_EQUAL_INT(JOB_REPAIR, b.slots[1].kind);
+}
+
+static void test_enqueue_full_board_is_a_bounded_drop(void)
+{
+	JobBoard b;
+	int i;
+
+	boardInit(&b, true);
+	for (i = 0; i < BOARD_MAX; i++)
+		TEST_ASSERT_TRUE(push(&b, i % 4) != JOB_INVALID);
+	TEST_ASSERT_EQUAL_INT(BOARD_MAX, b.liveCount);
+
+	/* One past capacity: refused, not written past the end. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, push(&b, 1));
+	TEST_ASSERT_EQUAL_INT(BOARD_MAX, b.liveCount);
+
+	/* The board is still usable: a retire frees exactly one slot. */
+	TEST_ASSERT_TRUE(boardRetire(&b, 3));
+	TEST_ASSERT_EQUAL_INT(BOARD_MAX - 1, b.liveCount);
+	TEST_ASSERT_TRUE(push(&b, 1) != JOB_INVALID);
+	TEST_ASSERT_EQUAL_INT(BOARD_MAX, b.liveCount);
+}
+
+static void test_enqueue_guards(void)
+{
+	JobBoard b;
+	Job j = makeJob(JOB_WANDER, 1);
+
+	boardInit(&b, false);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardEnqueue(NULL, &j, JOB_PRIO_FILL));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardEnqueue(&b, NULL, JOB_PRIO_FILL));
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+
+	/* A priority class outside the enum is a data error, not a default:
+	 * provenance decides who may claim, and an unknown class says
+	 * nothing about that. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID,
+			      boardEnqueue(&b, &j, JOB_PRIO_COUNT));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardEnqueue(&b, &j, -1));
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+
+	/* Every defined class is accepted: provenance never orders. */
+	TEST_ASSERT_TRUE(boardEnqueue(&b, &j, JOB_PRIO_ERRAND) != JOB_INVALID);
+	TEST_ASSERT_TRUE(boardEnqueue(&b, &j, JOB_PRIO_ASSIGNED) !=
+			 JOB_INVALID);
+	TEST_ASSERT_TRUE(boardEnqueue(&b, &j, JOB_PRIO_FILL) != JOB_INVALID);
+}
+
+/* ---- retire ------------------------------------------------------------- */
+
+static void test_retire_guards(void)
+{
+	JobBoard b;
+	int h;
+
+	boardInit(&b, false);
+	h = push(&b, 4);
+
+	TEST_ASSERT_FALSE(boardRetire(NULL, h));
+	TEST_ASSERT_FALSE(boardRetire(&b, JOB_INVALID));
+	TEST_ASSERT_FALSE(boardRetire(&b, -2));
+	TEST_ASSERT_FALSE(boardRetire(&b, BOARD_MAX));
+	TEST_ASSERT_FALSE(boardRetire(&b, 7));	/* never enqueued */
+	TEST_ASSERT_EQUAL_INT(1, b.liveCount);
+
+	TEST_ASSERT_TRUE(boardRetire(&b, h));
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+	TEST_ASSERT_FALSE(b.alive[h]);
+	/* Scrubbed, not merely unmarked: a dead slot cannot leak the
+	 * previous occupant's claim to a reader that ignores alive[]. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[h].claimer);
+	TEST_ASSERT_EQUAL_INT(JOB_UNCLAIMED, b.slots[h].state);
+	/* A retired slot is dead, not merely unmarked. */
+	TEST_ASSERT_NULL(boardJob(&b, h));
+	/* Twice is a no-op, not a double decrement. */
+	TEST_ASSERT_FALSE(boardRetire(&b, h));
+	TEST_ASSERT_EQUAL_INT(0, b.liveCount);
+}
+
+static void test_board_job_guards(void)
+{
+	JobBoard b;
+
+	boardInit(&b, false);
+	TEST_ASSERT_NULL(boardJob(NULL, 0));
+	TEST_ASSERT_NULL(boardJob(&b, JOB_INVALID));
+	TEST_ASSERT_NULL(boardJob(&b, BOARD_MAX));
+	TEST_ASSERT_NULL(boardJob(&b, 0));	/* live slot index, no job */
+}
+
+/* ---- claim: the exclusivity guarantee ----------------------------------- */
+
+static void test_claim_is_exclusive(void)
+{
+	JobBoard b;
+	int jh;
+	float stamped;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 10.0f);	/* the board's clock reads 10s */
+
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+	/* THE property the whole framework leans on: a second agent cannot
+	 * take a job somebody holds, and the holder is unchanged. */
+	TEST_ASSERT_FALSE(boardClaim(&b, jh, 8));
+	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+
+	/* The reservation is exactly BOARD_RESERVE_SECS past the board's
+	 * clock — a stamp, not a renewal, so a claim cannot creep. */
+	stamped = b.slots[jh].claimExpiry;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 10.0f + BOARD_RESERVE_SECS, stamped);
+
+	/* Re-claiming is refused too: START is not a re-claim, and neither
+	 * is a second claim by the holder. */
+	TEST_ASSERT_FALSE(boardClaim(&b, jh, 7));
+	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, stamped, b.slots[jh].claimExpiry);
+}
+
+static void test_claim_guards(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+
+	TEST_ASSERT_FALSE(boardClaim(NULL, jh, 1));
+	TEST_ASSERT_FALSE(boardClaim(&b, JOB_INVALID, 1));
+	TEST_ASSERT_FALSE(boardClaim(&b, -1, 1));
+	TEST_ASSERT_FALSE(boardClaim(&b, BOARD_MAX, 1));
+	TEST_ASSERT_FALSE(boardClaim(&b, 9, 1));	/* never enqueued */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+}
+
+static void test_expiry_releases_a_lapsed_reservation(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 10.0f);
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+
+	/* Not yet: the window is still open, nothing is released. */
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 10.0f + BOARD_RESERVE_SECS));
+	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+
+	/* The window lapses: the claim goes back on the board, so nobody
+	 * sits on a job forever. */
+	TEST_ASSERT_EQUAL_INT(1,
+			      boardExpire(&b, 10.0f + BOARD_RESERVE_SECS + 0.1f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.slots[jh].claimExpiry);
+	/* ...and the job is enqueued throughout: expiry releases the claim,
+	 * it never drops the job. */
+	TEST_ASSERT_EQUAL_INT(1, b.liveCount);
+
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 8));
+	TEST_ASSERT_EQUAL_INT(8, b.slots[jh].claimer);
+
+	/* A NULL board and a NaN clock are both no-ops: a broken clock
+	 * evicts nothing, advances nothing, and never leaves the board
+	 * believing it has no claims. */
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(NULL, 1.0f));
+	{
+		float stamped = b.now;
+
+		TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 0.0f / 0.0f));
+		TEST_ASSERT_EQUAL_INT(8, b.slots[jh].claimer);
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, stamped, b.now);
+	}
+}
+
+static void test_expiry_counts_every_lapsed_claim(void)
+{
+	JobBoard b;
+	int i;
+
+	boardInit(&b, true);
+	for (i = 0; i < 5; i++)
+		push(&b, 1);
+	/* Five claims taken one second apart, so they lapse one second
+	 * apart (deadline = claim time + BOARD_RESERVE_SECS). */
+	for (i = 0; i < 5; i++) {
+		boardExpire(&b, (float)i);
+		TEST_ASSERT_TRUE(boardClaim(&b, i, i + 1));
+	}
+
+	/* The count is the number RELEASED, not the number swept. */
+	TEST_ASSERT_EQUAL_INT(2, boardExpire(&b, BOARD_RESERVE_SECS + 1.1f));
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, BOARD_RESERVE_SECS + 1.2f));
+	TEST_ASSERT_EQUAL_INT(2, boardExpire(&b, BOARD_RESERVE_SECS + 3.1f));
+	TEST_ASSERT_EQUAL_INT(1, boardExpire(&b, BOARD_RESERVE_SECS * 3.0f));
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, BOARD_RESERVE_SECS * 4.0f));
+	for (i = 0; i < 5; i++)
+		TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[i].claimer);
+}
+
+/* The window is honoured for its FULL length: a claim taken at 10s is still
+ * held at exactly 15s and is released only after it. */
+static void test_expiry_boundary_is_the_window_end(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 10.0f);
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&b, 15.0f));
+	TEST_ASSERT_EQUAL_INT(7, b.slots[jh].claimer);
+	TEST_ASSERT_EQUAL_INT(1, boardExpire(&b, 15.0f + 0.05f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+}
+
+static void test_release_makes_a_claim_able_again(void)
+{
+	JobBoard b;
+	int jh;
+
+	boardInit(&b, true);
+	jh = push(&b, 5);
+	boardExpire(&b, 2.0f);
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 7));
+
+	/* Cancel releases held resources and keeps the job: the work is
+	 * still on the board, only its owner is gone. */
+	boardRelease(&b, jh);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b.slots[jh].claimer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, b.slots[jh].claimExpiry);
+	TEST_ASSERT_EQUAL_INT(1, b.liveCount);
+	TEST_ASSERT_NOT_NULL(boardJob(&b, jh));
+	TEST_ASSERT_TRUE(boardClaim(&b, jh, 8));
+
+	/* Releasing nothing is a no-op, not a corruption. */
+	boardRelease(&b, JOB_INVALID);
+	boardRelease(&b, 5);
+	boardRelease(&b, BOARD_MAX);
+	boardRelease(NULL, jh);
+	TEST_ASSERT_EQUAL_INT(8, b.slots[jh].claimer);
+}
+
+/* ---- best-for ----------------------------------------------------------- */
+
+static void test_best_for_takes_the_highest_band(void)
+{
+	JobBoard b;
+
+	boardInit(&b, true);
+	push(&b, 3);
+	push(&b, 9);
+	push(&b, 5);
+
+	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, NULL, 1));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardBestFor(NULL, NULL, 1));
+}
+
+static void test_best_for_breaks_ties_on_the_lowest_slot(void)
+{
+	JobBoard b;
+
+	boardInit(&b, false);
+	push(&b, 7);
+	push(&b, 7);
+	push(&b, 7);
+
+	/* Deterministic, not arbitrary: the scan keeps the FIRST winner, so
+	 * a tie always reads as the lowest slot index. */
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 1));
+	TEST_ASSERT_TRUE(boardRetire(&b, 0));
+	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, NULL, 1));
+}
+
+static void test_best_for_honours_the_skip_list(void)
+{
+	JobBoard b;
+	static const int skip[] = { 0, 2, JOB_INVALID };
+
+	boardInit(&b, false);
+	push(&b, 9);
+	push(&b, 4);
+	push(&b, 7);
+
+	/* The skip list is sentinel-terminated: it names handles the caller
+	 * is already handling (the engaged job), never a count. */
+	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, skip, 1));
+	{
+		/* Skipping the best leaves the second best. */
+		static const int onlyFirst[] = { 0 };
+		TEST_ASSERT_EQUAL_INT(2, boardBestFor(&b, onlyFirst, 1));
+	}
+	{
+		/* An empty skip list is the whole board. */
+		static const int none[] = { JOB_INVALID };
+		TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, none, 1));
+	}
+	{
+		/* Out-of-range and dead handles in the list are inert: a stale
+		 * skip must never make the scan return a dead slot. */
+		static const int stale[] = { 3, -7, 999, JOB_INVALID };
+		TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, stale, 1));
+	}
+	{
+		static const int all[] = { 0, 1, 2, JOB_INVALID };
+		TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardBestFor(&b, all, 1));
+	}
+}
+
+static void test_best_for_skips_another_agents_claim(void)
+{
+	JobBoard b;
+
+	boardInit(&b, true);
+	push(&b, 9);
+	push(&b, 4);
+	boardExpire(&b, 1.0f);
+
+	/* Somebody else holds the best job: it is not a candidate. */
+	TEST_ASSERT_TRUE(boardClaim(&b, 0, 3));
+	TEST_ASSERT_EQUAL_INT(1, boardBestFor(&b, NULL, 8));
+	/* The holder may still see it (it is its own best candidate). */
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 3));
+
+	/* The reservation lapses, the sweep frees it, and the job is back on
+	 * the board for whoever is next — a claim cannot hide a job forever. */
+	boardExpire(&b, 1.0f + BOARD_RESERVE_SECS + 0.5f);
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 8));
+}
+
+static void test_best_for_ignores_dead_and_terminal_jobs(void)
+{
+	JobBoard b;
+
+	boardInit(&b, false);
+	push(&b, 2);
+	push(&b, 9);
+	push(&b, 7);
+
+	/* A DONE job is nobody's to pick: re-running one is the owner's
+	 * revive (a START on the record), never a fresh selection. Same for
+	 * a FAILED one. */
+	jobStep(&b.slots[1], JOB_START);
+	jobStep(&b.slots[1], JOB_ARRIVED);
+	jobStep(&b.slots[1], JOB_ARRIVED);
+	jobStep(&b.slots[1], JOB_PHASE_DONE);
+	jobStep(&b.slots[1], JOB_PHASE_DONE);
+	TEST_ASSERT_EQUAL_INT(JOB_DONE, b.slots[1].state);
+	TEST_ASSERT_EQUAL_INT(2, boardBestFor(&b, NULL, 1));
+
+	jobStep(&b.slots[2], JOB_DENIED);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, b.slots[2].state);
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 1));
+
+	/* Holding a job is exclusive whatever state it is in: with both live
+	 * jobs claimed by agent 5 there is nothing left for agent 6... */
+	boardExpire(&b, 0.0f);
+	TEST_ASSERT_TRUE(boardClaim(&b, 1, 5));
+	TEST_ASSERT_TRUE(boardClaim(&b, 0, 5));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardBestFor(&b, NULL, 6));
+	/* ...and releasing them does NOT bring the terminal ones back: a
+	 * DONE/FAILED job is nobody's to pick, which is why an owner retires
+	 * it (boardRetire) rather than releasing it. */
+	boardRelease(&b, 1);
+	boardRelease(&b, 0);
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 6));
+}
+
+static void test_best_for_on_an_empty_board(void)
+{
+	JobBoard b;
+
+	boardInit(&b, false);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardBestFor(&b, NULL, 1));
+	/* Emptying the board empties the answer. */
+	push(&b, 15);
+	TEST_ASSERT_EQUAL_INT(0, boardBestFor(&b, NULL, 1));
+	TEST_ASSERT_TRUE(boardRetire(&b, 0));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, boardBestFor(&b, NULL, 1));
+}
+
+/* ---- determinism -------------------------------------------------------- */
+
+static void test_board_is_deterministic(void)
+{
+	JobBoard a, b;
+	int i;
+
+	boardInit(&a, true);
+	boardInit(&b, true);
+	for (i = 0; i < 16; i++) {
+		push(&a, i % 5);
+		push(&b, i % 5);
+	}
+	boardExpire(&a, 3.0f);
+	boardExpire(&b, 3.0f);
+	boardClaim(&a, 4, 2);
+	boardClaim(&b, 4, 2);
+	boardRelease(&a, 9);
+	boardRelease(&b, 9);
+	boardRetire(&a, 1);
+	boardRetire(&b, 1);
+
+	TEST_ASSERT_EQUAL_MEMORY(&a, &b, sizeof(a));
+}
+
+void run_test_board(void);
+
+void run_test_board(void)
+{
+	RUN_TEST(test_board_init_resets);
+	RUN_TEST(test_job_and_board_sizes_are_pinned);
+	RUN_TEST(test_enqueue_lands_on_the_lowest_free_slot);
+	RUN_TEST(test_enqueue_scrubs_a_reused_slot);
+	RUN_TEST(test_enqueue_full_board_is_a_bounded_drop);
+	RUN_TEST(test_enqueue_guards);
+	RUN_TEST(test_retire_guards);
+	RUN_TEST(test_board_job_guards);
+	RUN_TEST(test_claim_is_exclusive);
+	RUN_TEST(test_claim_guards);
+	RUN_TEST(test_expiry_releases_a_lapsed_reservation);
+	RUN_TEST(test_expiry_counts_every_lapsed_claim);
+	RUN_TEST(test_expiry_boundary_is_the_window_end);
+	RUN_TEST(test_release_makes_a_claim_able_again);
+	RUN_TEST(test_best_for_takes_the_highest_band);
+	RUN_TEST(test_best_for_breaks_ties_on_the_lowest_slot);
+	RUN_TEST(test_best_for_honours_the_skip_list);
+	RUN_TEST(test_best_for_skips_another_agents_claim);
+	RUN_TEST(test_best_for_ignores_dead_and_terminal_jobs);
+	RUN_TEST(test_best_for_on_an_empty_board);
+	RUN_TEST(test_board_is_deterministic);
+}

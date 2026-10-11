@@ -28,18 +28,25 @@
  * table), so one bad row must cost that agent its decay for a tick, never
  * take the whole loop — and every other agent — down.
  *
- * NOT RESPONSIBLE FOR: deciding anything (no activities, jobs, errands or
- * boards), moving the body (the EntityHandle is a link to entities.c, and
- * this module never touches it), spawning/despawning, or persistence. It
- * stores the links the later phases will fill in — personalBoard, engagedJob,
- * dwellLeft, panicMask — and nothing else.
+ * THE TICK LIVES HERE, NOT IN THE BOARD. agentsUpdate walks the registry,
+ * asks the one question the framework allows an agent to ask each tick
+ * (agentShouldSwitch — idle, or a challenger that clears the band margin
+ * once the dwell has expired) and then executes what it decided: claim, run
+ * the lifecycle, route the body. board.c knows nothing about agents;
+ * agentShouldSwitch takes two integers and a dwell for exactly that reason.
  *
- * Pure: no SDL, no allocation, no time source. agentsDecay clamps dt to
+ * NOT RESPONSIBLE FOR: what a job IS (agents/job.h), where jobs wait and who
+ * holds them (agents/board.h — a claim is written there and nowhere else),
+ * spawning/despawning, errands (task 5), or persistence.
+ *
+ * Pure: no SDL, no allocation, no time source. agentsUpdate clamps dt to
  * AGENT_MAX_DT like entitiesUpdate clamps to ENTITY_MAX_DT, so a long stall
  * advances a bounded amount and a given (create sequence, dt sequence) always
- * produces a byte-identical registry.
+ * produces a byte-identical registry. The only process-wide state is the
+ * AgentStats accumulator, and no decision reads it.
  */
 
+#include "agents/board.h"
 #include "agents/need.h"
 #include "entities/entities.h"
 
@@ -53,6 +60,17 @@
 #define AGENT_MAX_DT 0.1f
 /* An invalid / dead handle. */
 #define AGENT_INVALID (-1)
+/* PREEMPTION MARGIN (bands). A challenger must be this many bands MORE
+ * urgent than the job an agent already holds before it is worth moving —
+ * the spec's "an agent cannot be short-circuited by two near-equal
+ * activities". Bands are integers, so two nearly equal jobs land in one band
+ * and a one-band gap is not a reason to move at all. */
+#define AGENT_PREEMPT_MARGIN 2
+/* STAYING POWER (seconds). The dwell an agent gets on a job it has just
+ * taken: nothing preempts it until the dwell runs out, however urgent the
+ * challenger is. The spec's dwell is "MIN_DWELL or its first real yield,
+ * whichever is longer"; the yield half belongs to the activity layer. */
+#define AGENT_MIN_DWELL 1.5f
 
 typedef int AgentHandle;	/* 0..AGENT_MAX-1, or AGENT_INVALID */
 
@@ -102,10 +120,26 @@ typedef struct Agent {
 	uint16_t flaws[SKILL_COUNT];
 	/* The physical body (borrowed; this module never dereferences it). */
 	EntityHandle entity;
-	/* Agency links the job/errand layers fill in later; -1 = none. */
-	int personalBoard;
+	/* THIS AGENT'S BOARD, embedded by value: "personal" is literal, not
+	 * an index into a pool of boards. AGENT_MAX boards of BOARD_MAX
+	 * jobs is static memory and no allocation, which is the same trade
+	 * the entity and machine registries make. boardInit gives a born
+	 * agent an empty, unshared board. */
+	JobBoard personal;
+	/* The job this agent is running and the board it lives on:
+	 * engagedJob is a slot index into `personal`, or into
+	 * `boards->shared` when engagedShared is set (a handle alone cannot
+	 * say which of two boards it names). JOB_INVALID when idle. */
 	int engagedJob;
+	bool engagedShared;
+	/* Staying power: seconds left before a challenger may preempt
+	 * engagedJob. Set to AGENT_MIN_DWELL when a job is taken, counted
+	 * down each tick, floored at 0. */
 	float dwellLeft;
+	/* Tiles queued by the last route this agent's body was given, or -1
+	 * when the last attempt was refused (or none has been made). Pure
+	 * observability — no decision reads it. */
+	int pathLen;
 	/* Cached needPanicMask(&needs), refreshed by every agentsDecay. */
 	int panicMask;
 } Agent;
@@ -120,7 +154,9 @@ typedef struct AgentRegistry {
 } AgentRegistry;
 
 /* The perf counter phases report deltas from. agentsStats ZEROES on read, so
- * a phase reads it at its start and again at its end. */
+ * a phase reads it at its start and again at its end. Both counters are fed
+ * by agentsUpdate (decisions taken, routes computed) and by nothing else;
+ * they are diagnostics, never inputs to a decision. */
 typedef struct AgentStats {
 	uint32_t agentDecisions;
 	uint32_t pathfindCalls;
@@ -160,9 +196,58 @@ void agentsDecay(AgentRegistry *r, float dt);
  * freed, and the same pointer on every call. */
 const RoleProfile *agentRoleProfile(int role);
 
+/* THE SWITCH DECISION — the one place an agent changes its mind, and the
+ * whole anti-oscillation guarantee in four lines:
+ *
+ *   idle (engagedBand or challengerBand == JOB_INVALID)  -> 1 (take it)
+ *   dwellLeft > 0                                         -> 0 (stay)
+ *   challengerBand >= engagedBand + AGENT_PREEMPT_MARGIN  -> 1 (preempt)
+ *   otherwise                                             -> 0 (stay)
+ *
+ * A NULL agent has nothing to switch, so it stays (0). Nothing else is
+ * consulted: no per-tick re-ranking, no role curve, no need vector — the
+ * bands have already folded all of that in (agents/need.h). */
+int agentShouldSwitch(const Agent *a, int engagedBand, int challengerBand,
+		      float dwellLeft);
+
+/* The tick's decision half plus the execute half, over every LIVE agent:
+ *
+ *   1. agentsDecay (see above), so the bands below read fresh needs;
+ *   2. a finished job (DONE/FAILED) is released and the agent goes idle;
+ *   3. the dwell counts down;
+ *   4. agentShouldSwitch decides — an idle agent takes the best job on
+ *      either board, an engaged one only a challenger that clears the
+ *      margin (bands decide, never which board a job sits on; ties go to
+ *      the personal board);
+ *   5. on a switch: the displaced job is INTERRUPTED (failed) and its claim
+ *      released — re-planning is a NEW job, never a retarget of a live one —
+ *      and the challenger is claimed and STARTed, which resolves the target
+ *      it names and routes the body there with entityPathTo (a target that
+ *      does not resolve, a void tile, or a route A* refuses DENIES the job
+ *      instead, and the claim is released on the next tick);
+ *   6. an engaged job advances: the walk completes on arrival, the
+ *      activity step runs, and `duration` is spent as a timed WAIT before
+ *      the job completes.
+ *
+ * `ents` is the shared entity registry the bodies live in (NULL = agents
+ * with no reachable body are denied any move, never crashed into); `boards`
+ * carries the one board agents share (NULL = personal boards only);
+ * `outDecisions`, when given, accumulates the number of switches taken.
+ * Returns this tick's switch count as well, so a caller that does not want
+ * the running total still gets the delta. `dt` is clamped to AGENT_MAX_DT,
+ * NaN-safe, exactly as agentsDecay and entitiesUpdate clamp theirs.
+ *
+ * The board clock is the CALLER's: sweep claims with boardExpire(b, now)
+ * before calling, or reservations will never lapse (see agents/board.h).
+ *
+ * NULL registry is a no-op returning 0. Everything else is per-agent: one
+ * agent's bad row or refused move never takes the loop down. */
+int agentsUpdate(AgentRegistry *r, AgentBoards *boards, EntityRegistry *ents,
+		 const Voxmap *map, float dt, int *outDecisions);
+
 /* Zero the counters on read, so a phase reports the delta across its own
- * span. Phase 1 decides nothing and paths nothing, so both read 0 until the
- * activity layer lands. NULL is a no-op. */
+ * span: agentsUpdate's decisions and route computations accumulate between
+ * two reads. NULL is a no-op. */
 void agentsStats(AgentStats *out);
 
 #endif

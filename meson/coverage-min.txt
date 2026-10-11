@@ -310,7 +310,27 @@ src/sim/brain.c			80
 # reservation, and agentsDecay's per-role multipliers, live-only walk,
 # AGENT_MAX_DT clamp, NaN dt and the unknown-role skip.
 src/agents/need.c		100
+# Task 3: agent.c gains agentsUpdate, the switch rule and the execute half.
+# Every branch is taken on the first cut (126/126, 199/199 lines, 14/14
+# functions), so the floor stays at 100 rather than dropping: the switch rule
+# cell by cell, the oscillation property over 200 ticks through the real
+# tick, the near-miss / decisive preemption pair, both dwell boundaries, the
+# cross-board comparison, the four refusal paths (unresolvable target, void
+# tile, no body, unreachable body mid-walk), the finished-job release, the
+# vanished-slot and vanished-board releases, the dt clamp and the NaN dt,
+# and the guards. The lost-claim guard is reached honestly: an agent that
+# HOLDS a job still sees it as its own best candidate, and boardClaim
+# refuses to re-claim it (START is not a re-claim), so the tick does not
+# engage it.
 src/agents/agent.c		100
+# Task 3: the job board. Every arm is taken on the first cut (72/72
+# branches, 102/102 lines, 10/10 functions) by the exclusivity / expiry /
+# release / selection contract tests, so the floor is ratcheted to 100
+# rather than parked at the measured figure: the claim stamps, the deadline
+# boundary, the NaN clock, the lowest-slot tie-break, the sentinel-terminated
+# skip list, another agent's live claim, the terminal-state exclusion, the
+# enqueue/retire scrubs and every guard.
+src/agents/board.c		100
 # Agent framework, task 2: the job record and the table-driven per-job
 # lifecycle machine (job.c). Pure, allocation-free twin suite; every branch is
 # closed on the first cut, so the floor is ratcheted to 100 rather than parked

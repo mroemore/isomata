@@ -163,6 +163,29 @@ typedef struct Job {
 	int claimer;		/* EntityHandle, or JOB_INVALID when unclaimed */
 } Job;
 
+/* WHAT A TARGET NAMES. (targetKind, targetId) binds a THING, never a tile
+ * path and never a route: the move tile is resolved by whoever owns the
+ * world, which is why JobResult carries no coordinates. JOB_TARGET_NONE is an
+ * in-place activity (nothing to walk to); JOB_TARGET_TILE is a place, packed
+ * as z * JOB_TILE_SPAN + x because a tile is the one target an agent can
+ * resolve from a job record alone — the activity layer adds machine / garment
+ * / agent ids beside it and resolves them against the registry it owns.
+ *
+ * The span is the map dimension bound (voxmap.h's VOXMAP_MAX_DIM), so a
+ * packed tile never aliases two coordinates of a real map. It is spelled as a
+ * literal here to keep this header free of render includes; the job suite
+ * pins the two equal so they cannot drift apart. */
+typedef enum JobTargetKind {
+	JOB_TARGET_NONE = 0,	/* in place: no target, nothing to walk to */
+	JOB_TARGET_TILE,	/* a place: targetId is a packed tile index */
+	JOB_TARGET_KIND_COUNT
+} JobTargetKind;
+
+#define JOB_TILE_SPAN 256
+
+/* Pack a tile for jobSetTarget / JOB_TARGET_TILE. */
+#define JOB_TILE_PACK(x, z) ((z) * JOB_TILE_SPAN + (x))
+
 /* One jobStep result: the resulting state and the action to take. There is no
  * payload — see the header note; the caller resolves targetKind/targetId to a
  * tile, and the activity owns its step and wait parameters. */
@@ -184,6 +207,14 @@ void jobInit(Job *j, int kind);
  * naming its target are separate steps. NULL is a no-op. */
 void jobSetTarget(Job *j, int kind, int id);
 
+/* Resolve a JOB_TARGET_TILE target to (x, z). Returns false — and writes
+ * nothing — for a NULL job, NULL outputs, a target kind that is not a tile
+ * (JOB_TARGET_NONE means "in place", an unknown kind is not a silent zero),
+ * a cleared or negative id, or a coordinate outside a `dim`-sized map.
+ * `dim <= 0` skips the bounds check; pass the map's own dimension to make an
+ * off-map destination a refusal rather than a walk into the void. */
+bool jobTargetTile(const Job *j, int dim, int *outX, int *outZ);
+
 /* Apply one event: look up the cell for (j->state, event), write the next
  * state back to j->state and return {next state, action}.
  *
@@ -193,9 +224,12 @@ void jobSetTarget(Job *j, int kind, int id);
  * {JOB_UNCLAIMED, JOB_ACTION_NONE}. Pure apart from writing j->state. */
 JobResult jobStep(Job *j, int event);
 
-/* Stable names for logging: "UNCLAIMED"/"CLAIMED"/..., "START"/"ARRIVED"/...,
- * "NONE"/"MOVE_TO"/... An unknown value returns "?" for a state or event and
- * "NONE" for an action (an unknown action is, in effect, no action). */
+/* Stable names for logging: "WANDER"/"USE_MACHINE"/...,
+ * "UNCLAIMED"/"CLAIMED"/..., "START"/"ARRIVED"/...,
+ * "NONE"/"MOVE_TO"/... An unknown value returns "?" for a kind, a state or
+ * an event and "NONE" for an action (an unknown action is, in effect, no
+ * action). */
+const char *jobKindName(int kind);
 const char *jobStateName(int state);
 const char *jobEventName(int event);
 const char *jobActionName(int action);

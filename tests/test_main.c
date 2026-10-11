@@ -89,6 +89,7 @@ void run_test_toast(void);
 void run_test_need(void);
 void run_test_agent(void);
 void run_test_job(void);
+void run_test_board(void);
 
 
 int main(void)
@@ -134,5 +135,6 @@ int main(void)
 	run_test_need();
 	run_test_agent();
 	run_test_job();
+	run_test_board();
 	return UNITY_END();
 }

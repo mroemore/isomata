@@ -21,8 +21,9 @@
 #include "scenes/level_scene.h"
 
 #include "achievement.h"
-#include "ai/fsm.h"
-#include "ai/nav.h"
+#include "agents/agent.h"
+#include "agents/board.h"
+#include "agents/job.h"
 #include "ai/pathfind.h"
 #include "app.h"
 #include "audio/audio.h"
@@ -67,11 +68,11 @@
 #define LEVEL_TOAST_H 48
 #define LEVEL_TOAST_TOP 20		/* virtual px from the top edge */
 
-/* T21 demo: FSM + A* driven critters. Each walker cycles a two-destination
- * list; a leg's route is computed with A* (entityPathTo) and the executor FSM
- * drives IDLE -> MOVING_TO -> (ARRIVED) ACTING -> (PHASE_DONE) WAITING ->
- * (PHASE_DONE) DONE -> ..., so every state/action is exercised. Destinations
- * are open plateau tiles:
+/* T21 demo, now agent-driven: critters cycle a two-destination list and each
+ * leg is a JOB_WANDER job on the critter's own board, walked by
+ * agentsUpdate's lifecycle (UNCLAIMED -> CLAIMED -> WALKING -> INTERACTING ->
+ * WAITING -> DONE) with the route computed by A* (entityPathTo). The
+ * destinations are unchanged open plateau tiles:
  *   A paces the tower row z=8 (x2<->x12): the tower (x6-7, z7-8) blocks the
  *     straight line, so A* routes 20 tiles around the south edge (straight-line
  *     10) — the visible detour;
@@ -83,9 +84,14 @@ static const int DEMO_DESTS_A[2][2] = { { 12, 8 }, { 2, 8 } };
 static const int DEMO_DESTS_B[2][2] = { { 10, 13 }, { 10, 3 } };
 static const int DEMO_DESTS_C[2][2] = { { 11, 10 }, { 2, 7 } };
 
-/* The WAIT reason the demo's timed machine phase carries, and its bound. */
-#define DEMO_WAIT_CYCLE 1
+/* The demo's timed WAIT phase, unchanged from the executor FSM's: a job
+ * parks on its `duration` for this long before completing. */
 #define DEMO_WAIT_SECONDS 0.4f
+/* The urgency band the demo's wander job carries, hand-set until the
+ * activity catalogue (task 4) computes a job's band from the needs it serves.
+ * Nothing competes with it today: a critter's personal board holds one leg at
+ * a time, so the band only has to be stable and equal. */
+#define DEMO_WANDER_BAND 1
 
 /* --- T22 machines ------------------------------------------------------- *
  *
@@ -124,17 +130,25 @@ static const struct {
 	{ MACHINE_KIND_WASHER, 14, 1, 3 },
 };
 
-/* A demo critter: its entity, its executor FSM and a two-destination loop.
- * waitLeft counts down the FSM's WAITING phase (the simulated machine cycle;
- * the demo never lets it reach a timeout). */
-typedef struct DemoWalker {
-	EntityHandle handle;
-	Fsm fsm;
-	const int (*dests)[2];
+/* A demo critter: its body, its mind, and the leg it walks next.
+ *
+ * The three destination tables and the per-critter speeds and easings below
+ * are the demo's and have not changed; what changed is WHO PICKS THE NEXT
+ * LEG. Each critter is an Agent with its own personal board, and each leg is
+ * a JOB_WANDER job bound to one destination tile (duration = the demo's old
+ * WAIT phase, band = DEMO_WANDER_BAND, hand-set until the activity catalogue
+ * computes it). The hardcoded leg loop is gone: agentsUpdate claims the job,
+ * runs the lifecycle and routes the body, and this file only queues the next
+ * leg when the critter is idle and retires the one that finished. */
+typedef struct DemoCritter {
+	EntityHandle handle;	/* the body, in the shared entity registry */
+	AgentHandle agent;	/* the mind, in the level's agent registry */
+	const int (*dests)[2];	/* the critter's two-destination route */
 	int destCount;
-	int destIndex;
-	float waitLeft;
-} DemoWalker;
+	int destIndex;		/* which destination is next */
+	int job;		/* the leg job on the personal board, or -1 */
+	int lastState;		/* last observed job state, for the log */
+} DemoCritter;
 
 /* --- T23 customers ------------------------------------------------------ *
  *
@@ -181,8 +195,11 @@ typedef struct LevelState {
 	SpriteEntity sprites[LEVEL_SPRITE_MAX];
 	size_t spriteCount;
 	SimWorld sim;			/* T23: registries + customers + machines */
-	DemoWalker walkers[LEVEL_WALKER_COUNT];
-	int walkerCount;
+	DemoCritter critters[LEVEL_WALKER_COUNT];
+	int critterCount;
+	AgentRegistry agents;		/* one agent per demo critter */
+	AgentBoards boards;		/* the shared board (idle in this demo) */
+	float clock;			/* seconds since load: the board clock */
 	int16_t spriteMaterial;		/* atlas material for the critters */
 	int16_t machineMaterial;	/* atlas material for the machines */
 	BrainEvent events[BRAIN_MAX_EVENTS];	/* per-frame brain events */
@@ -206,8 +223,8 @@ typedef struct LevelState {
 } LevelState;
 
 /* Create the demo critters (T19/T21): three registry entities placed on open
- * plateau, each driving an FSM + A* loop (see the DEMO_DESTS_* note). The
- * first leg is started in levelUpdateWalkers on the first update. */
+ * plateau, each now paired with an Agent that decides what it does next (see
+ * the DEMO_DESTS_* note). The first leg is queued on the first update. */
 static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 {
 	static const struct {
@@ -226,11 +243,13 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 	};
 	int i;
 
-	st->walkerCount = 0;
+	st->critterCount = 0;
 	for (i = 0; i < LEVEL_WALKER_COUNT; i++) {
 		EntityHandle h = entityCreate(&st->sim.entities);
 		Entity *e = entityGet(&st->sim.entities, h);
-		DemoWalker *w;
+		AgentHandle ah;
+		Agent *a;
+		DemoCritter *c;
 
 		if (e == NULL ||
 		    !entityPlace(e, demo[i].startX, demo[i].startZ)) {
@@ -245,109 +264,185 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 		entitySetSprite(e, demo[i].width, demo[i].height,
 				DRAW_TINT(255, 255, 255, 255), spriteMaterial);
 
-		w = &st->walkers[st->walkerCount];
-		w->handle = h;
-		fsmInit(&w->fsm);
-		w->dests = demo[i].dests;
-		w->destCount = demo[i].destCount;
-		w->destIndex = 0;
-		w->waitLeft = 0.0f;
-		w->fsm.waitReason = DEMO_WAIT_CYCLE;
-		w->fsm.waitSeconds = DEMO_WAIT_SECONDS;
-		st->walkerCount++;
-		SDL_Log("isomata: demo entity %d created at (%d,%d)",
-			h, demo[i].startX, demo[i].startZ);
+		ah = agentCreate(&st->agents, ROLE_CRITTER);
+		a = agentGet(&st->agents, ah);
+		if (a == NULL) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: demo agent %d create failed", i);
+			continue;
+		}
+		/* The agent's body is the entity above; from here the two are
+		 * separate records that agentsUpdate links. */
+		a->entity = h;
+
+		c = &st->critters[st->critterCount];
+		c->handle = h;
+		c->agent = ah;
+		c->dests = demo[i].dests;
+		c->destCount = demo[i].destCount;
+		c->destIndex = 0;
+		c->job = JOB_INVALID;
+		c->lastState = JOB_UNCLAIMED;
+		st->critterCount++;
+		SDL_Log("isomata: demo entity %d created at (%d,%d), agent %d",
+			h, demo[i].startX, demo[i].startZ, ah);
 	}
 }
 
-/* Apply one FSM event and log the transition (opt-in ISO_LOG=debug), so the
- * log shows the FSM actually driving the critters. */
-static FsmResult demoFsmStep(DemoWalker *w, int event)
+/* Queue the critter's next leg on its personal board. The agent takes it on
+ * this same tick (it is idle and this is the only job on the board), which is
+ * what the old hardcoded loop did by calling demoStartLeg on every IDLE
+ * frame — only now the decision goes through the ladder. The destination
+ * advances when the leg is QUEUED, exactly as the old code advanced it when
+ * the leg STARTED (including when A* refused the route: the next leg is the
+ * one after, either way). */
+static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
 {
-	int before = w->fsm.state;
-	FsmResult r = fsmStep(&w->fsm, event);
+	Agent *a = agentGet(&st->agents, c->agent);
+	const int *d;
+	Job j;
 
-	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-		     "isomata: entity %d fsm %s --%s--> %s (action %s)",
-		     w->handle, fsmStateName(before), fsmEventName(event),
-		     fsmStateName(r.state), fsmActionName(r.action));
-	return r;
+	if (a == NULL || c->job != JOB_INVALID || a->engagedJob != JOB_INVALID)
+		return;
+	d = c->dests[c->destIndex];
+	jobInit(&j, JOB_WANDER);
+	/* Hand-set band: the activity catalogue (task 4) computes it from the
+	 * needs a wander serves. It never has to beat anything today, because
+	 * a critter's board holds exactly one job at a time. */
+	j.band = DEMO_WANDER_BAND;
+	/* The demo's old timed WAIT phase, unchanged: the job parks on it
+	 * before completing, exactly as the executor FSM used to. */
+	j.duration = DEMO_WAIT_SECONDS;
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(d[0], d[1]));
+	c->job = boardEnqueue(&a->personal, &j, JOB_PRIO_FILL);
+	if (c->job == JOB_INVALID)
+		return;		/* board full: retried next tick */
+	c->destIndex = (c->destIndex + 1) % c->destCount;
 }
 
-/* Begin the walker's next leg: drive the FSM START (MOVE_TO the target), then
- * A* the route with entityPathTo and queue it; log the recomputed path length
- * against the straight-line distance so a detour leg is provable. A rejected
- * route fails the task (DENIED -> FINISH_GOAL) and the next leg is tried on
- * the following update. */
-static void demoStartLeg(LevelState *st, DemoWalker *w)
+/* Retire the finished leg so the board does not fill with dead rows (the
+ * board's bounded drop would eventually start refusing work), and log the
+ * lifecycle as it stands. */
+static void levelReapLeg(LevelState *st, DemoCritter *c)
 {
-	const int *d = w->dests[w->destIndex];
-	Entity *e = entityGet(&st->sim.entities, w->handle);
+	Agent *a = agentGet(&st->agents, c->agent);
+	Job *j = (a != NULL) ? boardJob(&a->personal, c->job) : NULL;
+
+	if (a == NULL || c->job == JOB_INVALID)
+		return;
+	if (j != NULL && j->state != c->lastState) {
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: agent %d job %d (%s) state %s -> %s",
+			     a->id, c->job, jobKindName(j->kind),
+			     jobStateName(c->lastState),
+			     jobStateName(j->state));
+		c->lastState = j->state;
+	}
+	if (j != NULL && j->state != JOB_DONE && j->state != JOB_FAILED)
+		return;
+	if (a->engagedJob == c->job)
+		return;		/* still held: the tick lets go of it next frame */
+	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+		     "isomata: agent %d leg %d %s; retiring it from the board",
+		     a->id, c->job, jobStateName(j != NULL ? j->state
+							 : JOB_FAILED));
+	boardRetire(&a->personal, c->job);
+	c->job = JOB_INVALID;
+	c->lastState = JOB_UNCLAIMED;
+}
+
+/* The why-this-job log (the spec's highest-value observability artifact): the
+ * two bands and the margin that decided the tick, plus the route the body was
+ * given and the straight-line distance it detoured from. One line per critter
+ * whose engagement CHANGED, so the log reads as a sequence of decisions
+ * rather than one line per frame. */
+static void levelLogDecision(LevelState *st, DemoCritter *c, int before)
+{
+	Agent *a = agentGet(&st->agents, c->agent);
+	JobBoard *ab;
+	Job *from;
+	Job *to;
+	int skip[2];
+	int challenger;
+	int fromBand = JOB_INVALID;
+	int toBand = JOB_INVALID;
+	int challengerBand = JOB_INVALID;
+	int tx = 0;
+	int tz = 0;
 	int straight;
-	int len;
 
-	if (e == NULL)
+	if (a == NULL || a->engagedJob == before)
 		return;
-	straight = pathfindManhattan(e->tileX, e->tileZ, d[0], d[1]);
-	/* FSM decision first: START carries the target and emits MOVE_TO. */
-	fsmSetGoal(&w->fsm, d[0], d[1]);
-	demoFsmStep(w, FSM_EVENT_START);
+	/* The engaged job lives on whichever board the agent holds it, which
+	 * for the demo is always its own; the log reads it the same way the
+	 * tick does rather than assuming. */
+	ab = a->engagedShared ? &st->boards.shared : &a->personal;
+	from = (before != JOB_INVALID) ? boardJob(ab, before) : NULL;
+	to = boardJob(ab, a->engagedJob);
+	fromBand = (from != NULL) ? from->band : JOB_INVALID;
+	toBand = (to != NULL) ? to->band : JOB_INVALID;
+	skip[0] = a->engagedJob;
+	skip[1] = JOB_INVALID;
+	challenger = boardBestFor(ab, skip, a->id);
+	if (challenger != JOB_INVALID)
+		challengerBand = ab->slots[challenger].band;
 
-	len = entityPathTo(e, d[0], d[1]);
-	if (len < 0) {
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-			     "level_scene: entity %d path to (%d,%d) rejected",
-			     w->handle, d[0], d[1]);
-		demoFsmStep(w, FSM_EVENT_DENIED);
-		w->destIndex = (w->destIndex + 1) % w->destCount;
+	if (to == NULL) {
+		SDL_Log("isomata: agent %d (entity %d) released job %d (band %d)",
+			a->id, c->handle, before, fromBand);
 		return;
 	}
-	SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-		     "isomata: entity %d: task path (len %d) to (%d,%d) straight %d%s",
-		     w->handle, len, d[0], d[1], straight,
-		     len > straight ? " DETOUR" : "");
-	w->destIndex = (w->destIndex + 1) % w->destCount;
+	if (!jobTargetTile(to, VOXMAP_MAX_DIM, &tx, &tz))
+		return;
+	{
+		Entity *e = entityGet(&st->sim.entities, c->handle);
+
+		straight = (e != NULL)
+				   ? pathfindManhattan(e->tileX, e->tileZ, tx, tz)
+				   : 0;
+	}
+	SDL_Log("isomata: agent %d (entity %d) job %d %s -> (%d,%d) band %d"
+		" (from %d, challenger %d, margin %d, dwell %.2fs) path %d"
+		" straight %d%s",
+		a->id, c->handle, a->engagedJob, jobKindName(to->kind), tx, tz,
+		toBand, fromBand, challengerBand, AGENT_PREEMPT_MARGIN,
+		(double)a->dwellLeft, a->pathLen, straight,
+		a->pathLen > straight ? " DETOUR" : "");
 }
 
-/* Advance each critter's executor one step: on arrival run the activity step
- * and hand off to the timed WAIT, count the WAIT down, then begin the next
- * leg. The FSM models the decisions; this is the sim glue that executes
- * MOVE_TO (entityPathTo) and WAIT (waitLeft). */
-static void levelUpdateWalkers(LevelState *st, float dt)
+/* Advance the demo critters: the board clock, then the agent tick (decay,
+ * decide, claim, route, run the lifecycle), then the reap. entitiesUpdate
+ * still walks the shared entity registry once per frame, after every decision
+ * is in — the same order the hardcoded walker loop ran in. */
+static void levelUpdateAgents(LevelState *st, float dt)
 {
+	int before[LEVEL_WALKER_COUNT];
 	int i;
 
-	for (i = 0; i < st->walkerCount; i++) {
-		DemoWalker *w = &st->walkers[i];
-		Entity *e = entityGet(&st->sim.entities, w->handle);
-		FsmResult r;
+	st->clock += dt;
+	/* The board clock is stamped before any claim, so a reservation is
+	 * measured from the tick it was taken on and a claim nobody starts
+	 * lapses instead of sitting on a job forever. */
+	boardExpire(&st->boards.shared, st->clock);
+	for (i = 0; i < st->critterCount; i++) {
+		Agent *a = agentGet(&st->agents, st->critters[i].agent);
 
-		if (e == NULL)
-			continue;
-		switch (w->fsm.state) {
-		case FSM_STATE_MOVING_TO:
-			/* Arrival = the whole route is walked: no active
-			 * segment and an empty queue. */
-			if (!e->moving && e->pathCount == 0) {
-				demoFsmStep(w, FSM_EVENT_ARRIVED);
-				/* The activity step completes at once,
-				 * handing off to the timed phase. */
-				r = demoFsmStep(w, FSM_EVENT_PHASE_DONE);
-				w->waitLeft = r.waitSeconds;
-			}
-			break;
-		case FSM_STATE_WAITING:
-			w->waitLeft -= dt;
-			if (w->waitLeft <= 0.0f)
-				demoFsmStep(w, FSM_EVENT_PHASE_DONE);
-			break;
-		case FSM_STATE_IDLE:
-		case FSM_STATE_DONE:
-			demoStartLeg(st, w);
-			break;
-		default:
-			break;
-		}
+		if (a != NULL)
+			boardExpire(&a->personal, st->clock);
+		before[i] = (a != NULL) ? a->engagedJob : JOB_INVALID;
+	}
+
+	agentsUpdate(&st->agents, &st->boards, &st->sim.entities, st->map, dt,
+		     NULL);
+
+	/* Retire what finished, then queue the next leg: the agent has let
+	 * go of a finished job during the tick above, so this is the moment
+	 * its board has room again. */
+	for (i = 0; i < st->critterCount; i++)
+		levelReapLeg(st, &st->critters[i]);
+	for (i = 0; i < st->critterCount; i++) {
+		levelQueueNextLeg(st, &st->critters[i]);
+		levelLogDecision(st, &st->critters[i], before[i]);
 	}
 }
 
@@ -654,6 +749,12 @@ static bool level_init(void *self, App *app)
 	st->divergenceSpawned = false;
 	st->breakTimer = -1.0f;
 	st->repairTimer = -1.0f;
+	/* The agent side: a registry (which owns every critter's personal
+	 * board by value), the one shared board, and the clock that board's
+	 * reservations are measured against. */
+	agentsInit(&st->agents);
+	boardInit(&st->boards.shared, true);
+	st->clock = 0.0f;
 	levelBuildEntities(st, spriteMaterial);
 	levelBuildMachines(st);
 	/* The interval spawner stays OFF until the scripted divergence pair has
@@ -972,8 +1073,10 @@ static void level_update(void *self, App *app, float dt)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
-	/* Advance the T21 demo critters (FSM + A* decisions for this frame). */
-	levelUpdateWalkers(st, dt);
+	/* Advance the demo critters: the agent tick decides, claims and routes
+	 * each body (ISO_LOG=debug shows the bands and the margin behind every
+	 * move). */
+	levelUpdateAgents(st, dt);
 	/* Advance the T23 customers + machines: spawner, machine timers and
 	 * wakes, each customer's brain, and the scripted break/repair. */
 	levelUpdateBrain(st, dt);

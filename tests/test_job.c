@@ -25,6 +25,7 @@
 #include "unity.h"
 
 #include "agents/job.h"
+#include "render/voxmap.h"
 
 /* Independent copy of the contract: (state, event) -> {next state, action}.
  * Rows UNCLAIMED, CLAIMED, WALKING, INTERACTING, WAITING, DONE, FAILED;
@@ -701,6 +702,21 @@ static void test_null_and_out_of_range(void)
 /* Names for logging and validity predicates. */
 static void test_names_and_validity(void)
 {
+	/* Every kind names itself, and an unknown one is "?" — the log a
+	 * decision prints has to say WHICH job moved. */
+	TEST_ASSERT_EQUAL_STRING("WANDER", jobKindName(JOB_WANDER));
+	TEST_ASSERT_EQUAL_STRING("USE_MACHINE", jobKindName(JOB_USE_MACHINE));
+	TEST_ASSERT_EQUAL_STRING("PAY", jobKindName(JOB_PAY));
+	TEST_ASSERT_EQUAL_STRING("LOAD", jobKindName(JOB_LOAD));
+	TEST_ASSERT_EQUAL_STRING("COLLECT", jobKindName(JOB_COLLECT));
+	TEST_ASSERT_EQUAL_STRING("TALK", jobKindName(JOB_TALK));
+	TEST_ASSERT_EQUAL_STRING("PLAY_ARCADE", jobKindName(JOB_PLAY_ARCADE));
+	TEST_ASSERT_EQUAL_STRING("NAP", jobKindName(JOB_NAP));
+	TEST_ASSERT_EQUAL_STRING("REPAIR", jobKindName(JOB_REPAIR));
+	TEST_ASSERT_EQUAL_STRING("LEAVE", jobKindName(JOB_LEAVE));
+	TEST_ASSERT_EQUAL_STRING("?", jobKindName(JOB_KIND_COUNT));
+	TEST_ASSERT_EQUAL_STRING("?", jobKindName(-1));
+
 	TEST_ASSERT_EQUAL_STRING("UNCLAIMED", jobStateName(JOB_UNCLAIMED));
 	TEST_ASSERT_EQUAL_STRING("CLAIMED", jobStateName(JOB_CLAIMED));
 	TEST_ASSERT_EQUAL_STRING("WALKING", jobStateName(JOB_WALKING));
@@ -753,6 +769,101 @@ static void test_constants(void)
 	TEST_ASSERT_EQUAL_INT(6, NEED_COUNT);
 }
 
+/* --- the target vocabulary (task 3) ------------------------------------- *
+ *
+ * A job binds a THING as (targetKind, targetId) and never a path: the tile a
+ * MOVE_TO walks to is resolved from that pair by whoever owns the world. The
+ * one kind that resolves today is a TILE, packed as z * JOB_TILE_SPAN + x,
+ * because a tile is the only target the demo's jobs and the agent tick can
+ * resolve without a world registry in hand. */
+
+static void test_target_tile_round_trips(void)
+{
+	Job j;
+	int x = -1, z = -1;
+
+	jobInit(&j, JOB_WANDER);
+	/* A fresh job is bound to nothing: an in-place activity. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, j.targetKind);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, j.targetId);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(12, 8));
+	TEST_ASSERT_TRUE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+	TEST_ASSERT_EQUAL_INT(12, x);
+	TEST_ASSERT_EQUAL_INT(8, z);
+
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(0, 0));
+	TEST_ASSERT_TRUE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+	TEST_ASSERT_EQUAL_INT(0, x);
+	TEST_ASSERT_EQUAL_INT(0, z);
+
+	/* The far corner of the span is representable and unambiguous. */
+	jobSetTarget(&j, JOB_TARGET_TILE,
+		     JOB_TILE_PACK(JOB_TILE_SPAN - 1, JOB_TILE_SPAN - 1));
+	TEST_ASSERT_TRUE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+	TEST_ASSERT_EQUAL_INT(JOB_TILE_SPAN - 1, x);
+	TEST_ASSERT_EQUAL_INT(JOB_TILE_SPAN - 1, z);
+	/* ...and one past it is not, rather than wrapping into a neighbour. */
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_SPAN * JOB_TILE_SPAN);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+}
+
+static void test_target_tile_guards(void)
+{
+	Job j;
+	int x = 0, z = 0;
+
+	jobInit(&j, JOB_WANDER);
+	TEST_ASSERT_FALSE(jobTargetTile(NULL, JOB_TILE_SPAN, &x, &z));
+
+	/* A target kind this build does not resolve is NOT a silent zero: an
+	 * unknown kind reads as "no tile", so the caller denies the job
+	 * instead of walking somewhere invented. */
+	jobSetTarget(&j, JOB_TARGET_KIND_COUNT, 5);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+	jobSetTarget(&j, JOB_TARGET_NONE, 5);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+
+	/* A cleared id is no target, not tile (0,0). */
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_INVALID);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+	/* Nor is a negative one. */
+	jobSetTarget(&j, JOB_TARGET_TILE, -3);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, &z));
+
+	/* The outputs are required: there is nowhere to put the answer. */
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(3, 4));
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, NULL, &z));
+	TEST_ASSERT_FALSE(jobTargetTile(&j, JOB_TILE_SPAN, &x, NULL));
+
+	/* dim bounds-checks BOTH axes against the map that will be walked:
+	 * (3,4) is inside a 16x16 map and outside a 4x4 one. */
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(3, 4));
+	TEST_ASSERT_TRUE(jobTargetTile(&j, 16, &x, &z));
+	TEST_ASSERT_EQUAL_INT(3, x);
+	TEST_ASSERT_EQUAL_INT(4, z);
+	TEST_ASSERT_FALSE(jobTargetTile(&j, 4, &x, &z));
+	/* X is bounds-checked as well as Z: (9,2) is outside a 4-wide map,
+	 * and (9,9) is outside on both axes. */
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(9, 2));
+	TEST_ASSERT_FALSE(jobTargetTile(&j, 4, &x, &z));
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(9, 9));
+	TEST_ASSERT_FALSE(jobTargetTile(&j, 4, &x, &z));
+	/* dim <= 0 means "do not bounds-check", which is the caller's own
+	 * business; the packing still round-trips. */
+	TEST_ASSERT_TRUE(jobTargetTile(&j, 0, &x, &z));
+	TEST_ASSERT_EQUAL_INT(9, x);
+	TEST_ASSERT_EQUAL_INT(9, z);
+}
+
+static void test_target_span_matches_the_map(void)
+{
+	/* JOB_TILE_SPAN is the map dimension bound: a packed tile must never
+	 * alias two coordinates of a real map. */
+	TEST_ASSERT_EQUAL_INT(VOXMAP_MAX_DIM, JOB_TILE_SPAN);
+}
+
 void run_test_job(void);
 
 void run_test_job(void)
@@ -772,4 +883,7 @@ void run_test_job(void)
 	RUN_TEST(test_step_touches_only_the_state);
 	RUN_TEST(test_null_and_out_of_range);
 	RUN_TEST(test_names_and_validity);
+	RUN_TEST(test_target_tile_round_trips);
+	RUN_TEST(test_target_tile_guards);
+	RUN_TEST(test_target_span_matches_the_map);
 }
