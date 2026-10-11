@@ -69,17 +69,19 @@ static const int JOB_TABLE[JOB_STATE_COUNT][JOB_EVENT_COUNT][2] = {
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 	},
-	/* WAITING: parked on a machine phase. PHASE_DONE completes the job.
-	 * TIMEOUT is deliberately NOT a wildcard here: a wait that must not
-	 * run forever is the caller's bounded wait (claimExpiry on the record),
-	 * so a live job never fails itself. */
+	/* WAITING: parked on a machine phase. PHASE_DONE completes the job;
+	 * TIMEOUT is the bounded wait running out. The board and the errand own
+	 * the deadline (the laundromat's BRAIN_MACHINE_WAIT_SLACK is exactly
+	 * this kind of bound) — the job's whole part is to consume the event.
+	 * Without this cell a machine that never delivers its phase wake would
+	 * hang the job, and its agent, forever. */
 	{
 		{ JOB_WAITING, JOB_ACTION_NONE },
 		{ JOB_WAITING, JOB_ACTION_NONE },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 		{ JOB_DONE, JOB_ACTION_FINISH },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
-		{ JOB_WAITING, JOB_ACTION_NONE },
+		{ JOB_FAILED, JOB_ACTION_FINISH },
 	},
 	/* DONE: terminal until a new START revives it into CLAIMED. The two
 	 * wildcard rows still fail it — a late interrupt on a finished job is
@@ -106,22 +108,17 @@ static const int JOB_TABLE[JOB_STATE_COUNT][JOB_EVENT_COUNT][2] = {
 	},
 };
 
-/* Build a result with a zeroed payload. Every action reports one: the record
- * carries no move tile, no activity step and no wait reason, so there is
- * nothing to copy out of it (see the header note on the payload). The single
- * constructor keeps the no-op and the real transition byte-identical in
- * shape, so a caller cannot tell them apart by a field it did not set. */
+/* Build a result. There is no payload to build: JobResult is {state, action}
+ * because the record holds no move tile, no activity step and no wait reason
+ * (see the header note). One constructor keeps the no-op and the real
+ * transition identical in shape, so a caller cannot tell them apart by
+ * anything it did not set. */
 static JobResult makeResult(int state, int action)
 {
 	JobResult r;
 
 	r.state = state;
 	r.action = action;
-	r.targetX = 0;
-	r.targetZ = 0;
-	r.step = 0;
-	r.waitReason = 0;
-	r.waitSeconds = 0.0f;
 	return r;
 }
 

@@ -30,34 +30,57 @@
  * there is exactly one place that says "I am there" and exactly one that says
  * "go there".
  *
- * DENIED AND INTERRUPTED ARE WILDCARDS. A refusal (the claim expired, the
- * machine was taken, the reservation lapsed) or a preemption can land at any
- * moment, so both fail the job from EVERY state — including the terminals,
- * where FAILED is idempotent but JOB_ACTION_FINISH is still emitted so the
- * caller always sees the release. TIMEOUT is NOT a wildcard: it is the
- * activity's own runtime expiring, which only happens in INTERACTING. An
- * unbounded wait is the caller's business (claimExpiry on the record), so a
- * live job never fails itself.
+ * DENIED AND INTERRUPTED FAIL THE JOB FROM WHENEVER IT IS. A denial (the
+ * claim expired, the machine was taken, the reservation lapsed) or a
+ * preemption can land at any moment, so BOTH fail the job from EVERY state —
+ * including the terminals, where FAILED is idempotent but JOB_ACTION_FINISH is
+ * still emitted so the caller always sees the release. There is no state in
+ * which a denial is ignored: a refused job is a dead job, wherever it happened
+ * to be when it was refused.
+ *
+ * TIMEOUT IS NOT A WILDCARD — IT IS A DEADLINE. It lands only where a deadline
+ * is actually running: INTERACTING (the activity's own runtime expiring) and
+ * WAITING (the bounded wait for a machine phase — the laundromat's own
+ * BRAIN_MACHINE_WAIT_SLACK is exactly this kind of bound). The board and the
+ * errand OWN the deadline; the job's whole part is to consume the event.
+ * Everywhere else there is no deadline to expire, so TIMEOUT is a no-op and a
+ * stray wake can never kill a job that is waiting on nothing. The WAITING cell
+ * is what stops a machine that never delivers its phase wake from hanging the
+ * job — and the agent holding it — forever.
  *
  * START CLAIMS, IT DOES NOT RE-CLAIM. START revives DONE and FAILED into
  * CLAIMED, and claims an UNCLAIMED job. On a LIVE job (CLAIMED, WALKING,
- * INTERACTING, WAITING) START is a no-op: a second claim on a job somebody
- * already owns is exactly what an exclusive claim exists to prevent.
+ * INTERACTING, WAITING) START is a no-op.
+ *
+ * Why revival works from DONE and FAILED but not from WALKING: DONE and FAILED
+ * are TERMINAL — nobody owns them and nothing is in flight, so a START there is
+ * simply the first act of a new claim. A live job is owned by `claimer` and has
+ * an activity in flight, so a START there would be a second claim on a job
+ * somebody already holds: precisely what an exclusive claim exists to prevent
+ * ("no job is double-claimed"). Re-planning is therefore expressed by FAILING
+ * a job (DENIED / INTERRUPTED / TIMEOUT) and enqueuing a new one, never by
+ * retargeting a live one.
  *
  * ILLEGAL PAIRS ARE NO-OPS. An event the current state does not handle leaves
- * the state alone and reports JOB_ACTION_NONE with a zeroed payload, so a
- * caller can never be dragged into a state it did not ask for. A no-op is
- * distinguishable from a real transition because every real transition
- * reports a non-NONE action. jobStep never fails and never asserts: an
- * out-of-range state or event, or a NULL job, is likewise a NONE no-op.
+ * the state alone and reports JOB_ACTION_NONE, so a caller can never be
+ * dragged into a state it did not ask for. A no-op is distinguishable from a
+ * real transition because every real transition reports a non-NONE action.
+ * jobStep never fails and never asserts: an out-of-range state or event, or a
+ * NULL job, is likewise a NONE no-op.
  *
- * THE PAYLOAD IS ALWAYS ZERO. JobResult keeps targetX/targetZ, step,
- * waitReason and waitSeconds because the CALLER acts on the action, and this
- * module is not the caller: the move tile is resolved from targetKind/targetId
- * by whoever owns the world, and the activity step and wait parameters belong
- * to the activity. The record holds no tile, no step and no wait reason, so
- * there is nothing here to copy — jobStep fills the payload with zeroes for
- * every action, and a later task fills it in at the call site.
+ * THERE IS NO ACTION PAYLOAD. JobResult is {state, action} and nothing else,
+ * because this module has nothing to put in one. The job's target is already
+ * reachable on the record as targetKind/targetId, and the caller resolves that
+ * pair to a tile when it acts on JOB_ACTION_MOVE_TO. A wait's duration belongs
+ * to the activity and an activity's step id to the activity table — neither is
+ * a property of the TRANSITION, so neither is a field here. If a later task
+ * needs one, it adds the field when it has a real source for it; a result
+ * whose payload can never be set is worse than no payload, because every
+ * reader has to rediscover that.
+ *
+ * The actions are worth reporting all the same: MOVE_TO, BEGIN_ACTIVITY, WAIT,
+ * FINISH and CLAIM say which lifecycle phase the job has just entered and what
+ * the caller should do about it. That is the whole output of this module.
  *
  * NOT RESPONSIBLE FOR: choosing a job (no wants, no bands, no preemption —
  * that is agents/need.h and the board), moving the body (no path, no tile),
@@ -140,17 +163,12 @@ typedef struct Job {
 	int claimer;		/* EntityHandle, or JOB_INVALID when unclaimed */
 } Job;
 
-/* One jobStep result: the resulting state, the action kind and the action's
- * payload. The payload fields are ALWAYS ZERO — this module drives state and
- * action only (see the header note); the caller fills them in when it acts. */
+/* One jobStep result: the resulting state and the action to take. There is no
+ * payload — see the header note; the caller resolves targetKind/targetId to a
+ * tile, and the activity owns its step and wait parameters. */
 typedef struct JobResult {
 	int state;		/* JobState */
 	int action;		/* JobAction */
-	int targetX;		/* JOB_ACTION_MOVE_TO payload (filled by caller) */
-	int targetZ;
-	int step;		/* JOB_ACTION_BEGIN_ACTIVITY payload */
-	int waitReason;		/* JOB_ACTION_WAIT payload */
-	float waitSeconds;
 } JobResult;
 
 /* Initialise a record: kind as given, state JOB_UNCLAIMED, band -1 (dirty, so
@@ -167,7 +185,7 @@ void jobInit(Job *j, int kind);
 void jobSetTarget(Job *j, int kind, int id);
 
 /* Apply one event: look up the cell for (j->state, event), write the next
- * state back to j->state and return {next state, action, zeroed payload}.
+ * state back to j->state and return {next state, action}.
  *
  * An illegal pair (an event the state does not handle) is a no-op returning
  * the current state with JOB_ACTION_NONE. An out-of-range state is echoed

@@ -321,10 +321,11 @@ src/agents/agent.c		100
 # loop re-checks every one of them against an independent copy of the table,
 # so a table edit has to agree with both. On top of that come the two wildcard
 # failure rows (DENIED and INTERRUPTED from every state, including the
-# idempotent terminals), the DONE/FAILED revival, the illegal-pair no-op rule
-# (which is exactly the cells whose action is NONE), the NULL job and the
-# out-of-range state/event guards that stop the table ever being indexed, the
-# always-zeroed action payload, the "only state moves" write-back rule, and
-# the name/validity helpers. Measured 42/42 branches, 9/9 functions, 93/93
-# lines.
+# idempotent terminals), the bounded WAITING timeout plus the stray-timeout
+# no-ops in the five states with no deadline running, the DONE/FAILED revival
+# and the START-is-not-a-re-claim rule, the illegal-pair no-op rule (which is
+# exactly the cells whose action is NONE), the NULL job and the out-of-range
+# state/event guards that stop the table ever being indexed, the "only state
+# moves" write-back rule, and the name/validity helpers. Measured 42/42
+# branches, 9/9 functions, 88/88 lines.
 src/agents/job.c		100

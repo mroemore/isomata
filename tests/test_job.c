@@ -6,10 +6,11 @@
  * LIFECYCLE TABLE pinned cell by cell — all 7 x 6 = 42 cells, each named in a
  * failing message — against BOTH an independent copy of the contract (the
  * double loop) and 42 explicit per-cell assertions; the denial/interrupt
- * wildcard rows; the DONE/FAILED revival; the illegal-pair no-op rule and its
- * distinguishability from a real transition; the always-zeroed action payload;
- * the "only state moves" purity rule; the full happy-path sequence; NULL and
- * out-of-range safety; and the name/validity helpers.
+ * wildcard rows; the bounded WAITING timeout and the stray-timeout no-ops;
+ * the DONE/FAILED revival; the illegal-pair no-op rule and its
+ * distinguishability from a real transition; the "only state moves" purity
+ * rule; the full happy-path sequence; NULL and out-of-range safety; and the
+ * name/validity helpers.
  *
  * Exhaustiveness is the point of this suite, so it is enforced structurally:
  * test_every_cell_explicitly names all 42 cells as literals, test_full_table
@@ -75,16 +76,17 @@ static const int EXPECT[JOB_STATE_COUNT][JOB_EVENT_COUNT][2] = {
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 	},
-	/* WAITING: PHASE_DONE completes the job. TIMEOUT is NOT a wildcard like
-	 * DENIED/INTERRUPTED — an unbounded wait is left to the caller's claim
-	 * expiry (claimExpiry on the record), so a live job never fails itself. */
+	/* WAITING: PHASE_DONE completes the job. TIMEOUT fails it — a wait on a
+	 * machine run is bounded by the caller (the laundromat's own
+	 * BRAIN_MACHINE_WAIT_SLACK), and without an in-table escape a machine
+	 * that never delivers its phase wake would hang the job forever. */
 	{
 		{ JOB_WAITING, JOB_ACTION_NONE },
 		{ JOB_WAITING, JOB_ACTION_NONE },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
 		{ JOB_DONE, JOB_ACTION_FINISH },
 		{ JOB_FAILED, JOB_ACTION_FINISH },
-		{ JOB_WAITING, JOB_ACTION_NONE },
+		{ JOB_FAILED, JOB_ACTION_FINISH },
 	},
 	/* DONE: terminal until a new START revives it into CLAIMED. */
 	{
@@ -126,8 +128,7 @@ static void expectCell(int from, int event, int to, int action,
 }
 
 /* Walk every (state, event) cell against the independent EXPECT copy: the
- * returned state/action and the state written back all match, and no action
- * carries a payload (this module drives state and action only). */
+ * returned state/action and the state written back all match. */
 static void test_full_table(void)
 {
 	int s;
@@ -147,15 +148,6 @@ static void test_full_table(void)
 						      "cell action");
 			TEST_ASSERT_EQUAL_INT_MESSAGE(EXPECT[s][e][0], j.state,
 						      "write-back");
-			/* No action of this module carries a payload. */
-			TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.targetX, "payload x");
-			TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.targetZ, "payload z");
-			TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.step, "payload step");
-			TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.waitReason,
-						      "payload reason");
-			TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.0f, 0.0f,
-							 r.waitSeconds,
-							 "payload seconds");
 		}
 	}
 }
@@ -234,8 +226,8 @@ static void test_every_cell_explicitly(void)
 		   "WAITING+PHASE_DONE -> DONE/FINISH");
 	expectCell(JOB_WAITING, JOB_INTERRUPTED, JOB_FAILED, JOB_ACTION_FINISH,
 		   "WAITING+INTERRUPTED -> FAILED/FINISH");
-	expectCell(JOB_WAITING, JOB_TIMEOUT, JOB_WAITING, JOB_ACTION_NONE,
-		   "WAITING+TIMEOUT -> no-op (claim expiry is the caller's)");
+	expectCell(JOB_WAITING, JOB_TIMEOUT, JOB_FAILED, JOB_ACTION_FINISH,
+		   "WAITING+TIMEOUT -> FAILED/FINISH (bounded wait expired)");
 
 	/* --- row DONE ------------------------------------------------------- */
 	expectCell(JOB_DONE, JOB_START, JOB_CLAIMED, JOB_ACTION_CLAIM,
@@ -303,8 +295,8 @@ static void test_illegal_pair_is_a_no_op(void)
 			j.state = s;
 			r = jobStep(&j, e);
 			if (EXPECT[s][e][1] == JOB_ACTION_NONE) {
-				/* A no-op: state echoed, no action, zeroed
-				 * payload, and the record's state untouched. */
+				/* A no-op: state echoed, no action, and the
+				 * record's state untouched. */
 				TEST_ASSERT_EQUAL_INT_MESSAGE(s, r.state,
 							      "noop state");
 				TEST_ASSERT_EQUAL_INT_MESSAGE(JOB_ACTION_NONE,
@@ -312,10 +304,6 @@ static void test_illegal_pair_is_a_no_op(void)
 							      "noop action");
 				TEST_ASSERT_EQUAL_INT_MESSAGE(s, j.state,
 							      "noop unchanged");
-				TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.targetX,
-							      "noop payload");
-				TEST_ASSERT_EQUAL_INT_MESSAGE(0, r.step,
-							      "noop payload");
 			}
 		}
 	}
@@ -370,6 +358,135 @@ static void test_wildcard_failure_rows(void)
 					      "interrupted");
 		TEST_ASSERT_EQUAL_INT_MESSAGE(JOB_FAILED, j.state,
 					      "interrupted write-back");
+	}
+}
+
+/* A job parked on a machine run can time out. TIMEOUT is not a wildcard — it
+ * lands only where a deadline is actually running: INTERACTING (the activity's
+ * own runtime) and WAITING (the bounded machine-run wait the caller enforces,
+ * as the laundromat's BRAIN_MACHINE_WAIT_SLACK does today). Everywhere else
+ * there is no deadline to expire, so TIMEOUT is a no-op.
+ *
+ * Without the WAITING cell a machine that never delivers its phase wake would
+ * hang the job — and the agent holding it — forever. */
+static void test_waiting_times_out(void)
+{
+	Job j;
+	JobResult r;
+
+	/* WAITING: the deadline expires -> FAILED / FINISH. */
+	jobInit(&j, JOB_USE_MACHINE);
+	jobStep(&j, JOB_START);
+	jobStep(&j, JOB_ARRIVED);
+	jobStep(&j, JOB_ARRIVED);
+	r = jobStep(&j, JOB_PHASE_DONE);
+	TEST_ASSERT_EQUAL_INT(JOB_WAITING, r.state);
+	r = jobStep(&j, JOB_TIMEOUT);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_FINISH, r.action);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, j.state);
+
+	/* INTERACTING: the activity's own runtime expires -> the same cell
+	 * shape, and it was already pinned. */
+	jobInit(&j, JOB_USE_MACHINE);
+	jobStep(&j, JOB_START);
+	jobStep(&j, JOB_ARRIVED);
+	jobStep(&j, JOB_ARRIVED);
+	r = jobStep(&j, JOB_TIMEOUT);
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_FINISH, r.action);
+
+	/* Every other state: TIMEOUT is a no-op, so a stray wake can never
+	 * kill a job that is waiting on nothing. Swept over all seven
+	 * states, with the two deadline states named explicitly. */
+	{
+		int s;
+
+		for (s = 0; s < JOB_STATE_COUNT; s++) {
+			int hasDeadline = (s == JOB_INTERACTING ||
+					   s == JOB_WAITING);
+
+			jobInit(&j, JOB_USE_MACHINE);
+			j.state = s;
+			r = jobStep(&j, JOB_TIMEOUT);
+			if (hasDeadline) {
+				TEST_ASSERT_EQUAL_INT_MESSAGE(JOB_FAILED,
+							      r.state,
+							      "timeout fails");
+				TEST_ASSERT_EQUAL_INT_MESSAGE(JOB_ACTION_FINISH,
+							      r.action,
+							      "timeout fails");
+			} else {
+				TEST_ASSERT_EQUAL_INT_MESSAGE(s, r.state,
+							      "stray timeout");
+				TEST_ASSERT_EQUAL_INT_MESSAGE(JOB_ACTION_NONE,
+							      r.action,
+							      "stray timeout");
+			}
+		}
+	}
+
+	/* And the failed job is revivable, like any other. */
+	jobInit(&j, JOB_USE_MACHINE);
+	j.state = JOB_FAILED;
+	r = jobStep(&j, JOB_START);
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_CLAIM, r.action);
+}
+
+/* Ruling 3 check: JobResult is now {state, action}, so the action is the whole
+ * output of this module. It has to carry something the resulting state does
+ * not — the action is an EDGE ("do this now"), the state a LEVEL ("you are
+ * here"). The proof is that the SAME state reached by different events reports
+ * different actions: a caller keying off the state alone could not tell a job
+ * that has just been told to walk from a job that has been walking for fifty
+ * ticks. */
+static void test_actions_are_edge_signals(void)
+{
+	Job j;
+	JobResult r;
+
+	/* The edge into WALKING speaks; the ticks after it do not. */
+	jobInit(&j, JOB_WANDER);
+	jobStep(&j, JOB_START);
+	r = jobStep(&j, JOB_ARRIVED);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_MOVE_TO, r.action);
+
+	r = jobStep(&j, JOB_PHASE_DONE);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_NONE, r.action);
+
+	/* The next edge speaks again, and only once. */
+	r = jobStep(&j, JOB_ARRIVED);
+	TEST_ASSERT_EQUAL_INT(JOB_INTERACTING, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_BEGIN_ACTIVITY, r.action);
+	r = jobStep(&j, JOB_ARRIVED);
+	TEST_ASSERT_EQUAL_INT(JOB_INTERACTING, r.state);
+	TEST_ASSERT_EQUAL_INT(JOB_ACTION_NONE, r.action);
+
+	/* Every action is emitted by at least one cell — none went dead when the
+	 * payload came out. */
+	{
+		int emitted[6];
+		int s;
+		int e;
+		int a;
+
+		for (a = 0; a < 6; a++)
+			emitted[a] = 0;
+		for (s = 0; s < JOB_STATE_COUNT; s++) {
+			for (e = 0; e < JOB_EVENT_COUNT; e++) {
+				int action = EXPECT[s][e][1];
+
+				TEST_ASSERT_TRUE(action >= 0 && action < 6);
+				emitted[action] = 1;
+			}
+		}
+		for (a = 0; a < 6; a++) {
+			TEST_ASSERT_EQUAL_INT_MESSAGE(1, emitted[a],
+						      jobActionName(a));
+		}
 	}
 }
 
@@ -647,7 +764,9 @@ void run_test_job(void)
 	RUN_TEST(test_every_cell_explicitly);
 	RUN_TEST(test_no_uncounted_cells);
 	RUN_TEST(test_illegal_pair_is_a_no_op);
+	RUN_TEST(test_actions_are_edge_signals);
 	RUN_TEST(test_wildcard_failure_rows);
+	RUN_TEST(test_waiting_times_out);
 	RUN_TEST(test_revive_from_done_and_failed);
 	RUN_TEST(test_full_sequence);
 	RUN_TEST(test_step_touches_only_the_state);
