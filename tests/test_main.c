@@ -88,6 +88,7 @@ void run_test_element_overlay(void);
 void run_test_toast(void);
 void run_test_need(void);
 void run_test_agent(void);
+void run_test_job(void);
 
 
 int main(void)
@@ -132,5 +133,6 @@ int main(void)
 	run_test_toast();
 	run_test_need();
 	run_test_agent();
+	run_test_job();
 	return UNITY_END();
 }

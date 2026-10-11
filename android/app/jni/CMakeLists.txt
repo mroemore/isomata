@@ -63,6 +63,7 @@ set(ISOMATA_SRC
 	../../../src/sim/brain.c
 	../../../src/agents/need.c
 	../../../src/agents/agent.c
+	../../../src/agents/job.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c
 	../../../src/ui/layout.c
