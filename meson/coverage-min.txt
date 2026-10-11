@@ -311,39 +311,66 @@ src/sim/brain.c			80
 # AGENT_MAX_DT clamp, NaN dt and the unknown-role skip.
 src/agents/need.c		100
 # Task 4: agent.c gains the BAND REFRESH and the self-generated FILL, and the
-# switch rule now consumes a computed band rather than a hand-set one.
-# Measured 158/160 branches, 245/245 lines, 17/17 functions — so the floor
-# drops from 100 to 98 rather than staying at a figure the change no longer
-# supports. Exactly TWO arms are unreachable, and both are unreachable BY
-# CONSTRUCTION rather than untested:
+# switch rule now consumes a computed band rather than a hand-set one. The
+# floor stays at 100 — it is a RATCHET and is never lowered. Measured
+# 154/154 branches, 249/249 lines, 17/17 functions.
 #
-#   - `if (fill != JOB_INVALID)` going false. The fill only fires on a board
-#     with liveCount == 0, and ACT_WANDER is in place with a zero cooldown,
-#     so an empty board ALWAYS has at least one candidate. Closing this arm
-#     needs a catalogue with no always-available activity, which would be a
-#     worse catalogue.
-#   - boardClaim refusing a just-enqueued fill. The job was enqueued on an
-#     empty board one statement earlier and nothing runs between the two, so
-#     nobody can have claimed it. The guard is KEPT anyway: it is the same
-#     race agentsUpdate's own step 5 guards, and a refused claim must leave
-#     the agent idle rather than half-attached to a job it does not hold.
+# Two arms were open when this module first landed with the fill, and both are
+# CLOSED rather than floored:
+#
+#   - `if (fill != JOB_INVALID)` — the "nothing available to do" arm. Taken by
+#     test_update_does_not_fill_when_every_fill_is_cooling_down: every
+#     catalogue row is held off cooldown, so agentBestFill has no candidate and
+#     the tick must enqueue nothing and stay idle.
+#
+#   - the boardClaim guard around the generated fill. This one is NOT a
+#     coverage hole and cannot be made one: it is unreachable by
+#     construction, so the guard was REMOVED and the invariant written down
+#     instead, on the same principle the other dead checks in this file were
+#     removed. boardEnqueue forces `claimer` to JOB_INVALID (board.c),
+#     boardClaim proceeds only from that state and refuses only on a handle
+#     naming no live job or a job somebody already holds (board.c), and the
+#     fill is enqueued on a board whose liveCount is 0 one statement earlier.
+#     The contended setup would need a job already on the board — which is
+#     exactly what makes liveCount non-zero and closes the gate — while the
+#     other refusal needs all BOARD_MAX slots alive, i.e. liveCount ==
+#     BOARD_MAX. The invariant is TESTED, not merely asserted:
+#     test_update_generates_a_fill_on_an_empty_board checks the claimer is
+#     this agent's, which is what would break first.
 #
 # Everything else is taken: the band refresh on both boards (personal, and the
 # shared board refreshed immediately before its scan), the broken-job DENIED
 # path (a job whose activity no row claims), the in-place start that never
-# routes, the cooldown stamp on DONE and NOT on FAILED, the empty-board fill
-# generation with its claim and start, and the fill gate's own condition.
-src/agents/agent.c		98
+# routes, the cooldown stamp on DONE and NOT on FAILED, and the empty-board
+# fill generation with its claim and start.
+src/agents/agent.c		100
 # Task 4: the activity catalogue and the urgency fold — the module that makes
 # "an activity is never primary or secondary" true in code.
-# Measured 90/91 branches, 126/127 lines, 13/13 functions, so the floor is 98
-# and not 100. The ONE uncovered arm is the skill-gate skip inside the fill
-# scan, and it is unreachable through the shipped catalogue: the only gated row
-# is ACT_TIDY at skillMin 0, and an agent's skills are uint16_t, so the gate is
-# open for every agent and can never close. activitySkillOpen's closed path IS
-# tested directly, against a raised floor, so the gate's logic is pinned even
-# though the filter above it cannot fire yet; a future row with skillMin > 0
-# closes this arm.
+# Measured 91/92 branches, 126/127 lines, 13/13 functions, so the floor is 98.
+# This is a FIRST measurement for a new module, not a lowered ratchet.
+#
+# THE ONE UNCOVERED ARM IS INTENTIONAL DEAD CODE. This is the exact condition
+# that closes it, so nobody has to guess:
+#
+#   arm      : the `continue` in agentBestFill when !activitySkillOpen(a, act)
+#   test     : `!activitySkillOpen(...)` taking its TRUE side
+#   closes it: a catalogue row declaring `skillGate >= 0 && skillMin > 0`
+#              TOGETHER WITH an agent whose skills[skillGate] is below it.
+#
+# Neither half holds today. The only gated row is ACT_TIDY, at the skillMin
+# the brief pins (0), and Agent.skills[] is uint16_t, so `skills[i] >= 0.0f`
+# is true for every value an agent can physically hold. Giving a row a real
+# minimum purely to close the arm would be papering over: no code in the tree
+# writes skills[] at all (every agent is born at zero and there is no setter
+# yet), so such a row would be unavailable to EVERY agent forever —
+# contradicting both the brief's pin and the spec's "low competency never
+# disqualifies an agent, so a bad hire can't deadlock the sim". The branch is
+# left in place because a future staffing task that raises skills is exactly
+# when it starts meaning something.
+#
+# activitySkillOpen's CLOSED path IS tested directly, against a raised floor on
+# a copied row, so the gate's logic is pinned even though the filter above it
+# cannot fire yet.
 #
 # Everything else is taken: the catalogue walk (a hit, and the miss that is the
 # Review Focus #5 NULL), the out-of-range index, the max-not-sum fold with its

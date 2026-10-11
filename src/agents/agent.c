@@ -558,36 +558,51 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 				Job fj;
 				int h;
 
-				/* Neither call below can fail, and neither is
-				 * defended against, because both preconditions
-				 * are this block's own invariants:
-				 * agentBestFill returns only ids the catalogue
-				 * actually has, so activityBindJob cannot
-				 * refuse; and liveCount == 0 is exactly the
-				 * condition that means the board has room. A
-				 * guard here would be a branch that can never
-				 * be false, which is worse than the
-				 * invariant being stated. */
+				/* NONE OF THESE THREE CALLS CAN FAIL, and none is
+				 * guarded, because every precondition is this
+				 * block's own invariant:
+				 *
+				 *   activityBindJob — agentBestFill returns
+				 *   only ids the catalogue actually has.
+				 *
+				 *   boardEnqueue — liveCount == 0 is precisely
+				 *   the condition that means the board has
+				 *   room; a refusal needs all BOARD_MAX slots
+				 *   alive, which is liveCount == BOARD_MAX.
+				 *
+				 *   boardClaim — the job was enqueued on an
+				 *   EMPTY board one statement ago, and
+				 *   boardEnqueue forces `claimer` to
+				 *   JOB_INVALID (board.c), which is the only
+				 *   state from which boardClaim proceeds.
+				 *   Its two refusals are a handle naming no
+				 *   live job, and a job somebody already
+				 *   holds; neither can hold here. A contended
+				 *   setup would need a job on the board —
+				 *   which is exactly what makes liveCount
+				 *   non-zero and the gate false.
+				 *
+				 * A guard would be a branch that can never be
+				 * false, which is worse than the invariant
+				 * being stated — and the invariant is TESTED:
+				 * test_update_generates_a_fill_on_an_empty_
+				 * board asserts the claimer is this agent's,
+				 * which is what would break first. */
 				activityBindJob(&fj, fill);
 				fj.band = jobUrgency(a, &fj);
 				h = boardEnqueue(&a->personal, &fj, JOB_PRIO_FILL);
-				/* Enqueued AND claimed in the same breath, exactly
-				 * as a job taken off a board is: a fill the agent
-				 * had to wait a tick for would be a visible
-				 * stall in the running demo. The claim is guarded
-				 * because this IS the race the board's contract
-				 * is about, and a refused claim must leave the
-				 * agent idle rather than half-attached. */
-				if (boardClaim(&a->personal, h, a->id)) {
-					a->engagedJob = h;
-					a->engagedShared = false;
-					a->dwellLeft = AGENT_MIN_DWELL;
-					agentStartJob(a, ents,
-						       boardJob(&a->personal, h),
-						       map);
-					decisions++;
-					g_stats.agentDecisions++;
-				}
+				/* Enqueued AND claimed in the same breath,
+				 * exactly as a job taken off a board is: a fill
+				 * the agent had to wait a tick for would be a
+				 * visible stall in the running demo. */
+				boardClaim(&a->personal, h, a->id);
+				a->engagedJob = h;
+				a->engagedShared = false;
+				a->dwellLeft = AGENT_MIN_DWELL;
+				agentStartJob(a, ents,
+					       boardJob(&a->personal, h), map);
+				decisions++;
+				g_stats.agentDecisions++;
 			}
 		}
 

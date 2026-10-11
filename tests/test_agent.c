@@ -1596,6 +1596,34 @@ static void test_update_fills_with_something_the_cooldown_allows(void)
 	worldFree(w);
 }
 
+/* An idle agent with an EMPTY board, but for whom nothing is available to do,
+ * enqueues nothing and stays idle. Cooldowns are what make a fill unavailable,
+ * so this is the SUPPRESSION path rather than a missing one. */
+static void test_update_does_not_fill_when_every_fill_is_cooling_down(void)
+{
+	TickWorld *w = &g_world;
+	int i;
+
+	worldInit(w, 1, 1);
+	/* Every activity held off cooldown far into the future. The store is
+	 * the agent's own and this is the very field activityMarkDone writes;
+	 * it is set directly only because ACT_WANDER's cooldown is ZERO, so
+	 * marking it done would stamp readyAt == now and leave it available —
+	 * correct (a zero cooldown never suppresses) but no use for making
+	 * the WHOLE catalogue unavailable. */
+	for (i = 0; i < activitiesCount(); i++)
+		w->a->cooldown.readyAt[activitiesAt(i)->id] = 1.0e9f;
+
+	runTicks(w, 30, 0.1f);
+
+	/* Idle, and still idle: an empty board is not a licence to repeat a
+	 * suppressed activity, and the agent does not busy itself inventing
+	 * work it has already decided against. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(0, w->a->personal.liveCount);
+	worldFree(w);
+}
+
 /* A job whose activity id no row claims is a BROKEN JOB, and the tick fails
  * it rather than leaving it on the board to be compared against a margin it
  * can never win. This is Review Focus #5 end to end: the -1 out of jobUrgency
@@ -1785,6 +1813,7 @@ void run_test_agent(void)
 	RUN_TEST(test_update_denies_an_unresolvable_target);
 	RUN_TEST(test_update_generates_a_fill_on_an_empty_board);
 	RUN_TEST(test_update_fills_with_something_the_cooldown_allows);
+	RUN_TEST(test_update_does_not_fill_when_every_fill_is_cooling_down);
 	RUN_TEST(test_update_fails_a_job_whose_activity_is_unknown);
 	RUN_TEST(test_update_denies_a_void_tile);
 	RUN_TEST(test_update_is_not_arrived_on_a_queued_step);
