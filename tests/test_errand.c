@@ -151,7 +151,6 @@ static void test_template_rows_are_well_formed(void)
 		TEST_ASSERT_TRUE(t->priorityFloor >= 0);
 		TEST_ASSERT_TRUE(t->priorityFloor < JOB_PRIO_COUNT);
 		/* A template that does nothing is not a goal. */
-		fprintf(stderr, "DBG tmpl %d serves %g %g %g %g %g %g count %d\n", t->id, (double)t->serves[0], (double)t->serves[1], (double)t->serves[2], (double)t->serves[3], (double)t->serves[4], (double)t->serves[5], t->stepCount);
 		TEST_ASSERT_TRUE(t->stepCount <= ERRAND_MAX_STEPS);
 		for (n = 0; n < NEED_COUNT; n++) {
 			TEST_ASSERT_TRUE(t->serves[n] >= 0.0f);

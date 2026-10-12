@@ -18,19 +18,41 @@
  * AN ERRAND NEVER COMPETES FOR ATTENTION. It only enqueues jobs onto the
  * agent's own board (agents/board.h), and those jobs are arbitrated by the
  * want ladder exactly like everything else — which is why a world-seeded
- * errand is adopted AT ITS FLOOR and never forced: the floor is recorded in
- * the errand and handed to boardEnqueue as a PROVENANCE class, which board.h
- * documents may decide who may claim a job and may never decide its order.
- * The floor is not a priority the errand can push above the ladder with.
+ * errand is adopted AT ITS FLOOR and never forced: adoption writes the floor
+ * and NOTHING else, so the errand's jobs are scored by the same jobUrgency
+ * fold as everything else and there is no path by which a world event reaches
+ * the arithmetic at all. (The floor itself governs nothing today: the board
+ * validates it and does not store it. See "WHAT priorityFloor DOES TODAY".)
  *
  * THE TWO PRODUCERS LAND THE SAME WAY. errandAdoptByNeed scans the templates
  * registered for the agent's role and takes the one whose most pressing
  * served need is banded highest (agents/need.h), refusing one that is already
  * active. errandOfferToAgent is the world-seeded producer: the world hands an
- * agent a template id and it is adopted on the same terms, at the template's
- * declared priorityFloor. Neither producer can put an errand in front of a
- * more urgent want; they only decide WHETHER a new row appears in the agent's
- * errand list.
+ * agent a template id and it is adopted on the same terms, carrying the
+ * template's declared priorityFloor. Neither producer can put an errand in
+ * front of a more urgent want; they only decide WHETHER a new row appears in
+ * the agent's errand list.
+ *
+ * WHAT priorityFloor DOES TODAY, precisely, because the board does not keep it.
+ * It is RECORDED on the errand, it is VALIDATED on the way in (an unknown
+ * class is refused, so a broken template is caught rather than carried), and
+ * it is then HANDED to boardEnqueue, which validates it and does not store it
+ * (agents/board.h: "boardEnqueue's `priority` is validated and not stored:
+ * nothing may order by it"). So today the floor governs nothing at all: not
+ * ordering, not claiming, not admission.
+ *
+ * That is deliberate, and the "never forced" contract does NOT depend on it.
+ * What makes a world-seeded errand lose like everything else is that adoption
+ * writes NOTHING ELSE — no need, no panic, no job, no band — so its first job
+ * is scored by the same jobUrgency fold as every other job and wins or loses
+ * on the agent's own needs. The floor is the SEAT that rule sits in: the place
+ * the declared class is recorded so a future board can act on it. Task 6 is
+ * that board work (one shared board, exclusive claims, a provenance gate on
+ * who may claim what), and it is where the floor starts MEANING something.
+ * Until then, treat priorityFloor as data about the errand, not as a
+ * mechanism: do not go looking for a claim right that does not exist, and do
+ * not read "adopted at JOB_PRIO_ASSIGNED" as "outranks an errand-class
+ * errand".
  *
  * A STEP IS A JOB OR A GATE. STEP_JOB enqueues one job of the step's jobKind
  * and waits for it to end: DONE advances the errand, FAILED re-selects (the
@@ -230,12 +252,12 @@ typedef struct ErrandTemplate {
 	float serves[NEED_COUNT];
 	ErrandStep steps[ERRAND_MAX_STEPS];
 	int stepCount;
-	/* THE DECLARED FLOOR, and the whole of the world-seeded contract. It
-	 * is a board provenance class (agents/board.h): recorded on the
-	 * errand and handed to boardEnqueue, which decides who MAY claim
-	 * the job and never how it orders. A world event that offers an
-	 * errand therefore lands on the ladder at its floor instead of on
-	 * top of it. */
+	/* THE DECLARED FLOOR: a board provenance class (agents/board.h)
+	 * recorded on the errand and handed to boardEnqueue, which VALIDATES
+	 * it and does not store it — so it decides nothing yet, and the
+	 * "never forced" contract rests on adoption writing nothing else
+	 * rather than on this. It is the seat for task 6's provenance gate;
+	 * see the header note. */
 	int priorityFloor;
 	bool worldSeeded;	/* offered by the world, not chosen by need */
 } ErrandTemplate;
@@ -340,11 +362,12 @@ int errandAdoptByNeed(struct Agent *a, float now);
  *
  * "Never forced" is the whole contract and it lives in what this function
  * does NOT do: it does not write a need, does not claim a job, and does not
- * touch the ladder. The errand it creates carries t->priorityFloor into every
- * job it enqueues as a provenance class, so it wins or loses on the same band
- * comparison as the agent's own filler — an errand offered at
- * JOB_PRIO_ASSIGNED loses to an urgent wash exactly as a job from the shared
- * board would. */
+ * touch the ladder. The errand's jobs are therefore scored by the same
+ * jobUrgency fold as the agent's own filler and win or lose on the same band
+ * comparison — an errand offered at JOB_PRIO_ASSIGNED loses to an urgent wash
+ * exactly as a job from the shared board would. The declared floor rides along
+ * to boardEnqueue and is discarded there (see "WHAT priorityFloor DOES
+ * TODAY"); it is what task 6 will read, not what makes the offer lose. */
 int errandOfferToAgent(struct Agent *a, int templateId, float now);
 
 /* The live errand on `a` — the first ERRAND_ACTIVE entry — or NULL. This is
@@ -423,9 +446,16 @@ bool errandRewindToJob(Errand *e, int jobKind);
  *   STEP_JOB, nothing bound yet  -> return. The caller binds the target it
  *     found in the world; an unbound target is never guessed at.
  *   STEP_JOB, nothing enqueued   -> bind a Job of the step's jobKind from
- *     the catalogue (agents/activity.h), bind the step's tile as its target,
- *     stamp the band COMPUTED from the needs it serves, and enqueue it on `b`
- *     at the errand's recorded priorityFloor.
+ *     the catalogue (agents/activity.h), stamp the band COMPUTED from the
+ *     needs it serves, and enqueue it on `b` at the errand's recorded
+ *     priorityFloor. THE JOB'S TILE IS THE ERRAND'S CURRENT BINDING, not the
+ *     step's own: steps share a binding on purpose (the collect step collects
+ *     from the machine the gate waited on), so a job step that inherits a
+ *     binding meant for a different step is a real possibility — and it is
+ *     the caller's job to UNTIE it (sim/brain.c's brainSupplyTarget checks
+ *     the machine's kind against the step's, which is what stops the second
+ *     USE_MACHINE step walking to the first one's washer). This module does
+ *     not untie it: it has no idea what a machine is.
  *   STEP_JOB, job live           -> return; agentsUpdate is running it.
  *   STEP_JOB, job DONE           -> retire it, step++, clear the handle and
  *     the step's failure count. At the last step the errand is ERRAND_DONE.

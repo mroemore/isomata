@@ -7,10 +7,10 @@ frames are the headless `emulator-5554`. The capture script is
 this file). See the task report
 `../../../.superpowers/sdd/2026-10-11-isomata-agent-framework/task-5-report.md`.
 
-The APK published for this task: **`isomata_20261012_005329_387409.apk`**
-(`http://localhost:8903/isomata/`), built from HEAD `d33283c` with
-`JAVA_HOME=~/.local/opt/jdk-17 ./gradlew assembleDebug` (the box's default JDK is
-11 and the Android Gradle Plugin needs 17).
+The APK published for this task: **`isomata_20261012_005329_387409.apk`** —
+download page `https://appk.lynsand.tricky.click/isomata/` — built from HEAD
+`d33283c` with `JAVA_HOME=~/.local/opt/jdk-17 ./gradlew assembleDebug` (the box's
+default JDK is 11 and the Android Gradle Plugin needs 17).
 
 ## What the story is, in log lines
 

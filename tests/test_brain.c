@@ -580,6 +580,116 @@ static void test_the_patience_budget_is_spent_only_on_blocked_time(void)
 	destroyVoxmap(map);
 }
 
+/* A MACHINE THAT BREAKS BETWEEN ITS RUN FINISHING AND THE ARRIVAL. The
+ * collect leg's own guard: the customer is walking back to a machine that is
+ * DONE and theirs, and something breaks it in the few seconds of the walk. The
+ * errand then goes back to the USE_MACHINE step that produced the load rather
+ * than walking on to a step it cannot finish — the T23 driver's "re-drive the
+ * whole plan task", expressed as data.
+ *
+ * This is the one arm the round-1 report had to call unreachable-by-
+ * arrangement. It is not: it needs the break timed to the walk, which is
+ * exactly what this scenario does (break on the MACHINE_DONE that sends the
+ * customer back). */
+static void test_a_machine_broken_during_the_collect_walk_rewinds(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	int n = 0;
+	int step;
+	int broke = 0;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 6, 0, 3, 1.0f);
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 4, 0, 2, 1.0f);
+	(void)simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+
+	/* Step to the run finishing, which sends the customer walking back. */
+	for (step = 0; step < MAX_STEPS; step++) {
+		step1(&w, &t, DT);
+		if (countKind(&t, BRAIN_EV_MACHINE_DONE) > 0) {
+			broke = simBreakMachine(&w, 0);
+			break;
+		}
+	}
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_MACHINE_DONE));
+	TEST_ASSERT_TRUE(broke);
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_BROKEN,
+			      machineGetConst(&w.machines, 0)->state);
+	/* Nothing collected from a broken machine. */
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_COLLECT));
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	if (getenv("BRAIN_DUMP") != NULL) {
+		fprintf(stderr, "== collect-walk break ==\n");
+		dumpStory(&t);
+	}
+	/* It washed again on the other washer and left clean dry: the wash was
+	 * lost, the errand was not. */
+	TEST_ASSERT_TRUE(countKind(&t, BRAIN_EV_RUN_START) >= 2);
+	TEST_ASSERT_EQUAL_INT(2, countKind(&t, BRAIN_EV_GARMENT));
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_ABANDON));
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_DEPART));
+	{
+		int d = findKindFrom(&t, BRAIN_EV_DEPART, 0);
+
+		TEST_ASSERT_EQUAL_INT(GARMENT_DRY_CLEAN, t.ev[d].garment);
+	}
+	/* And it never went back to the broken one — the selection after the
+	 * break is a different washer, and so is every choice after it. */
+	{
+		int done = findKindFrom(&t, BRAIN_EV_MACHINE_DONE, 0);
+		int i;
+
+		TEST_ASSERT_TRUE(done >= 0);
+		for (i = done + 1; i < t.count; i++)
+			if (t.ev[i].kind == BRAIN_EV_TASK_BEGIN)
+				TEST_ASSERT_TRUE(t.ev[i].machine != 0);
+	}
+	TEST_ASSERT_EQUAL_INT(MACHINE_NO_OWNER,
+			      machineGetConst(&w.machines, 0)->owner);
+	assertMachinesReleased(&w, 1);
+	destroyVoxmap(map);
+}
+
+/* THE SLACK ORDERING, PINNED. agents/errand.h calls the relationship between
+ * a gate's bound and the leave window load-bearing, and it is: a gate's bound
+ * must expire BEFORE the patience budget does, or a machine that will never
+ * finish ends as a WALK OUT rather than as the JOB_TIMEOUT re-plan the bound
+ * exists to produce. The bound is `run + BRAIN_MACHINE_WAIT_SLACK` and the
+ * window is ERRAND_LEAVE_THRESHOLD_WINDOW, so the ordering is a statement
+ * about a machine's RUN LENGTH:
+ *
+ *     run >  ERRAND_LEAVE_THRESHOLD_WINDOW - BRAIN_MACHINE_WAIT_SLACK
+ *
+ * A run below that inverts it silently — no compile error, no test failure, no
+ * changed log line; the customer just walks out where it used to re-plan. The
+ * demo's run is 30 s and the slack 30 s against a 45 s window, so the ordering
+ * holds with 15 s to spare. This is the test that says so, and it is why the
+ * slack cannot be shortened again (or the run shortened) without this going
+ * red.
+ *
+ * The scenario suites use deliberately SHORT runs (0.1 s), which sit well
+ * inside the window — that is what makes the JOB_TIMEOUT path reachable inside
+ * a test rather than forty-five seconds later. */
+static void test_a_gate_bound_outlasts_the_patience_window(void)
+{
+	/* The shipped demo run holds the ordering. */
+	TEST_ASSERT_TRUE(30.0f + (float)BRAIN_MACHINE_WAIT_SLACK >
+			 ERRAND_LEAVE_THRESHOLD_WINDOW);
+	/* ...and the same fact stated the other way round, so the margin is
+	 * visible rather than implied: the run length the ordering needs is the
+	 * window less the slack. */
+	TEST_ASSERT_TRUE(30.0f >
+			 ERRAND_LEAVE_THRESHOLD_WINDOW -
+				 (float)BRAIN_MACHINE_WAIT_SLACK);
+}
+
 /* THE DEADLOCK ORACLE. A customer that has claimed a machine and is waiting
  * for its run gives the errand up when its patience runs out — and the machine
  * MUST come back. A washer left claimed by somebody who has walked out is
@@ -704,13 +814,30 @@ static void test_a_preempted_use_machine_releases_its_claim(void)
 	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_RUN_START));
 
 	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
-	/* And the customer still finishes its laundry on another washer. */
+	/* ...and the customer walks out with the load still DIRTY. That is the
+	 * honest end of THIS arrangement, not a shortfall in the driver: the
+	 * errand blacklists the washer whose job was preempted, and this
+	 * scenario has one washer and one dryer, so the errand has nowhere left
+	 * to turn — the customer waits it out, runs out of patience and leaves.
+	 * (The "loses a washer and finishes on another" story is covered by
+	 * test_integration_break_mid_run_replans, which has a second washer.)
+	 * What this test is for is the RELEASE, one tick after the preemption:
+	 * a machine must not stay claimed by a customer whose job was taken off
+	 * them. */
 	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_ABANDON));
 	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_DEPART));
+	{
+		int d = findKindFrom(&t, BRAIN_EV_DEPART, 0);
+
+		TEST_ASSERT_TRUE(d >= 0);
+		TEST_ASSERT_EQUAL_INT(GARMENT_DIRTY, t.ev[d].garment);
+	}
 	if (getenv("BRAIN_DUMP") != NULL) {
 		fprintf(stderr, "== preempt ==\n");
 		dumpStory(&t);
 	}
+	/* The washer the customer walked away from is back on the free list:
+	 * somebody else can use it. */
 	assertMachinesReleased(&w, 0);
 	destroyVoxmap(map);
 }
@@ -1368,7 +1495,75 @@ static void test_a_blocked_customer_announces_the_fill_it_takes(void)
 	destroyVoxmap(map);
 }
 
-/* A CUSTOMER WHOSE ERRAND ENDED WITHOUT A LEAVE STEP STILL WALKS OUT. The
+/* THE HEADER CLAIM, MADE TRUE. brain.h says there is no path out of a machine
+ * that does not go through machineRelease. This is that claim as a test: a
+ * customer whose errand goes TERMINAL while it still holds a machine must leave
+ * the machine behind FREE, every time, whatever ended the errand.
+ *
+ * The errand is ended from the outside (retiring the job out from under it and
+ * stepping the errand terminal) rather than by nine denied jobs on the collect
+ * step, because the invariant under test is "a terminal errand releases", not
+ * "the nine-denial scenario is reachable" — the shipped templates make that
+ * path very unlikely, and a test that depended on it would be a test of
+ * luck. What matters here is the shape of the walk out: it is reachable, and it
+ * is the one path that used to take no release at all. */
+static void test_a_terminal_errand_releases_the_machine_it_holds(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	Agent *a;
+	Errand *e;
+	const Machine *m;
+	int n = 0;
+	int step;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 1.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+
+	/* Step to the point where the fee is paid, so the machine is CLAIMED and
+	 * held by this customer. */
+	for (step = 0; step < MAX_STEPS; step++) {
+		step1(&w, &t, DT);
+		if (countKind(&t, BRAIN_EV_PAY) > 0)
+			break;
+	}
+	TEST_ASSERT_TRUE(countKind(&t, BRAIN_EV_PAY) > 0);
+	m = machineGetConst(&w.machines, 0);
+	TEST_ASSERT_NOT_NULL(m);
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_CLAIMED, m->state);
+	TEST_ASSERT_EQUAL_INT(h, m->owner);
+	a = agentOfCustomer(&w, h);
+	TEST_ASSERT_NOT_NULL(a);
+	e = errandActive(a);
+	TEST_ASSERT_NOT_NULL(e);
+	/* The errand's job is the collect step now, so the binding survives the
+	 * errand going terminal: the errand still NAMES the machine. */
+
+	/* End the errand from the outside, with the claim held. */
+	TEST_ASSERT_TRUE(boardRetire(&a->personal, e->jobHandle));
+	e->jobHandle = ERRAND_INVALID;
+	e->state = ERRAND_FAILED;
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	/* The customer still went, and it left the machine behind. */
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_DEPART));
+	m = machineGetConst(&w.machines, 0);
+	TEST_ASSERT_NOT_NULL(m);
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_FREE, m->state);
+	TEST_ASSERT_EQUAL_INT(MACHINE_NO_OWNER, m->owner);
+	assertMachinesReleased(&w, 0);
+	destroyVoxmap(map);
+}
+
+/* A customer whose errand ended without a leave step still walks out.
  * driver watches the errand, and an errand can end three ways it did not ask
  * for: a template that ran out, a step that failed past its bound, an errand
  * abandoned by something other than this driver. None of them may leave a
@@ -1551,6 +1746,8 @@ void run_test_brain(void)
 	RUN_TEST(test_no_candidate_bounded_then_abandons);
 	RUN_TEST(test_a_customer_who_is_progressing_never_walks_out);
 	RUN_TEST(test_the_patience_budget_is_spent_only_on_blocked_time);
+	RUN_TEST(test_a_machine_broken_during_the_collect_walk_rewinds);
+	RUN_TEST(test_a_gate_bound_outlasts_the_patience_window);
 	RUN_TEST(test_an_abandoned_errand_releases_its_machine);
 	RUN_TEST(test_a_preempted_use_machine_releases_its_claim);
 	RUN_TEST(test_spawner_interval_and_cap);
@@ -1564,7 +1761,7 @@ void run_test_brain(void)
 	RUN_TEST(test_integration_spread_diverges);
 	RUN_TEST(test_a_wake_during_the_walk_to_the_wait_spot);
 	RUN_TEST(test_an_errand_that_ends_without_leaving_still_walks_out);
-	RUN_TEST(test_a_blocked_customer_announces_the_fill_it_takes);
+	RUN_TEST(test_a_terminal_errand_releases_the_machine_it_holds);
 	RUN_TEST(test_a_blocked_customer_announces_the_fill_it_takes);
 	RUN_TEST(test_integration_single_washer_contention);
 	RUN_TEST(test_integration_break_mid_run_replans);

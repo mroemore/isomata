@@ -39,12 +39,13 @@
  * because here there is nothing to confuse it with (a template is about what
  * it serves).
  *
- * priorityFloor is a board PROVENANCE class, never an order (agents/board.h):
- * it decides who may claim the errand's jobs, and the band still decides what
- * runs. So a world-seeded errand offered at JOB_PRIO_ASSIGNED competes with
- * the agent's own errand work on the ladder and can lose to it — which is
- * exactly "adopted at that tier and then wins or loses like everything else,
- * it is never forced".
+ * priorityFloor is a board PROVENANCE class, never an order (agents/board.h) —
+ * and TODAY the board validates it and discards it, so it governs nothing
+ * here either (see the header note "WHAT priorityFloor DOES TODAY"). A
+ * world-seeded errand competes on the ladder and can lose to the agent's own
+ * errand work because adoption writes no need and no band, not because of its
+ * floor: that is "adopted at that tier and then wins or loses like everything
+ * else, it is never forced".
  */
 static const ErrandTemplate ERRAND_TEMPLATES[] = {
 	/* ERR_LAUNDRY_CLEAN — the customer's whole reason for being here, and
@@ -301,12 +302,16 @@ int errandAdopt(Agent *a, const ErrandTemplate *t, float now)
 	e->step = 0;
 	e->state = ERRAND_ACTIVE;
 	e->startedAt = now;
-	/* THE FLOOR IS RECORDED, NOT APPLIED. Nothing here writes a need,
-	 * claims a job or touches the ladder: the errand it creates carries
-	 * the floor into every job it enqueues, and the ladder arbitrates
-	 * those jobs against everything else exactly as it would a fill. That
-	 * is what "adopted at its declared floor, never forced" means in
-	 * code — a world event cannot put itself on top. */
+	/* THE FLOOR IS RECORDED AND NOTHING MORE. No need, no panic, no job, no
+	 * band, no claim: the errand it creates carries the declared class into
+	 * boardEnqueue (which validates it and discards it — agents/board.h),
+	 * and the ladder arbitrates the errand's JOBS against everything else
+	 * exactly as it would a fill's. THAT is what "adopted at its declared
+	 * floor, never forced" means in code today: a world event cannot put
+	 * itself on top, because it never reaches the arithmetic at all.
+	 * Pinned by test_the_floor_is_provenance_never_an_order (the job still
+	 * bands 0 for a content agent) and by the needs snapshot in
+	 * test_offer_to_agent_is_adopted_at_its_floor. */
 	e->priorityFloor = t->priorityFloor;
 	a->errands.count++;
 	return t->id;
@@ -512,9 +517,10 @@ static int errandEnqueueJob(int jobKind, Errand *e, Agent *a, JobBoard *b)
 	 * with the wait spot. */
 	jobSetTarget(&j, JOB_TARGET_TILE, e->targetTile);
 	/* The band is COMPUTED from the needs this activity serves (agents/
-	 * activity.h), never assigned by the errand: provenance (the recorded
-	 * priorityFloor) may decide who may claim the job and may never decide
-	 * its order.
+	 * activity.h), never assigned by the errand. Provenance may decide who
+	 * may claim a job and may never decide its order (agents/board.h) —
+	 * and the board does not store the recorded priorityFloor at all yet,
+	 * so today the band's own arithmetic is the whole story.
 	 *
 	 * ONE EXCEPTION, and it is a floor the COMPUTED band can never go
 	 * below rather than a number of our own: a GATE is a continuation of

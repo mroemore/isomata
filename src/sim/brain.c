@@ -24,13 +24,21 @@
  * carry is the world's bookkeeping the framework cannot hold — which machine,
  * whether the fee has been paid, which job is walking to the door.
  *
- * EVERY FAILURE RELEASES. A claim refused at arrival, a route that will not
- * compute, a gate whose bound expired, a machine that broke mid-run, an errand
- * abandoned for want of patience — each takes the same release path
- * (brainReplan) before the errand re-selects, and the walk out takes it too.
- * There is no path out of a machine that does not go through machineRelease,
- * which is the guarantee that a customer can never leave the building still
- * holding somebody else's washing.
+ * EVERY WAY OUT OF A MACHINE RELEASES IT — and that is a TEST, not an
+ * aspiration. brainReplan is the only place this file gives a machine back, and
+ * it reads the machine the CUSTOMER is holding (c->target) rather than the
+ * errand's binding, because the two are not the same thing and only one of them
+ * is still true when an errand goes terminal. Every exit from a leg goes
+ * through it: a claim refused at arrival, a route that will not compute, a gate
+ * whose bound expired, a machine that broke mid-run, an errand abandoned for
+ * want of patience, an errand that went terminal while its step still held a
+ * machine, and a body or mind that vanished underneath it all.
+ *
+ * Two oracles back the word "every". tests/test_brain.c asserts the claim
+ * invariant on EVERY TICK of every scenario (no machine is ever owned by a
+ * customer that no longer exists), and
+ * test_a_terminal_errand_releases_the_machine_it_holds aims it at the one exit
+ * that used to be an exception.
  */
 
 #include "sim/brain.h"
@@ -115,27 +123,35 @@ static const ErrandStep *brainStepOf(const Errand *e)
 	return &t->steps[e->step];
 }
 
-/* Give back whatever the current step holds, then say so. This is the release
- * path every failure takes and the one the walk out takes: the machine the
- * step had claimed goes FREE (a broken machine has already dropped its owner
- * and is left broken), and the errand's binding is cleared so the next pass
- * has to choose again. A step that held nothing is still a legitimate call — a
- * route that would not compute holds nothing — and costs no event. */
+/* Give back whatever this customer is holding, then say so. This is THE
+ * release path: the machine the customer had claimed goes FREE (a broken
+ * machine has already dropped its owner and is left broken), and the errand's
+ * binding is cleared so the next pass has to choose again. A customer holding
+ * nothing is still a legitimate call — a route that would not compute holds
+ * nothing — and costs no event.
+ *
+ * THE RELEASE IS UNCONDITIONAL; ONLY THE BINDING NEEDS AN ERRAND. The machine
+ * this gives back is named by the CUSTOMER (`c->target`), which is why the
+ * release must not be gated on the errand: the one path that most needs it is
+ * the walk out, and by then the errand may already be terminal — and a NULL
+ * there would skip the release and leave a washer claimed by somebody who has
+ * left the building. `e` is only the errand's own binding to clear, so that
+ * half is guarded. Pinned by
+ * test_a_terminal_errand_releases_the_machine_it_holds. */
 static void brainReplan(SimWorld *w, SimCustomer *c, Errand *e, BrainEvent *out,
 			int cap, int *n, int kind)
 {
-	Machine *m;
+	Machine *m = machineGet(&w->machines, c->target);
 
-	if (e == NULL)
-		return;
-	m = machineGet(&w->machines, c->target);
 	if (m != NULL && m->owner == c->handle) {
 		machineRelease(m);
 		brainEmit(out, cap, n, kind, c, c->target, 0, 0, 0);
 	}
 	/* Clear the binding so errandAdvance cannot walk to a thing nobody
 	 * holds, and drop the sub-step so a re-selected leg pays again. */
-	errandBindTarget(e, ERRAND_TARGET_NONE, ERRAND_INVALID, ERRAND_INVALID);
+	if (e != NULL)
+		errandBindTarget(e, ERRAND_TARGET_NONE, ERRAND_INVALID,
+				 ERRAND_INVALID);
 	c->target = MACHINE_INVALID;
 	c->actStep = BRAIN_STEP_NONE;
 	c->waitRetries = 0;
@@ -149,13 +165,16 @@ static void brainReplan(SimWorld *w, SimCustomer *c, Errand *e, BrainEvent *out,
  * and a door it cannot reach fails the job, which is how the "leave where you
  * stand" path happens without this file walking anybody by hand. Returns the
  * handle, or ERRAND_INVALID when the board refused it. */
+/* The leave job. Every caller reaches it with the customer's own live agent
+ * (brainDrive returns early without one), so there is no NULL arm here;
+ * ACT_LEAVE is a shipped catalogue row, so its bind cannot fail either. The
+ * one thing that CAN fail is boardEnqueue on a full board, and that is the
+ * caller's to cope with. */
 static int brainEnqueueLeave(SimWorld *w, Agent *a)
 {
 	Job j;
 	int h;
 
-	if (a == NULL)
-		return ERRAND_INVALID;
 	if (!activityBindJob(&j, ACT_LEAVE))
 		return ERRAND_INVALID;
 	/* The door is the world's business: the catalogue row says "leaving",
@@ -184,11 +203,13 @@ static void brainGoToExit(SimWorld *w, SimCustomer *c, Agent *a, BrainEvent *out
 	}
 }
 
-/* The step's job, or NULL. `a` is the errand's agent: the job lives on that
- * agent's own board. */
+/* The step's job, or NULL when the errand has none enqueued yet. `a` is the
+ * errand's agent: the job lives on that agent's own board, and every caller
+ * has a non-NULL agent by the time it gets here (brainDrive returns early
+ * without one), so there is no arm for that. */
 static Job *brainStepJob(Agent *a, Errand *e)
 {
-	if (a == NULL || e == NULL || e->jobHandle == ERRAND_INVALID)
+	if (e->jobHandle == ERRAND_INVALID)
 		return NULL;
 	return boardJob(&a->personal, e->jobHandle);
 }
@@ -199,7 +220,7 @@ static Job *brainStepJob(Agent *a, Errand *e)
 static void brainAbandonErrand(SimWorld *w, SimCustomer *c, Agent *a, Errand *e,
 			       BrainEvent *out, int cap, int *n)
 {
-	if (e == NULL || c->abandoned)
+	if (c->abandoned)
 		return;
 	c->abandoned = true;
 	brainReplan(w, c, e, out, cap, n, BRAIN_EV_REPLAN);
@@ -223,8 +244,6 @@ static bool brainSelectMachine(SimWorld *w, SimCustomer *c, const Entity *ent,
 	int score;
 	int distance;
 
-	if (s == NULL)
-		return false;
 	chosen = selChoose(&w->machines, ent, &w->select, c->policy,
 			   s->machineKind, e->blacklist, e->blacklistCount);
 	if (chosen == MACHINE_INVALID) {
@@ -237,10 +256,13 @@ static bool brainSelectMachine(SimWorld *w, SimCustomer *c, const Entity *ent,
 			  0, 0, 0);
 		return false;
 	}
+	/* NO NULL ARM HERE, and the reason is the same one agent.c used when it
+	 * removed its fill's boardClaim guard: selChoose returns a handle from
+	 * the very registry it was handed (sim/selection.h: "a candidate is a
+	 * live machine"), and nothing runs between that call and this read, so
+	 * the handle names a live machine by construction. A guard here would
+	 * be a branch that can never be false. */
 	m = machineGetConst(&w->machines, chosen);
-	if (m == NULL) {		/* raced away between choose and read */
-		return false;
-	}
 	errandBindTarget(e, ERRAND_TARGET_MACHINE, chosen,
 			 JOB_TILE_PACK(m->tileX, m->tileZ));
 	c->target = chosen;
@@ -288,9 +310,10 @@ static void brainDriveLoad(SimWorld *w, SimCustomer *c, Agent *a, Errand *e,
 		 * bounded wait lets this customer take it once it frees. */
 		if (!machineClaim(m, c->handle)) {
 			/* Genuine contention: fail the job so the errand
-			 * re-selects, and leave the machine to its owner. */
-			if (j != NULL)
-				jobStep(j, JOB_DENIED);
+			 * re-selects, and leave the machine to its owner. (j
+			 * is non-NULL here by construction: the branch above
+			 * returned unless it was.) */
+			jobStep(j, JOB_DENIED);
 			brainReplan(w, c, e, out, cap, n, BRAIN_EV_CLAIM_DENIED);
 			return;
 		}
@@ -506,7 +529,7 @@ static void brainDecaySatisfaction(Agent *a, const Errand *e, float dt)
 {
 	float v;
 
-	if (a == NULL || !errandBlocked(e))
+	if (!errandBlocked(e))
 		return;
 	v = a->needs.value[NEED_SATISFACTION] - ERRAND_BLOCKED_DECAY * dt;
 	a->needs.value[NEED_SATISFACTION] = (v > 0.0f) ? v : 0.0f;
@@ -522,7 +545,7 @@ static void brainDecaySatisfaction(Agent *a, const Errand *e, float dt)
  * ERRAND_LEAVE_THRESHOLD before changing either half. */
 static bool brainShouldLeave(const Agent *a, const Errand *e)
 {
-	if (a == NULL || e == NULL || e->state != ERRAND_ACTIVE)
+	if (e->state != ERRAND_ACTIVE)
 		return false;
 	if (e->blockedFor < ERRAND_LEAVE_THRESHOLD_WINDOW)
 		return false;
@@ -649,9 +672,11 @@ static void brainDrive(SimWorld *w, SimCustomer *c, float dt, BrainEvent *out,
 		/* THE BODY (OR THE MIND) DIED UNDER US. The record is
 		 * reclaimed, and anything it was still holding goes back first:
 		 * a machine whose owner has been deleted is claimed for ever,
-		 * and nothing in the registry would ever free it. */
-		brainReplan(w, c, errandActive(a), out, cap, n,
-			    BRAIN_EV_REPLAN);
+		 * and nothing in the registry would ever free it. The release
+		 * reads the CUSTOMER, so it runs whether or not there is still a
+		 * mind — and a mind that has gone has no errand to clear. */
+		brainReplan(w, c, (a != NULL) ? errandActive(a) : NULL, out,
+			    cap, n, BRAIN_EV_REPLAN);
 		c->wantDespawn = true;
 		return;
 	}
@@ -668,6 +693,12 @@ static void brainDrive(SimWorld *w, SimCustomer *c, float dt, BrainEvent *out,
 		 * flag keeps it from repeating the announcement every tick. */
 		if (!c->reported) {
 			c->reported = true;
+			/* THROUGH THE RELEASE, like every other way out. An errand
+			 * can go terminal while its step still holds a machine
+			 * (a job it is standing on is retired behind its back),
+			 * and the customer is walking out of the building — so
+			 * whatever it holds goes back on the way to the door. */
+			brainReplan(w, c, NULL, out, cap, n, BRAIN_EV_REPLAN);
 			brainGoToExit(w, c, a, out, cap, n);
 		}
 		brainDriveLeave(c, a, out, cap, n);

@@ -280,68 +280,71 @@ src/sim/machines.c		100
 src/sim/garments.c		100
 src/sim/selection.c		95
 #
-# TASK 5 REWRITES brain.c, and the floor MOVES DOWN to the new measurement
-# (76.96%, 324/421 branches, from T23's 80). That is a first measurement of a
-# rewritten module and NOT a lowered ratchet, and the arms that moved are named
-# below so nobody has to guess which ones are open and why.
+# TASK 5 REWRITES brain.c. The floor was 80 under T23 and sat at 76 after the
+# rewrite on the first measurement, which is exactly the pattern this file
+# forbids: a lowered number standing in for arms nobody had classified. Fix
+# round 2 classified every one of them, REMOVED the provably dead ones the way
+# agents/agent.c's boardClaim guard was removed (see the note on that module),
+# closed the reachable ones with scenarios, and named the survivors. The
+# floor is set from what is left: 331/422 branches, 78.4%.
 #
-# WHAT THE NEW MODULE COVERS THAT THE OLD ONE DID NOT, and what it costs:
-# the old brain.c was one switch over one customer's plan; this one is four
-# legs (the world's effects, the errand's advance, the leave, the abandon)
-# over a machine of claim state, each with its own failure arm. The suites
-# close every arm the scenarios reach: adoption and its band, both machine
-# legs, a claim refused under contention, the bounded no-candidate wait, the
-# gate's PHASE_DONE wake (including one that lands while the owner is still
-# walking to the wait spot), the gate's JOB_TIMEOUT bound, a machine broken
-# mid-run, an interrupted leg, a preempted job, insufficient funds, an
-# unreachable washer, an unreachable door, a wake for a machine the customer
-# no longer owns, an errand that ends without a leave step, a body destroyed
-# mid-life, a spawn refused for a void door and a spawn refused for a full
-# agent registry, and the whole claim/release invariant on every tick.
+# CLOSED BY REMOVAL (7 branches) — each was a guard whose precondition its own
+# caller had already established, so it could never be false:
 #
-# THE ARMS THAT REMAIN, and why each is not closeable today:
+#   - brainSelectMachine's `s == NULL`: its only caller resolves the step one
+#     statement earlier and returns when it is NULL.
+#   - brainSelectMachine's "raced away between choose and read" NULL: selChoose
+#     returns a handle from the very registry it was handed (sim/selection.h:
+#     "a candidate is a live machine") and nothing runs in between. This is
+#     agent.c's fill-boardClaim argument verbatim.
+#   - `j != NULL` inside brainDriveLoad's claim-denial branch, which is only
+#     entered from a test that has just established j is non-NULL.
+#   - `a == NULL || e == NULL` in brainStepJob, brainDecaySatisfaction and
+#     brainShouldLeave: brainDrive returns early without an agent, and every
+#     call site passes the errand it is working on.
+#   - `a == NULL` in brainEnqueueLeave: the same caller-established fact.
 #
-#   - the NULL / out-of-range SUB-arms of guards whose caller has already
-#     checked the same thing (`s == NULL` inside brainSelectMachine, whose
-#     only caller resolved `s` first; `j != NULL` inside a branch that is
-#     only entered when j is non-NULL; `c != NULL` inside brainSlotUsed,
-#     which is only ever called with a slot pointer). These are the
-#     defensive double-checks, and each one is unreachable by construction;
-#     the same reason agents/agent.c's fill boardClaim guard was REMOVED
-#     rather than floored.
+# CLOSED BY A SCENARIO (round 2):
 #
-#   - the "machine vanished between choosing it and reading it" race
-#     (brainSelectMachine) and "machineStartRun refused" (brainDriveLoad).
-#     The first needs a registry mutated mid-selection; the second needs the
-#     machine to stop belonging to us between the claim and the start, which
-#     is the same race.
+#   - the collect leg's "the machine broke while the customer walked back"
+#     rewind, which round 1 called unreachable-by-arrangement. It is not: break
+#     on the MACHINE_DONE that starts the walk and the guard fires
+#     (test_a_machine_broken_during_the_collect_walk_rewinds).
 #
-#   - the retry CAP (BRAIN_MAX_WAIT_RETRIES) in brainSupplyTarget. It is
-#     unreachable by construction, not by accident: the leave window (45 s)
-#     is always the shorter of the two, so the window abandons long before
-#     120 retries at one a second. It is kept as the bound for a world whose
-#     leave window is ever raised past it.
+# THE ARMS THAT REMAIN, each with the input that would reach it — so the next
+# reader can tell deliberate defence from erosion:
 #
-#   - the no-candidate abandon THROUGH the errand's own failure cap
-#     (ERRAND_MAX_STEP_FAILURES). The shipped templates re-select forever and
-#     the leave window is the end of the road; closing it needs a template
-#     that fails without ever binding a target.
-#
-#   - the "collect leg whose machine broke between the run finishing and the
-#     arrival" rewind (brainDriveCollect). It is a two-tick window inside a
-#     5-second collect and the arrangement that hits it is a scripted break
-#     timed to the walk; the sibling break (a machine breaking MID-RUN) is
-#     closed, and both run the same brainReplan release path.
-#
-# REMOVED BY TASK 5: src/sim/plan.c (floor was 95). The brain's plan table was
-# the T23 step template; task 5 replaced it with the errand template
-# (src/agents/errand.c), which is the same idea with an owner, a priority
-# floor, gates and two adoption producers. Nothing in src/ referenced a plan
-# symbol after the migration (the grep is in the task report), so plan.{c,h}
-# and tests/test_plan.c were deleted rather than left built, floored and
-# tested with no production caller — the same dead weight task 5 removed from
-# src/ai/fsm.c.
-src/sim/brain.c			76
+#   - machineGet returning NULL (the "machine vanished mid-leg" arm in
+#     brainDriveLoad, the gate's "a machine we no longer own" arm, the collect
+#     leg's owner check). Nothing in the tree DESTROYS a machine: machineBreak
+#     keeps the slot and clears the owner, and there is no machineDestroy. The
+#     only way to reach these is a SimCustomer whose `target` names a slot that
+#     was never created — a corrupted record, not a reachable state. Kept
+#     because machineGet's contract is NULL-safe and dereferencing past it
+#     would be a crash; floored on purpose.
+#   - machineStartRun refused (the machine stopped being ours between the claim
+#     and the start): needs a machine released out from under a customer that
+#     still believes it holds it, which no shipped path does.
+#   - the `j == NULL || j->state != ...` sub-arms in the load and collect legs:
+#     reachable only if the errand's job vanishes from its board between two
+#     reads (retired by another owner), and agentsUpdate's ownership check
+#     turns that into "the job is not mine" first.
+#   - brainEnqueueLeave's board-full refusal: a personal board is BOARD_MAX
+#     jobs and the driver holds one at a time.
+#   - the FILL announcement's `out != NULL && cap > 0` guard and the brainEmit
+#     bounds check: reachable only with a NULL or zero-capacity event buffer
+#     mid-scenario (covered for simUpdate, not for every leg).
+#   - brainStepOf / brainLegOfStep's template-and-index bounds: reachable only
+#     with a hand-built errand naming an id no row claims — errandAdvance
+#     refuses to advance such a record and marks it FAILED, so the driver sees
+#     a terminal errand, not a live one.
+#   - the retry cap (BRAIN_MAX_WAIT_RETRIES) in brainSupplyTarget. Unreachable
+#     by construction, not by accident: the leave window (45 s) is always the
+#     shorter of the two, so the window abandons long before 120 retries at one
+#     a second. Kept as the bound for a world whose leave window is ever raised
+#     past it, and pinned from the other side by
+#     test_a_gate_bound_outlasts_the_patience_window.
+src/sim/brain.c			78
 
 # Agent framework, task 1: the want ladder (need.c) and the agent record
 # (agent.c). Both are pure, allocation-free twin suites, and both close
