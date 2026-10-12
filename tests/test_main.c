@@ -73,7 +73,6 @@ void run_test_pathfind(void);
 void run_test_nav(void);
 void run_test_machines(void);
 void run_test_garments(void);
-void run_test_plan(void);
 void run_test_selection(void);
 void run_test_brain(void);
 void run_test_ui_bridge(void);
@@ -120,7 +119,6 @@ int main(void)
 	run_test_nav();
 	run_test_machines();
 	run_test_garments();
-	run_test_plan();
 	run_test_selection();
 	run_test_brain();
 	run_test_ui_bridge();

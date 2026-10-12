@@ -278,7 +278,6 @@ src/sim/machines.c		100
 # died under us" arms need fault injection to reach. Floors are the measured
 # branch %.
 src/sim/garments.c		100
-src/sim/plan.c			95
 src/sim/selection.c		95
 #
 # TASK 5 REWRITES brain.c, and the floor MOVES DOWN to the new measurement
@@ -333,6 +332,15 @@ src/sim/selection.c		95
 #     5-second collect and the arrangement that hits it is a scripted break
 #     timed to the walk; the sibling break (a machine breaking MID-RUN) is
 #     closed, and both run the same brainReplan release path.
+#
+# REMOVED BY TASK 5: src/sim/plan.c (floor was 95). The brain's plan table was
+# the T23 step template; task 5 replaced it with the errand template
+# (src/agents/errand.c), which is the same idea with an owner, a priority
+# floor, gates and two adoption producers. Nothing in src/ referenced a plan
+# symbol after the migration (the grep is in the task report), so plan.{c,h}
+# and tests/test_plan.c were deleted rather than left built, floored and
+# tested with no production caller — the same dead weight task 5 removed from
+# src/ai/fsm.c.
 src/sim/brain.c			76
 
 # Agent framework, task 1: the want ladder (need.c) and the agent record

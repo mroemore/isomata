@@ -451,6 +451,135 @@ static void test_no_candidate_bounded_then_abandons(void)
 
 /* --- abandonment releases ---------------------------------------------- */
 
+/* THE PATIENCE BUDGET IS SPENT ON WAITING, NOT ON LIVING. A customer whose
+ * errand is making progress must not walk out, however long the round takes:
+ * the window is measured in BLOCKED seconds, and a step that is walking,
+ * paying, loading or collecting resets the clock to zero.
+ *
+ * The arrangement is the whole point — this round is deliberately LONGER than
+ * the leave window (two 25 s machine runs plus two 5 s loads and four walks is
+ * comfortably past 45 s of sim time), while no single blocked stretch is (the
+ * gate waits 25 s). A window measured on the errand's AGE rather than its
+ * blocked time would abandon this customer half way through their dry leg; this
+ * test is what tells the two apart, and `test_the_patience_budget_is_spent_
+ * only_on_blocked_time` below is what tells the two apart at the other end.
+ *
+ * It is also the honest guard against the leave gate becoming an impatience
+ * counter: this customer IS impatient by any measure a person would use (their
+ * satisfaction has been at the floor for most of the run, because the
+ * framework's needs decay and nothing restores them yet), and they still do
+ * their laundry. */
+static void test_a_customer_who_is_progressing_never_walks_out(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	Agent *a;
+	const Errand *e;
+	int n = 0;
+	int step;
+	int aliveAtWindow = 0;
+	double blockedPeak = 0.0;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	/* 25 s runs: each leg blocks once, for 25 s, which is under the window;
+	 * the whole round is past it. */
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 25.0f);
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 25.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+	a = agentOfCustomer(&w, h);
+	TEST_ASSERT_NOT_NULL(a);
+
+	/* Step past the window, watching the blocked clock. */
+	for (step = 0; step < MAX_STEPS; step++) {
+		step1(&w, &t, DT);
+		if (simCustomerCount(&w) == 0)
+			break;
+		e = simCustomerErrand(&w, h);
+		if (e != NULL && (double)e->blockedFor > blockedPeak)
+			blockedPeak = (double)e->blockedFor;
+		if ((double)step * (double)DT >= ERRAND_LEAVE_THRESHOLD_WINDOW) {
+			aliveAtWindow = simCustomerCount(&w);
+			break;
+		}
+	}
+	/* Still here, still shopping, and never once blocked long enough to be
+	 * given up on. */
+	TEST_ASSERT_EQUAL_INT(1, aliveAtWindow);
+	TEST_ASSERT_TRUE(blockedPeak < (double)ERRAND_LEAVE_THRESHOLD_WINDOW);
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_ABANDON));
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	/* And the round completed: two runs, two loads, a clean dry departure,
+	 * at a total sim time comfortably past the window. */
+	TEST_ASSERT_EQUAL_INT(2, countKind(&t, BRAIN_EV_RUN_START));
+	TEST_ASSERT_EQUAL_INT(2, countKind(&t, BRAIN_EV_GARMENT));
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_ABANDON));
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_WAIT_TIMEOUT));
+	{
+		int i = findKindFrom(&t, BRAIN_EV_DEPART, 0);
+
+		TEST_ASSERT_TRUE(i >= 0);
+		TEST_ASSERT_EQUAL_INT(GARMENT_DRY_CLEAN, t.ev[i].garment);
+	}
+	assertMachinesReleased(&w, 0);
+	destroyVoxmap(map);
+}
+
+/* ...AND THE OTHER END OF THE SAME RULE: blocked time accumulates and does run
+ * out. The machine runs for a thousand seconds, so this customer's gate never
+ * wakes; past the window they give the errand up and walk out. Without this
+ * test a gate that never fired would satisfy the one above forever. */
+static void test_the_patience_budget_is_spent_only_on_blocked_time(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	int n = 0;
+	int step;
+	double blockedAtWindow = 0.0;
+	int aliveAtWindow = 0;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1000.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+
+	for (step = 0; step < MAX_STEPS; step++) {
+		const Errand *e;
+
+		step1(&w, &t, DT);
+		if (simCustomerCount(&w) == 0)
+			break;
+		e = simCustomerErrand(&w, h);
+		if (e != NULL &&
+		    (double)step * (double)DT >= ERRAND_LEAVE_THRESHOLD_WINDOW) {
+			blockedAtWindow = (double)e->blockedFor;
+			aliveAtWindow = simCustomerCount(&w);
+			break;
+		}
+	}
+	/* Before the window: here, blocked, and the clock is running. */
+	TEST_ASSERT_EQUAL_INT(1, aliveAtWindow);
+	TEST_ASSERT_TRUE(blockedAtWindow > 0.0);
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_ABANDON));
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_DEPART));
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_MACHINE_DONE));
+	assertMachinesReleased(&w, 0);
+	destroyVoxmap(map);
+}
+
 /* THE DEADLOCK ORACLE. A customer that has claimed a machine and is waiting
  * for its run gives the errand up when its patience runs out — and the machine
  * MUST come back. A washer left claimed by somebody who has walked out is
@@ -1357,6 +1486,8 @@ void run_test_brain(void)
 	RUN_TEST(test_payment_debit_and_events);
 	RUN_TEST(test_insufficient_funds_abandons);
 	RUN_TEST(test_no_candidate_bounded_then_abandons);
+	RUN_TEST(test_a_customer_who_is_progressing_never_walks_out);
+	RUN_TEST(test_the_patience_budget_is_spent_only_on_blocked_time);
 	RUN_TEST(test_an_abandoned_errand_releases_its_machine);
 	RUN_TEST(test_a_preempted_use_machine_releases_its_claim);
 	RUN_TEST(test_spawner_interval_and_cap);

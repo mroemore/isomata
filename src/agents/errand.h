@@ -62,8 +62,12 @@
  *   - the gate's deadline — errandGateSeconds.
  *
  * Not responsible for: choosing a job (agents/agent.h), scoring one
- * (agents/activity.h), executing one (agents/job.h), or the world's effects
- * (payment, machine start, garment advance — sim/brain.h).
+ * (agents/activity.h), executing one (agents/job.h), the world's effects
+ * (payment, machine start, garment advance — sim/brain.h), or DECIDING to walk
+ * out: this module says whether the errand is blocked and has been for how
+ * long, and the driver's two-line gate (blocked past the window AND fed up)
+ * turns that into an abandon. See ERRAND_LEAVE_THRESHOLD_WINDOW for the whole
+ * mechanism, including which half of it actually decides.
  *
  * Pure: no SDL, no allocation, no time source, no libm. Templates are
  * `static const`, so errandsTemplate returns the SAME pointer for the same id
@@ -97,25 +101,56 @@
 /* A sentinel for "no such thing": a step with no target, a gate with no
  * seconds, an adoption that did not happen. Never a valid index. */
 #define ERRAND_INVALID (-1)
-/* Satisfaction below this is a customer who would rather go elsewhere. */
-#define ERRAND_LEAVE_THRESHOLD 0.25f
-/* ...and how long that impatience is tolerated while the errand is BLOCKED
- * before the agent gives the errand up and walks out. The window is only
- * spent on blocked time: an errand that is making progress never runs the
- * clock down, so a long wash is waited out and a machine that never delivers
- * is not.
+/* THE WALK OUT, STATED PLAINLY, because the honest version is less flattering
+ * than the spec's prose and a reader deserves the real mechanism.
  *
- * IT IS DELIBERATELY SHORTER THAN A GATE'S BOUND (brain.h's slack plus the
- * run length), and that ordering is the point: when a machine is never going
- * to finish, the wait must END by failing its job — the framework's one
- * producer for JOB_TIMEOUT — before the customer gives the errand up, so the
- * re-plan is a re-plan and not a walk out. A customer will therefore sit out
- * one machine run (the demo's is 30 s) and no more. */
+ *   WHAT DECIDES: SUSTAINED BLOCKED TIME. `Errand.blockedFor` counts the
+ *   seconds this errand has spent WAITING on the world — a gate whose machine
+ *   has not finished, or a step with nothing bound to it because no machine of
+ *   the kind it needs is free. It advances only while errandBlocked() is true
+ *   and is RESET TO ZERO the moment the errand does anything at all (walking,
+ *   paying, loading, collecting, walking out of the building). The patience
+ *   budget is therefore spent on waiting and never on living: a customer whose
+ *   errand is progressing is not impatient however long the round takes.
+ *
+ *   WHAT THE THRESHOLD IS: A GUARD RAIL, NOT A DISCRIMINATOR.
+ *   ERRAND_LEAVE_THRESHOLD is checked as a necessary condition for walking
+ *   out — but under the framework's CURRENT need arithmetic it never
+ *   discriminates, and pretending otherwise would be the lie this comment
+ *   exists to prevent. needDecay removes decayMul[n] per second at content and
+ *   NOTHING in the tree restores a need, so NEED_SATISFACTION is at 0 within a
+ *   second of any agent's birth and sits there; the condition
+ *   "satisfaction < 0.25" is therefore true for essentially every blocked
+ *   errand, which makes the threshold a floor the value sits under rather than
+ *   a comparison that decides anything. Read it as "may only walk out a
+ *   customer who is fed up", and expect it to start discriminating the day a
+ *   later phase restores needs (which would put a progressing customer's
+ *   satisfaction back up and make the pair "blocked AND fed up" mean
+ *   something the blocked half does not already mean). Do NOT invent
+ *   restoration to make this constant look busier: that is a different task.
+ *
+ *   The window is DELIBERATELY SHORTER THAN A GATE'S BOUND (brain.h's slack
+ *   plus the run length), and that ordering is load-bearing: when a machine is
+ *   never going to finish, the wait must END by failing its job — the
+ *   framework's one producer for JOB_TIMEOUT — before the customer gives the
+ *   errand up, so the re-plan is a re-plan and not a walk out.
+ *
+ * Both halves are pinned by tests that discriminate between them:
+ * test_a_customer_who_is_progressing_never_walks_out runs a round LONGER
+ * than the window and requires no abandon, and
+ * test_the_patience_budget_is_spent_only_on_blocked_time blocks one customer
+ * past it and requires the abandon. Dropping the window fails both; charging
+ * the budget for progress fails the first alone. */
+#define ERRAND_LEAVE_THRESHOLD 0.25f
+/* How many BLOCKED seconds a fed-up customer tolerates before giving the
+ * errand up and walking out. See the note above: this is the half of the gate
+ * that decides. */
 #define ERRAND_LEAVE_THRESHOLD_WINDOW 45.0f
-/* Extra decay applied to NEED_SATISFACTION for every second an errand is
- * blocked, on top of the role's own decay: "being blocked is an
- * inconvenience" is the spec's tier-1 reading, and the base decay alone does
- * not know what the agent was doing. */
+/* Extra decay the WORLD applies to NEED_SATISFACTION for every second an
+ * errand is blocked, on top of the role's own decay in agentsDecay:
+ * "being blocked is an inconvenience" is the spec's tier-1 reading, and the
+ * base decay alone cannot know what the agent was doing. It is a bias on the
+ * want, not the decision — the want decides nothing here (see above). */
 #define ERRAND_BLOCKED_DECAY 0.25f
 /* The job a gate parks while it waits. WANDER is the catalogue's one
  * in-place activity, and a gate binds the wait tile as its target, so the body
@@ -355,9 +390,11 @@ void errandBlacklist(Errand *e, int id);
 
 /* True when the errand is ACTIVE and its current step is waiting on the
  * world rather than making progress: a gate step, or a step with nothing
- * bound to it yet. This is the question the satisfaction decay asks — an
- * agent that is walking, paying or collecting is busy, and an agent whose
- * machine has not finished yet is ANNOYED. */
+ * bound to it yet. This is the single question both halves of the walk-out
+ * hang on — it is what makes blockedFor advance (the patience budget) and what
+ * makes the blocked-time satisfaction decay apply. An agent that is walking,
+ * paying or collecting is busy; an agent whose machine has not finished yet is
+ * ANNOYED, and annoyance is what this function means. */
 bool errandBlocked(const Errand *e);
 
 /* Give the errand up: ERRAND_ABANDONED, step 0, no job handle. The errand

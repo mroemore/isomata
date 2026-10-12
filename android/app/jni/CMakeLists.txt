@@ -57,7 +57,6 @@ set(ISOMATA_SRC
 	../../../src/ai/nav.c
 	../../../src/sim/machines.c
 	../../../src/sim/garments.c
-	../../../src/sim/plan.c
 	../../../src/sim/selection.c
 	../../../src/sim/brain.c
 	../../../src/agents/need.c

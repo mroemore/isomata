@@ -512,11 +512,14 @@ static void brainDecaySatisfaction(Agent *a, const Errand *e, float dt)
 	a->needs.value[NEED_SATISFACTION] = (v > 0.0f) ? v : 0.0f;
 }
 
-/* THE WALK OUT. An errand that has been blocked past the window, by a customer
- * whose satisfaction is past the threshold, is abandoned — the business loop's
- * "they take it elsewhere", driven by a want rather than by a special-cased
- * impatience counter. Both conditions are needed: the window is the patience,
- * and the want decides whether the patience runs out. */
+/* THE WALK OUT, and which half of it decides. Blocked time is the patience
+ * budget (ERRAND_LEAVE_THRESHOLD_WINDOW) and satisfaction is the necessary
+ * condition (ERRAND_LEAVE_THRESHOLD) — but under the framework's current need
+ * arithmetic the want sits at the floor for every agent, so today the WINDOW
+ * is what ends a wait and the threshold is a guard rail it cannot open. Both
+ * are checked, both are named in errand.h, and neither is pretended to be
+ * more load-bearing than it is: read agents/errand.h's note on
+ * ERRAND_LEAVE_THRESHOLD before changing either half. */
 static bool brainShouldLeave(const Agent *a, const Errand *e)
 {
 	if (a == NULL || e == NULL || e->state != ERRAND_ACTIVE)
