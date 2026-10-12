@@ -82,6 +82,9 @@ AgentHandle agentCreate(AgentRegistry *r, int role)
 		a->panicMask = needPanicMask(&a->needs);
 		a->entity = ENTITY_INVALID;
 		boardInit(&a->personal, false);
+		/* No goal yet: errands arrive from a need scan or from the
+		 * world (agents/errand.h), never at birth. */
+		errandListInit(&a->errands);
 		a->engagedJob = JOB_INVALID;
 		a->engagedShared = false;
 		a->dwellLeft = 0.0f;

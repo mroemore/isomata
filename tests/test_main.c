@@ -69,7 +69,6 @@ void run_test_frame(void);
 void run_test_level_controls(void);
 void run_test_easing(void);
 void run_test_entities(void);
-void run_test_fsm(void);
 void run_test_pathfind(void);
 void run_test_nav(void);
 void run_test_machines(void);
@@ -91,6 +90,7 @@ void run_test_agent(void);
 void run_test_job(void);
 void run_test_board(void);
 void run_test_activity(void);
+void run_test_errand(void);
 
 
 int main(void)
@@ -116,7 +116,6 @@ int main(void)
 	run_test_level_controls();
 	run_test_easing();
 	run_test_entities();
-	run_test_fsm();
 	run_test_pathfind();
 	run_test_nav();
 	run_test_machines();
@@ -138,5 +137,6 @@ int main(void)
 	run_test_job();
 	run_test_board();
 	run_test_activity();
+	run_test_errand();
 	return UNITY_END();
 }

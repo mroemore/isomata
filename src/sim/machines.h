@@ -30,8 +30,11 @@
  * broken (INTERRUPTED). Wakes are appended to a caller buffer by
  * machinesUpdate / machineBreak and may be dropped (never overflowed) if the
  * buffer is full — `cap` bounds them and the return counts what was written.
- * The T21 executor FSM consumes these as FSM_EVENT_PHASE_DONE /
- * FSM_EVENT_INTERRUPTED.
+ * The customer driver consumes these (sim/brain.c): PHASE_DONE ends the
+ * errand's gate on the machine it is waiting for, INTERRUPTED re-plans the
+ * leg. Task 5 retired the T21 executor FSM that used to map them onto
+ * FSM_EVENT_*; the agent framework's per-job lifecycle (agents/job.h) is what
+ * consumes them now.
  *
  * ILLEGAL TRANSITIONS. Every operation is NULL-safe and rejects an illegal
  * transition by returning false with the machine untouched (claim from an

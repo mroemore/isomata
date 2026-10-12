@@ -123,10 +123,16 @@ static void test_catalogue_rows_are_well_formed(void)
 		 * duration would be a job that ends before it begins. */
 		TEST_ASSERT_TRUE(act->duration > 0.0f);
 		TEST_ASSERT_TRUE(act->cooldown >= 0.0f);
-		/* Either flag or neither — the enum is a two-value shape, so a
-		 * bit outside it is a typo rather than a new capability. */
-		TEST_ASSERT_TRUE((act->flags & ~(ACT_IN_PLACE | ACT_NEEDS_PLACE))
+		/* Only DECLARED flags, and never both place answers at once:
+		 * ACT_NEEDS_PLACE asks whether the world has to find something,
+		 * ACT_IN_PLACE asks whether the activity happens where the agent
+		 * stands, and a row that claims both has said nothing. A bit
+		 * outside the enum is a typo rather than a new capability. */
+		TEST_ASSERT_TRUE((act->flags & ~(ACT_IN_PLACE | ACT_NEEDS_PLACE |
+						 ACT_ERRAND_ONLY))
 				 == 0);
+		TEST_ASSERT_FALSE((act->flags & ACT_IN_PLACE) &&
+				  (act->flags & ACT_NEEDS_PLACE));
 		/* A row that serves NO need is a broken row: it could never be
 		 * urgent and would sit on a board forever. */
 		for (n = 0; n < NEED_COUNT; n++) {
@@ -143,6 +149,13 @@ static void test_catalogue_rows_are_well_formed(void)
 		 * satisfies all three. */
 		if (act->flags & ACT_IN_PLACE) {
 			TEST_ASSERT_TRUE(activityPlaceSatisfied(act, NULL));
+		} else if (act->flags & ACT_ERRAND_ONLY) {
+			/* An ERRAND_ONLY row is never OFFERED, so the cached
+			 * view is not what satisfies its place requirement: the
+			 * errand that enqueues it owns the registry and binds the
+			 * target itself (agents/errand.h). Asserting it against
+			 * the cached view would be asserting a mechanism that is
+			 * deliberately not in play. */
 		} else {
 			ActivityPlaces full = { 1, JOB_TILE_PACK(1, 1), 0 };
 
@@ -719,12 +732,69 @@ static void test_urgency_stays_inside_the_band_range(void)
 	}
 }
 
+/* An ERRAND_ONLY row is reachable by an errand that enqueues it and by
+ * NOTHING else. Pinned here rather than left to the errand suite because the
+ * guarantee lives in THIS module's fill scan: an agent standing idle beside a
+ * washer must not start washing it, or the laundromat's business would be
+ * invented by the filler instead of chosen by the customer.
+ *
+ * The test drains the whole catalogue: it keeps asking for the best fill,
+ * asserting every answer is an ordinary row, and marks each one done (at a
+ * clock its cooldown cannot be reached from) until nothing is left. An
+ * ERRAND_ONLY row that leaked into the fill would be answered here rather
+ * than only in the demo. */
+static void test_errand_only_rows_are_never_a_fill(void)
+{
+	Agent a = agentWithEmptyNeeds();
+	int i;
+	int errandOnly = 0;
+	int ordinary = 0;
+	int picks = 0;
+
+	/* A world that offers every place there is, so the only thing that can
+	 * keep a row off the fill is its ERRAND_ONLY flag and not a missing
+	 * fixture. */
+	a.places.othersInRange = 1;
+	a.places.arcadeTile = JOB_TILE_PACK(1, 1);
+	a.places.machineId = 0;
+
+	for (i = 0; i < activitiesCount(); i++) {
+		if (activitiesAt(i)->flags & ACT_ERRAND_ONLY)
+			errandOnly++;
+		else
+			ordinary++;
+	}
+	/* The flag is only meaningful while the catalogue both uses it and has
+	 * rows that do not. */
+	TEST_ASSERT_TRUE(errandOnly > 0);
+	TEST_ASSERT_TRUE(ordinary > 0);
+
+	for (;;) {
+		int fill = agentBestFill(&a, &a.personal, 0.0f);
+		const Activity *act;
+
+		if (fill == JOB_INVALID)
+			break;
+		act = activitiesGet(fill);
+		TEST_ASSERT_NOT_NULL(act);
+		TEST_ASSERT_FALSE(act->flags & ACT_ERRAND_ONLY);
+		/* Mark it done "a long time later" so the next call cannot see
+		 * this row again even when its own cooldown is zero. */
+		TEST_ASSERT_TRUE(activityMarkDone(&a.cooldown, fill, 0.0f));
+		a.cooldown.readyAt[fill] = 1.0e9f;
+		picks++;
+	}
+	/* Every ordinary row was reachable; nothing was starved by the filter. */
+	TEST_ASSERT_EQUAL_INT(ordinary, picks);
+}
+
 void run_test_activity(void);
 
 void run_test_activity(void)
 {
 	RUN_TEST(test_catalogue_rows_are_well_formed);
 	RUN_TEST(test_catalogue_ids_are_unique_and_resolvable);
+	RUN_TEST(test_errand_only_rows_are_never_a_fill);
 	RUN_TEST(test_activities_at_is_bounded);
 	RUN_TEST(test_unknown_activity_id_is_an_error);
 	RUN_TEST(test_urgency_inverts_priority_across_tiers);

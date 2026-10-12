@@ -610,6 +610,11 @@ static void test_agents_stats(void)
 
 	s.agentDecisions = 1234u;
 	s.pathfindCalls = 56u;
+	/* THE COUNTER IS PROCESS-WIDE (agents/agent.h: "the only process-wide
+	 * state is the AgentStats accumulator"), so an earlier suite that ran
+	 * a tick has already put something in it. Drain it first — that is what
+	 * agentsStats is for — and then measure the phase that follows. */
+	agentsStats(&s);
 	agentsStats(&s);
 	/* Phase 1 does not act yet, so both counters read zero — and a read
 	 * zeroes them for the phase that follows. */

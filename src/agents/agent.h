@@ -37,7 +37,10 @@
  *
  * NOT RESPONSIBLE FOR: what a job IS (agents/job.h), where jobs wait and who
  * holds them (agents/board.h — a claim is written there and nowhere else),
- * spawning/despawning, errands (task 5), or persistence.
+ * spawning/despawning, or persistence. Errands ARE carried here (task 5),
+ * because "what this agent is trying to do" is a property of the agent; the
+ * errand's STEPS are jobs on the personal board, and the world's half of a
+ * step (which machine, how much money) belongs to whoever owns the world.
  *
  * Pure: no SDL, no allocation, no time source. agentsUpdate clamps dt to
  * AGENT_MAX_DT like entitiesUpdate clamps to ENTITY_MAX_DT, so a long stall
@@ -48,6 +51,7 @@
 
 #include "agents/activity.h"
 #include "agents/board.h"
+#include "agents/errand.h"
 #include "agents/need.h"
 #include "entities/entities.h"
 
@@ -158,6 +162,14 @@ typedef struct Agent {
 	 * clock below — this module has no time source and never reads a
 	 * wall clock. */
 	ActivityCooldowns cooldown;
+	/* WHAT THIS AGENT IS TRYING TO DO, as data: a small fixed list of live
+	 * errands (agents/errand.h), embedded by value for the same reason the
+	 * personal board is — AGENT_MAX x ERRAND_MAX of static memory and no
+	 * allocation. An errand never competes for attention itself; it only
+	 * enqueues jobs onto the personal board below, which is where its work
+	 * is arbitrated against everything else. errandActive names the one an
+	 * errand-driven caller steps each tick. */
+	ErrandList errands;
 	/* WHAT THE WORLD OFFERS THIS AGENT, cached. Refilled by the world
 	 * (a later task supplies it from the entity and machine
 	 * registries); until then every field reads JOB_INVALID or zero, so

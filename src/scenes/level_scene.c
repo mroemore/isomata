@@ -24,6 +24,7 @@
 #include "agents/activity.h"
 #include "agents/agent.h"
 #include "agents/board.h"
+#include "agents/errand.h"
 #include "agents/job.h"
 #include "ai/pathfind.h"
 #include "app.h"
@@ -308,6 +309,16 @@ static const char *levelActivityName(int kind)
 	const Activity *act = activitiesGet(kind);
 
 	return (act != NULL) ? act->name : jobKindName(kind);
+}
+
+/* The errand a customer adopted, by name. An id no template claims reads
+ * "?" rather than a default row, on the same rule the whole framework keeps:
+ * a missing declaration must be visible, never guessed at. */
+static const char *levelErrandName(int tmplId)
+{
+	const ErrandTemplate *t = errandsTemplate(tmplId);
+
+	return (t != NULL) ? t->name : "?";
 }
 
 /* Queue the critter's next leg on its personal board. It is taken on the NEXT
@@ -1002,6 +1013,15 @@ static void levelLogBrainEvent(const BrainEvent *ev)
 			     t, ev->id, ev->customer, selPolicyName(ev->policy),
 			     ev->amount);
 		break;
+	case BRAIN_EV_ERRAND_ADOPT:
+		/* THE WHY-THIS-JOB LINE, and the one the errand framework
+		 * exists to make possible: which goal this customer adopted,
+		 * and how urgent it read on the customer's own needs when it
+		 * did. Before errands the only log line said "arrived", and
+		 * every question after it was archaeology. */
+		SDL_Log("isomata: [t=%llums] customer #%d adopted errand %s (band %d)",
+			t, ev->id, levelErrandName(ev->tmpl), ev->band);
+		break;
 	case BRAIN_EV_TASK_BEGIN:
 		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
 			     "isomata: [t=%llums] customer #%d chose machine %d (dist %d, score %d, policy %s)",
@@ -1039,6 +1059,11 @@ static void levelLogBrainEvent(const BrainEvent *ev)
 			     "isomata: [t=%llums] customer #%d: machine %d run done, walking back to collect",
 			     t, ev->id, ev->machine);
 		break;
+	case BRAIN_EV_REPLAN:
+		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+			     "isomata: [t=%llums] customer #%d released machine %d and re-selected",
+			     t, ev->id, ev->machine);
+		break;
 	case BRAIN_EV_INTERRUPTED:
 		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
 			     "isomata: [t=%llums] customer #%d: machine %d BROKE mid-run; re-planning (garment %s)",
@@ -1057,9 +1082,8 @@ static void levelLogBrainEvent(const BrainEvent *ev)
 			     t, ev->id, garmentStateName(ev->garment));
 		break;
 	case BRAIN_EV_ABANDON:
-		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
-			     "isomata: [t=%llums] customer #%d abandoning the goal (garment %s)",
-			     t, ev->id, garmentStateName(ev->garment));
+		SDL_Log("isomata: [t=%llums] customer #%d gave up the errand (garment %s); walking out",
+			t, ev->id, garmentStateName(ev->garment));
 		break;
 	case BRAIN_EV_WAIT_TIMEOUT:
 		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,

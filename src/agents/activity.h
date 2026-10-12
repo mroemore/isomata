@@ -98,7 +98,24 @@ struct Agent;
  * both; OR them. */
 typedef enum ActivityFlag {
 	ACT_IN_PLACE = 0,	/* no conflict, no target to walk to */
-	ACT_NEEDS_PLACE = 1	/* something in the world must be found first */
+	ACT_NEEDS_PLACE = 1,	/* something in the world must be found first */
+	/* NOT A FILLER. This activity is reached only by an errand that
+	 * enqueues it (agents/errand.h), and agentBestFill skips it.
+	 *
+	 * WHY IT IS A FLAG AND NOT A COOLDOWN: "wash the laundry", "collect
+	 * the wash" and "leave" are things an agent does because it set out
+	 * to do them, never things an agent decides to do on a whim while
+	 * standing idle — a cooldown would still let every agent eventually
+	 * pick them, and a skill gate would be a lie (skills modify, they do
+	 * not disqualify). Declaring it in the row is what keeps the header's
+	 * promise honest: an activity is never "primary" or "secondary",
+	 * because whether an agent reaches one is a property of what the
+	 * agent was doing, never of the activity.
+	 *
+	 * It does not make the row unscored: jobUrgency still resolves it,
+	 * which is what an errand's enqueued job needs, and NEEDS_PLACE still
+	 * says what the row needs before it can run. */
+	ACT_ERRAND_ONLY = 2
 } ActivityFlag;
 
 /* One row: a declaration of something an agent can do. Uniform shape, so a
@@ -123,7 +140,16 @@ typedef enum ActivityId {
 	ACT_PLAY_ARCADE = JOB_PLAY_ARCADE,
 	ACT_NAP = JOB_NAP,
 	ACT_TIDY = JOB_REPAIR,
-	ACT_COFFEE = JOB_PAY	/* the two-need row: see ACTIVITIES in activity.c */
+	ACT_COFFEE = JOB_PAY,	/* the two-need row: see ACTIVITIES in activity.c */
+	/* THE ERRAND'S OWN ROWS. A laundromat errand enqueues a job per step
+	 * (agents/errand.h), and a job is only ever comparable by a band, so
+	 * every kind an errand step names has to RESOLVE to a row — an
+	 * unresolved id scores -1 and the tick fails the job. They are
+	 * ACT_ERRAND_ONLY because an agent never picks any of them for
+	 * itself. */
+	ACT_USE_MACHINE = JOB_USE_MACHINE,
+	ACT_COLLECT = JOB_COLLECT,
+	ACT_LEAVE = JOB_LEAVE
 } ActivityId;
 
 /* WHAT THE WORLD OFFERS, AS THE CALLER SEES IT. A cached view refreshed by

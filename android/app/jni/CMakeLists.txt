@@ -53,7 +53,6 @@ set(ISOMATA_SRC
 	../../../src/scenes/level_controls.c
 	../../../src/entities/easing.c
 	../../../src/entities/entities.c
-	../../../src/ai/fsm.c
 	../../../src/ai/pathfind.c
 	../../../src/ai/nav.c
 	../../../src/sim/machines.c
@@ -66,6 +65,7 @@ set(ISOMATA_SRC
 	../../../src/agents/job.c
 	../../../src/agents/board.c
 	../../../src/agents/activity.c
+	../../../src/agents/errand.c
 	../../../src/ui/ui_scale.c
 	../../../src/ui/element.c
 	../../../src/ui/layout.c

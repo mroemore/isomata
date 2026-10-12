@@ -46,6 +46,8 @@ static const struct {
 	{ JOB_TALK, PLACE_OTHER_AGENT },
 	{ JOB_PLAY_ARCADE, PLACE_ARCADE },
 	{ JOB_REPAIR, PLACE_MACHINE },
+	{ JOB_USE_MACHINE, PLACE_MACHINE },
+	{ JOB_COLLECT, PLACE_MACHINE },
 };
 
 /* THE CATALOGUE. One row per activity, one comment per row naming the need
@@ -150,6 +152,69 @@ static const Activity ACTIVITIES[] = {
 		.duration = 6.0f,
 		.cooldown = 30.0f,
 		.serves = { -1.0f, 0.6f, -1.0f, 0.6f, -1.0f, -1.0f },
+		.skillGate = -1,
+		.skillMin = 0.0f,
+	},
+	/* ACT_USE_MACHINE — driving a machine through its phases: walk to it,
+	 * claim it, pay, load, start the run. Serves NEED_SATISFACTION strongly
+	 * (0.9) and NEED_ESTEEM (0.6): getting the wash actually going is the
+	 * want, and a delivered load is a promise kept. NEEDS_PLACE (a
+	 * machine). ERRAND_ONLY: no agent ever decides to start a wash while
+	 * standing idle.
+	 *
+	 * THE 0.9 IS NOT COSMETIC. A job's band is round(wantUrgency x
+	 * serves) over the needs it serves, so under the framework's current
+	 * need arithmetic — every want decays and nothing restores one yet, so
+	 * a want reads at its own maximum for most of an agent's life — the
+	 * band collapses to round(NEED_BANDS-1 x serves). At 0.9 this row
+	 * bands 14, exactly level with the strongest filler (ACT_NAP, also
+	 * 0.9), and agentShouldSwitch needs a two-band gap before it moves an
+	 * agent that is already busy. An errand's job therefore cannot be
+	 * preempted by a filler, which is the spec's "an errand's continuation
+	 * always outranks the agent's own filler" — and the anti-oscillation
+	 * margin is what makes it structural rather than a tuning accident:
+	 * with every need equally urgent, no gap exists at any pair of rows. */
+	{
+		.id = ACT_USE_MACHINE,
+		.name = "USE_MACHINE",
+		.flags = ACT_NEEDS_PLACE | ACT_ERRAND_ONLY,
+		.duration = 5.0f,	/* loading, in place at the machine */
+		.cooldown = 0.0f,
+		.serves = { -1.0f, -1.0f, -1.0f, 0.9f, 0.6f, -1.0f },
+		.skillGate = -1,
+		.skillMin = 0.0f,
+	},
+	/* ACT_COLLECT — taking a finished machine's output out. The same wants
+	 * as ACT_USE_MACHINE and the same ERRAND_ONLY reach: it is the second
+	 * half of a leg the agent already set out on, never a decision made
+	 * from scratch. */
+	{
+		.id = ACT_COLLECT,
+		.name = "COLLECT",
+		.flags = ACT_NEEDS_PLACE | ACT_ERRAND_ONLY,
+		.duration = 5.0f,	/* collecting, in place at the machine */
+		.cooldown = 0.0f,
+		.serves = { -1.0f, -1.0f, -1.0f, 0.9f, 0.6f, -1.0f },
+		.skillGate = -1,
+		.skillMin = 0.0f,
+	},
+	/* ACT_LEAVE — walking out of the building. Serves NEED_SATISFACTION
+	 * (0.8): the walk itself is the relief when the errand has been
+	 * abandoned, which is the whole "they take their business elsewhere"
+	 * loop. NEEDS_PLACE (a door) and ERRAND_ONLY: nobody idly decides to
+	 * leave mid-shift.
+	 *
+	 * The door is not one of the three cached places, so this row names
+	 * no way to satisfy itself and reads unavailable to a FILL — which is
+	 * correct, and is also why the errand-only flag, not the missing slot,
+	 * is what keeps it off the board. */
+	{
+		.id = ACT_LEAVE,
+		.name = "LEAVE",
+		.flags = ACT_NEEDS_PLACE | ACT_ERRAND_ONLY,
+		.duration = 1.0f,
+		.cooldown = 0.0f,
+		.serves = { -1.0f, -1.0f, -1.0f, 0.8f, -1.0f, -1.0f },
 		.skillGate = -1,
 		.skillMin = 0.0f,
 	},
@@ -407,6 +472,13 @@ int agentBestFill(const struct Agent *a, const JobBoard *b, float now)
 		if (!activityPlaceSatisfied(act, &a->places))
 			continue;
 		if (!activitySkillOpen(a, act))
+			continue;
+		/* ERRAND-ONLY IS NEVER A FILL. The row is reachable by the errand
+		 * that enqueues it (agents/errand.h) and by nothing else, so an
+		 * idle agent standing beside a washer does not start washing it.
+		 * This is the one filter that keeps an errand's job the only
+		 * candidate that matters to a customer in the middle of a wash. */
+		if (act->flags & ACT_ERRAND_ONLY)
 			continue;
 		/* Not a duplicate of work already queued: an idle agent that
 		 * enqueued thirty identical fills would fill its own board and

@@ -2,55 +2,61 @@
 #define ISOMATA_SIM_BRAIN_H
 
 /*
- * The customer brain (T23 layer 3): goals, plan execution, machine selection,
- * payment and the customer lifecycle — plus the SimWorld that owns the entity
- * and machine registries the customers live in.
+ * The customer driver: the world's half of a customer running an ERRAND, plus
+ * the SimWorld that owns the entity, machine and agent registries everybody
+ * lives in.
+ *
+ * WHAT MOVED INTO THE FRAMEWORK (task 5). The customer's old BrainPhase
+ * switch — SELECT / APPROACH / ACT / RUN_WAIT / TASK_END / LEAVE — is gone,
+ * and so is the T21 executor FSM it used to shadow. Both are now data and
+ * jobs: "wash, then dry, then leave" is the ERR_LAUNDRY_CLEAN template
+ * (agents/errand.h) and every step of it is a job on the agent's own
+ * personal board, arbitrated by the want ladder (agents/agent.h). This file
+ * is what is LEFT, and it is exactly the half no framework module may hold:
+ *
+ *   - WHICH machine (src/sim/selection.c's heuristics, untouched);
+ *   - the machine's claim, run and release (src/sim/machines.h — a claimed
+ *     machine IS a claimed thing, so the job's claim and the machine's claim
+ *     are one lifetime, not two models);
+ *   - the fee, debited from the body at the load step;
+ *   - the load's own progression (src/sim/garments.h);
+ *   - the door, and the event stream the level turns into log lines.
+ *
+ * THE BOUNDED WAIT IS A JOB'S, NOT A CLOCK'S. A machine run used to be waited
+ * on with a local countdown (the old waitBudget). It is now the errand's
+ * STEP_GATE_WAIT_MACHINE gate, whose deadline is carried into the wait job's
+ * WAIT, so an expired bound FAILS the job through the lifecycle's JOB_TIMEOUT
+ * — the producer that cell had been waiting for. A machine that never
+ * delivers its phase wake therefore re-plans instead of hanging the customer,
+ * and the release of its claim is the same code path every other failure
+ * takes.
+ *
+ * SATISFACTION AND THE WALK OUT. Blocked time decays NEED_SATISFACTION (the
+ * spec's tier-1 reading: being blocked is an inconvenience), and an errand
+ * that has been blocked for ERRAND_LEAVE_THRESHOLD_WINDOW with satisfaction
+ * below ERRAND_LEAVE_THRESHOLD is abandoned and the customer walks to the door
+ * — the "takes their business elsewhere" loop. Abandoning RELEASES: whatever
+ * the abandoned step held goes back before the walk out, so a machine can
+ * never be left claimed by somebody who has left the building.
  *
  * Pure: no SDL, no allocation, no time source. The whole world advances only
  * by the caller's dt (clamped to BRAIN_MAX_DT), so an integration scenario
  * stepped with a fixed fake dt is deterministic and replayable.
  *
- * EXECUTOR WIRING. The customer driver runs its OWN task-leg phase machine
- * (BrainPhase); the T21 executor FSM is stepped alongside as a transition
- * model — the same events are fed and its states stay coherent — but the
- * driver does NOT yet consult the FSM's state or result to make a decision.
- * Consolidating the driver onto the FSM (or retiring the FSM) is a recorded
- * follow-up (see the T23 report's design-debt section); this header claims
- * only what is true today.
- *
- * One USE_MACHINE plan task runs as two legs:
- *   LOAD leg     SELECT -> fsmStart(machine tile) [MOVE_TO] -> MOVING_TO
- *                ARRIVED -> ACTING: claim the machine (a refusal -> DENIED ->
- *                re-plan), pay the fee, LOAD 5 s in place -> machineStartRun
- *                -> PHASE_DONE -> WAITING.
- *   RUN_WAIT     the customer walks to the wait spot ("owner away") and idles
- *                until the machine's PHASE_DONE wake arrives; then a fresh
- *                fsmStart(machine) begins the collectors' walk back.
- *   COLLECT leg  ARRIVED -> COLLECT 5 s -> machineRelease + the garment
- *                transition -> a zero-length WAITING closes the task (DONE).
- * A machine that breaks mid-run delivers an INTERRUPTED wake -> the leg ends
- * with the garment untouched and the task re-plans (broken machines are not
- * FREE, so selection excludes them; the failed machine is blacklisted too).
- *
- * FAILURE / WAIT POLICY. No free candidate -> a bounded retry wait
- * (BRAIN_WAIT_RETRY_SECS x BRAIN_MAX_WAIT_RETRIES); still none -> the goal is
- * abandoned and the customer leaves with whatever load it has (DIRTY at the
- * first task), with an honest BRAIN_EV_ABANDON. Insufficient funds at the PAY
- * step abandons the same way. A machine-run wait is bounded by the run length
- * plus BRAIN_MACHINE_WAIT_SLACK; on expiry the machine is released and the task
- * re-plans.
- *
- * EVENTS. The brain writes a bounded stream of BrainEvent records (capacity
- * `cap`, a deterministic prefix when more happen). The level turns them into
- * SDL_Log lines; the acceptance suite asserts their exact order. Machines'
- * rows are not re-derived here — the level's wake loop still logs them.
+ * One USE_MACHINE errand step, in the phases the framework's lifecycle already
+ * has:
+ *   the step's job is enqueued -> WALKING (agentsUpdate routes the body to
+ *   the machine) -> on arrival the driver CLAIMS the machine, PAYS the fee and
+ *   begins the LOAD -> the job's own WAIT is the load, and the driver starts
+ *   the run when it ends -> the errand's GATE holds the bounded wait for the
+ *   machine's PHASE_DONE -> a COLLECT step walks back, takes the load out and
+ *   releases the machine, which is what advances the garment.
  */
 
-#include "ai/fsm.h"
+#include "agents/agent.h"
 #include "entities/entities.h"
 #include "sim/garments.h"
 #include "sim/machines.h"
-#include "sim/plan.h"
 #include "sim/selection.h"
 
 #include <stdbool.h>
@@ -58,33 +64,39 @@
 /* Customers alive at once (the entity registry is larger; the T21 demo critters
  * share it). */
 #define BRAIN_MAX_CUSTOMERS 8
-/* Machines one task instance may blacklist after failures. */
-#define BRAIN_MAX_FAILED 8
 /* Wakes consumed per simUpdate (a bounded prefix if more complete). */
 #define BRAIN_MAX_WAKES 16
 /* Events emitted per simUpdate (a bounded prefix if more happen). */
 #define BRAIN_MAX_EVENTS 128
-/* simUpdate clamps a frame's dt to this, matching the entity/machine walkers. */
+/* simUpdate clamps a frame's dt to this, matching the entity/machine walkers
+ * and agentsUpdate's own clamp. */
 #define BRAIN_MAX_DT 0.1f
 
-/* Activity step ids (the FSM BEGIN_ACTIVITY / ACTING sub-step). */
-#define BRAIN_STEP_PAY 0
-#define BRAIN_STEP_LOAD 1
-#define BRAIN_STEP_COLLECT 2
-
-/* WAIT reasons (the FSM WAIT payload). */
-#define BRAIN_WAIT_MACHINE 0	/* waiting for a machine run to finish */
-#define BRAIN_WAIT_TASK_END 1	/* zero-length end-of-task wait */
-#define BRAIN_WAIT_NO_CANDIDATE 2 /* no free machine; retrying */
+/* The in-place sub-step inside a USE_MACHINE step. The errand names WHAT the
+ * step is (use a machine); these are the world's own phases of doing it, and
+ * the one that matters is the claim, which is why the state is per customer
+ * rather than on the errand. */
+#define BRAIN_STEP_NONE 0
+#define BRAIN_STEP_PAY 1	/* claim + pay have not happened yet */
+#define BRAIN_STEP_LOAD 2	/* claimed, paid, loading */
+#define BRAIN_STEP_COLLECT 3	/* at the machine, taking the load out */
 
 /* Load / collect durations (seconds, in place). */
 #define BRAIN_LOAD_SECS 5.0f
 #define BRAIN_COLLECT_SECS 5.0f
-/* No-candidate retry: wait this long, retry, at most this many times. */
+/* No-candidate retry: wait this long, retry, at most this many times. The
+ * errand's own leave window (ERRAND_LEAVE_THRESHOLD_WINDOW) is the bound that
+ * normally fires first; this is the belt-and-braces cap on a world that never
+ * frees a machine. */
 #define BRAIN_WAIT_RETRY_SECS 1.0f
 #define BRAIN_MAX_WAIT_RETRIES 120
-/* A machine-run wait is bounded by the run length plus this slack. */
-#define BRAIN_MACHINE_WAIT_SLACK 60.0f
+/* A machine-run wait is bounded by the run length plus this slack. This is the
+ * gate deadline handed to the errand, which carries it into the wait job, so
+ * a machine that never delivers its wake fails that job (JOB_TIMEOUT) instead
+ * of hanging the customer. The slack is kept shorter than an errand's leave
+ * window (ERRAND_LEAVE_THRESHOLD_WINDOW) so the bounded wait always ends
+ * BEFORE the customer walks out — see the note there. */
+#define BRAIN_MACHINE_WAIT_SLACK 30.0f
 
 /* Spawner defaults. */
 #define BRAIN_START_MONEY 20
@@ -93,51 +105,49 @@
 /* Customer walk speed (world units / second). */
 #define BRAIN_CUSTOMER_SPEED 2.5f
 
-/* The glue-level task-leg phase. (The FSM's own state is the executor view;
- * this is what the glue is doing within the current plan task.) */
-typedef enum BrainPhase {
-	BRAIN_PH_INACTIVE = 0,	/* slot unused */
-	BRAIN_PH_SELECT,	/* choose a machine for the current task */
-	BRAIN_PH_NO_CANDIDATE,	/* no free machine: bounded retry wait */
-	BRAIN_PH_APPROACH,	/* FSM MOVING_TO the bound machine */
-	BRAIN_PH_ACT,		/* FSM ACTING (pay+load, or collect) */
-	BRAIN_PH_RUN_WAIT,	/* FSM WAITING for the machine run */
-	BRAIN_PH_TASK_END,	/* zero-length WAITING that closes a task */
-	BRAIN_PH_LEAVE,		/* LEAVE task: walking to the exit */
-	BRAIN_PH_DONE,		/* departed (reclaimed this update) */
-} BrainPhase;
-
-/* The two FSM legs of one USE_MACHINE task. */
+/* WHICH HALF OF THE ERRAND THE CUSTOMER IS IN. Not a plan and not a
+ * BrainPhase: the errand's step index says this, and this enum exists only so
+ * the driver can name the phase in a log line and pick the sub-step it runs. */
 typedef enum BrainLeg {
-	BRAIN_LEG_LOAD = 0,	/* approach + claim + pay + load + run wait */
-	BRAIN_LEG_COLLECT = 1,	/* walk back + collect + release */
+	BRAIN_LEG_NONE = 0,	/* no errand step in flight */
+	BRAIN_LEG_LOAD,		/* USE_MACHINE: claim, pay, load, start the run */
+	BRAIN_LEG_GATE,		/* the machine's run: the errand's gate */
+	BRAIN_LEG_COLLECT,	/* COLLECT: walk back, take the load, release */
+	BRAIN_LEG_LEAVE		/* LEAVE: walking to the exit */
 } BrainLeg;
 
 typedef struct SimCustomer {
 	EntityHandle handle;
-	Fsm fsm;
+	/* THE MIND. The customer is an Agent (agents/agent.h) and its errand
+	 * lives in that record; this is only the link back, because the level
+	 * still wants to look a customer up by its entity handle. */
+	AgentHandle agent;
 	int id;			/* monotonic spawn id (logs) */
 	int policy;		/* SelPolicy */
 	int garment;		/* GarmentState */
-	Plan plan;
-	int taskIndex;		/* current plan task */
-	int phase;		/* BrainPhase */
-	int leg;		/* BrainLeg, valid during USE_MACHINE */
-	int actStep;		/* BRAIN_STEP_* during BRAIN_PH_ACT */
-	MachineHandle target;	/* bound / attempted machine */
-	MachineHandle failed[BRAIN_MAX_FAILED];
-	int failedCount;
-	int waitRetries;	/* no-candidate retries for the current task */
-	float timer;		/* activity / retry countdown */
-	float waitBudget;	/* machine-run wait countdown */
+	MachineHandle target;	/* the machine the current step is about */
+	int leg;		/* BrainLeg, derived from the errand's step */
+	int actStep;		/* BRAIN_STEP_* inside a USE_MACHINE step */
+	int leaveJob;		/* the job walking to the exit, or -1 */
 	int pendingWake;	/* wake delivered this frame, or -1 */
+	int waitRetries;	/* no-candidate retries for the current step */
+	float timer;		/* retry countdown */
+	/* The world-clock second at which the machine currently running for
+	 * this customer stops being worth waiting for (0 when none is). The
+	 * errand carries the same bound as the gate job's DURATION; this is the
+	 * deadline itself, measured from the moment the run started, and it is
+	 * what fires JOB_TIMEOUT on the wait job — the framework's producer for
+	 * a phase that never completes. */
+	float gateDeadline;
 	bool wantDespawn;	/* leave: despawn after this step */
-	bool abandoned;		/* gave up the goal (leaves as-is) */
+	bool abandoned;		/* gave up the errand (leaves as-is) */
+	bool reported;		/* the errand's terminal state was acted on */
 } SimCustomer;
 
 typedef enum BrainEventKind {
 	BRAIN_EV_SPAWN = 0,	/* a customer arrived at the door */
-	BRAIN_EV_TASK_BEGIN,	/* a plan task's machine was chosen */
+	BRAIN_EV_ERRAND_ADOPT,	/* it adopted an errand, and at what band */
+	BRAIN_EV_TASK_BEGIN,	/* a step's machine was chosen */
 	BRAIN_EV_NO_CANDIDATE,	/* no free machine (a bounded retry) */
 	BRAIN_EV_CLAIM_DENIED,	/* claim refused at arrival -> re-plan */
 	BRAIN_EV_PAY,		/* fee debited */
@@ -145,10 +155,11 @@ typedef enum BrainEventKind {
 	BRAIN_EV_RUN_START,	/* machineStartRun */
 	BRAIN_EV_MACHINE_DONE,	/* PHASE_DONE wake consumed */
 	BRAIN_EV_INTERRUPTED,	/* INTERRUPTED wake consumed (broke) */
+	BRAIN_EV_REPLAN,	/* the step's job failed: released, re-selecting */
 	BRAIN_EV_COLLECT,	/* collect-in-place started */
 	BRAIN_EV_GARMENT,	/* garment transition applied */
-	BRAIN_EV_ABANDON,	/* gave up (no funds / no machine) */
-	BRAIN_EV_WAIT_TIMEOUT,	/* machine-run wait budget exhausted */
+	BRAIN_EV_ABANDON,	/* gave up the errand and will walk out */
+	BRAIN_EV_WAIT_TIMEOUT,	/* the gate's bound expired */
 	BRAIN_EV_LEAVE_BEGIN,	/* heading to the exit */
 	BRAIN_EV_DEPART,	/* left the building */
 	BRAIN_EV_COUNT,
@@ -164,11 +175,21 @@ typedef struct BrainEvent {
 	int score;		/* winning heuristic score (TASK_BEGIN) */
 	int distance;		/* tile distance to the machine (TASK_BEGIN) */
 	int garment;		/* garment state at the event */
+	/* The errand an adoption named, and the band that chose it. These two
+	 * are what makes "why is this customer doing that" a log line rather
+	 * than archaeology (the spec's why-this-job artifact). */
+	int tmpl;
+	int band;
 } BrainEvent;
 
 typedef struct SimWorld {
 	EntityRegistry entities;
 	MachineRegistry machines;
+	/* The customers' MINDS, plus the one board they share. Every customer
+	 * is an agent, so this file can put its errand's jobs on the personal
+	 * board embedded in the Agent record and have agentsUpdate run them. */
+	AgentRegistry agents;
+	AgentBoards boards;
 	SimCustomer customers[BRAIN_MAX_CUSTOMERS];
 	int customerCount;
 	const Voxmap *map;
@@ -181,6 +202,10 @@ typedef struct SimWorld {
 	int spawnCap;
 	int spawnCursor;	/* spawner policy-mix cursor */
 	int nextId;		/* monotonic spawn id */
+	/* Seconds of ticked dt the world has lived: the board clock the
+	 * reservations are swept against (agents/board.h), accumulated from
+	 * the caller's dt and never a wall clock. */
+	float now;
 	MachineWake wakes[BRAIN_MAX_WAKES];
 	int wakeCount;		/* wakes produced by the last simUpdate */
 	/* Customer billboard spec (set by the level; applied on spawn). */
@@ -191,8 +216,8 @@ typedef struct SimWorld {
 	SelWorld select;	/* built over `machines` */
 } SimWorld;
 
-/* Reset the world: bind `map`, record the door / exit / wait tiles, empty both
- * registries. Machines are added afterwards with machineCreate on
+/* Reset the world: bind `map`, record the door / exit / wait tiles, empty all
+ * three registries. Machines are added afterwards with machineCreate on
  * `w->machines`. NULL `w` is a no-op. */
 void simWorldInit(SimWorld *w, const Voxmap *map, int doorX, int doorZ,
 		  int exitX, int exitZ, int waitX, int waitZ);
@@ -202,10 +227,12 @@ void simWorldInit(SimWorld *w, const Voxmap *map, int doorX, int doorZ,
 void simSetSpawner(SimWorld *w, bool enabled, float interval, int cap);
 
 /* Spawn one customer at the door with policy `policy` and `money` (the funds
- * live on the entity's `money` field), starting LEAVE_WITH_CLEAN_DRY. Appends
- * events to `out` (capacity `cap`, count in `*nOut`). Returns the entity
- * handle, or ENTITY_INVALID when the customer cap is reached / the world is
- * NULL / the door tile is void. */
+ * live on the entity's `money` field). The customer is an agent, and adopts
+ * its first errand by need (agents/errand.h) before this returns — the
+ * adoption is what makes its first job exist, and BRAIN_EV_ERRAND_ADOPT says
+ * so. Appends events to `out` (capacity `cap`, count in `*nOut`). Returns the
+ * entity handle, or ENTITY_INVALID when the customer cap is reached / the
+ * world is NULL / the door tile is void. */
 EntityHandle simSpawnCustomer(SimWorld *w, int policy, int money,
 			      BrainEvent *out, int cap, int *nOut);
 
@@ -216,12 +243,15 @@ EntityHandle simSpawnCustomer(SimWorld *w, int policy, int money,
 bool simBreakMachine(SimWorld *w, MachineHandle h);
 
 /* Advance the world by `dt` (clamped to [0, BRAIN_MAX_DT]): run the spawner,
- * advance the machines and collect wakes, deliver each wake to its owner's
- * customer, step every customer brain, then reclaim departed customers. Writes
- * up to `cap` events to `out` and returns the number written. The caller
- * advances entity movement afterwards with entitiesUpdate(&w->entities, dt),
- * kept separate so the level steps the shared registry (critters + customers)
- * exactly once. Returns 0 for a NULL world. */
+ * sweep the boards' reservations, advance the machines and collect wakes,
+ * deliver each wake to its owner's customer, run the agent tick
+ * (agentsUpdate — decisions and the job lifecycle), then drive every customer's
+ * errand: the world's effects on the step in flight, the errand's own advance,
+ * the blocked-time satisfaction decay and the walk out. Writes up to `cap`
+ * events to `out` and returns the number written. The caller advances entity
+ * movement afterwards with entitiesUpdate(&w->entities, dt), kept separate so
+ * the level steps the shared registry (critters + customers) exactly once.
+ * Returns 0 for a NULL world. */
 int simUpdate(SimWorld *w, float dt, BrainEvent *out, int cap);
 
 /* Live customer count (0 for NULL). */
@@ -229,6 +259,12 @@ int simCustomerCount(const SimWorld *w);
 
 /* The customer owning `h`, or NULL. */
 const SimCustomer *simCustomerFor(const SimWorld *w, EntityHandle h);
+
+/* The errand a customer is on right now, or NULL: the live errand record for
+ * `h`, which is what a debug overlay reads (template id, step, blocked time).
+ * The returned pointer is into the agent registry and is invalidated by the
+ * next simUpdate. */
+const Errand *simCustomerErrand(const SimWorld *w, EntityHandle h);
 
 /* Stable event log name: "SPAWN"/"TASK_BEGIN"/... ; "?" for an unknown kind. */
 const char *brainEventName(int kind);
