@@ -278,7 +278,16 @@ Agent *agentGet(AgentRegistry *r, AgentHandle h);
 
 /* Release a slot: the `alive` flag clears, the slot is scrubbed to zero so a
  * stale handle can never read a live agent, and liveCount drops. Destroying
- * a dead or out-of-range handle is a no-op. */
+ * a dead or out-of-range handle is a no-op.
+ *
+ * THE PERSONAL BOARD DIES WITH THE SLOT — it is embedded by value, nobody
+ * else can see it, and the work on it was the agent's own. THE SHARED BOARD
+ * DOES NOT, and this function cannot reach it (the registry has no boards;
+ * SimWorld owns both). A shared claim the agent still held is released by the
+ * NEXT claim pass, which drops any claim whose owner id is no longer in the
+ * registry (agentsClaimFromShared). That is deliberately the healer rather
+ * than this function: a release here would need the boards at every destroy
+ * site, and would still miss every other way an owner can vanish. */
 void agentDestroy(AgentRegistry *r, AgentHandle h);
 
 /* Advance every LIVE agent one tick: needDecay with the role's multipliers,

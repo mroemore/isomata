@@ -213,6 +213,58 @@ static void test_a_lapsed_reservation_goes_to_another_staffer(void)
 	TEST_ASSERT_EQUAL_INT(b->id, claimerOf(&shared, 0));
 }
 
+/* THE OTHER HALF OF "A DEAD WORKER CANNOT DEADLOCK THE FLOOR". The test above
+ * is the worker that stopped BEFORE starting, and a deadline frees that one.
+ * This is the worker that stopped MID-JOB, which no deadline can free — a
+ * running claim deliberately never expires — so the claim pass is what has to
+ * heal it. Without this, a staffer destroyed mid-repair leaves the job claimed
+ * by an id that will never release it, boardBestFor hides the job from
+ * everybody ("held by anybody else" is not a candidate), and the machine stays
+ * down for the life of the process. */
+static void test_a_dead_owners_running_claim_goes_back_to_the_board(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	AgentHandle ah;
+	Agent *b;
+	Job *j;
+	int deadId;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	ah = agentCreate(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(ah != AGENT_INVALID);
+	deadId = agentGet(&reg, ah)->id;
+	b = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 1) == 0);
+
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(deadId, claimerOf(&shared, 0));
+
+	/* Take it PAST the reservation, so the claim is running and no sweep
+	 * will ever touch it again — however long the clock runs. */
+	stepTo(&shared, 0, JOB_WALKING);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, shared.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(0, boardExpire(&shared, 3600.0f));
+	TEST_ASSERT_EQUAL_INT(deadId, claimerOf(&shared, 0));
+
+	/* The owner dies mid-job. Its own board dies with the slot; the shared
+	 * claim outlives the slot that held it. */
+	agentDestroy(&reg, ah);
+	TEST_ASSERT_EQUAL_INT(deadId, claimerOf(&shared, 0));
+
+	/* The next pass heals it and hands the work to the staffer that is
+	 * still here — and the job is NOT restarted: it resumes WALKING, which
+	 * is the "a released job is walked by whoever takes it next" rule. */
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 3601.0f));
+	TEST_ASSERT_EQUAL_INT(b->id, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(0, b->engagedJob);
+	TEST_ASSERT_TRUE(b->engagedShared);
+	j = boardJob(&shared, 0);
+	TEST_ASSERT_NOT_NULL(j);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, j->state);
+}
+
 static void test_a_lapsed_reservation_skips_a_staffer_that_is_busy(void)
 {
 	AgentRegistry reg;
@@ -1227,6 +1279,7 @@ void run_test_board(void)
 	RUN_TEST(test_board_is_deterministic);
 	RUN_TEST(test_claim_from_shared_gives_a_contended_job_to_one_agent);
 	RUN_TEST(test_a_lapsed_reservation_goes_to_another_staffer);
+	RUN_TEST(test_a_dead_owners_running_claim_goes_back_to_the_board);
 	RUN_TEST(test_a_lapsed_reservation_skips_a_staffer_that_is_busy);
 	RUN_TEST(test_a_running_job_is_never_stolen_by_the_pass);
 	RUN_TEST(test_the_pass_gives_a_job_to_a_staffer_that_is_not_busy);

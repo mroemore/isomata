@@ -61,19 +61,28 @@
  *   reserved (the lifecycle is still JOB_CLAIMED — "reserved, not yet
  *   walking") — the claim is a PROMISE TO START. If the job has not left
  *   JOB_CLAIMED by the end of BOARD_RESERVE_SECS, boardExpire frees it and
- *   it goes back on the board, so nobody sits on a job forever and a dead
- *   worker cannot deadlock the floor (the stale-claim failure the spec
- *   names). The window is honoured for its full length: a reservation is
- *   released only AFTER its deadline, never at it.
+ *   it goes back on the board, so nobody sits on a job forever and a worker
+ *   that stopped before starting cannot deadlock the floor (the stale-claim
+ *   failure the spec names). The window is honoured for its full length: a
+ *   reservation is released only AFTER its deadline, never at it.
  *
  *   running (WALKING, INTERACTING, WAITING) — the claim is the OWNER'S and
- *   no sweep touches it, however long the job takes. A 30-second machine
+ *   no sweep HERE touches it, however long the job takes. A 30-second machine
  *   wash must not become claimable halfway through, or a second agent
  *   starts executing the same job: that is double execution, and it breaks
  *   the one guarantee this module exists to give. A running claim ends the
  *   way every claim ends — the job reaches DONE/FAILED and its owner
  *   releases it (boardRelease), or the owner releases it early on
  *   preemption, cancel or abandon.
+ *
+ *   WHICH IS WHY A DEAD OWNER'S RUNNING CLAIM IS NOT THIS MODULE'S TO FIND.
+ *   A worker destroyed mid-job leaves a claim nothing here can expire — no
+ *   deadline is supposed to. That one is healed a layer up, by the pass that
+ *   hands the work out: agentsClaimFromShared releases every claim whose
+ *   owner id is no longer in the registry (agents/agent.c). The rule stays
+ *   here because the boundary is here: a board must never ask whether an
+ *   agent is alive — it does not know what an agent is — but it must say
+ *   plainly which failures it does not cover.
  *
  * No renewal mechanism exists because none is needed: a running claim does
  * not expire, and a reservation that is never converted into a running claim

@@ -705,6 +705,54 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 	return decisions;
 }
 
+/* Is `id` the identity of a live agent? A linear scan, called once per
+ * CLAIMED job rather than once per job, so its cost is (claims x AGENT_MAX)
+ * and not (slots x agents). */
+static bool agentIdIsLive(const AgentRegistry *r, int id)
+{
+	int i;
+
+	for (i = 0; i < AGENT_MAX; i++)
+		if (r->alive[i] && r->slots[i].id == id)
+			return true;
+	return false;
+}
+
+/* A CLAIM WHOSE OWNER IS GONE IS NOT A CLAIM, and no deadline can find it.
+ * boardExpire covers the worker that stopped BEFORE it started — its
+ * reservation lapses on its own. Nothing covers the worker that stopped
+ * MID-JOB, because a running claim deliberately never expires (agents/board.h)
+ * and that is what stops a 30-second wash becoming claimable halfway through.
+ * So a staffer destroyed while its repair walks leaves a claim held by an id
+ * that will never release it, and boardBestFor then hides that job from
+ * everybody — "held by anybody else" is not a candidate — so the machine
+ * stays down and the posting sits on the board for the life of the process.
+ *
+ * THE PASS THAT HANDS OUT SHARED WORK IS THEREFORE ALSO THE PASS THAT CLEARS
+ * WORK NOBODY CAN BE DOING, and the test is by ID, NEVER BY HANDLE: `id` is
+ * stamped from a monotonic counter and never reissued (agents/agent.h), so a
+ * reused slot carries a NEW id and a dead owner's claim can never be mistaken
+ * for a live agent's. The job's lifecycle is NOT touched — a WALKING job that
+ * is released is walked by whoever takes it next, exactly as boardRelease
+ * documents. */
+static int agentReleaseDeadClaims(const AgentRegistry *r, JobBoard *shared)
+{
+	int released = 0;
+	int slot;
+
+	for (slot = 0; slot < BOARD_MAX; slot++) {
+		const Job *j = boardJob(shared, slot);
+
+		if (j == NULL || j->claimer == JOB_INVALID)
+			continue;
+		if (agentIdIsLive(r, j->claimer))
+			continue;
+		boardRelease(shared, slot);
+		released++;
+	}
+	return released;
+}
+
 int agentsClaimFromShared(AgentRegistry *r, JobBoard *shared, float now)
 {
 	int claims = 0;
@@ -718,6 +766,11 @@ int agentsClaimFromShared(AgentRegistry *r, JobBoard *shared, float now)
 	 * back on the board" is a frame late and an agent that stopped mid
 	 * reservation keeps the floor's work hostage until the next pass. */
 	(void)boardExpire(shared, now);
+	/* And the sweep that no deadline can do: work whose owner is no
+	 * longer in the registry goes back too, or a staffer destroyed
+	 * mid-job takes its repair down with it (see
+	 * agentReleaseDeadClaims). */
+	(void)agentReleaseDeadClaims(r, shared);
 	for (i = 0; i < AGENT_MAX; i++) {
 		Agent *a = &r->slots[i];
 		Job *j;
