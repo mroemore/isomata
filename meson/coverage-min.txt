@@ -282,18 +282,12 @@ src/sim/selection.c		95
 #
 # TASK 5 REWRITES brain.c, and T23's floor of 80 STANDS.
 #
-# It did not stand by accident. Round 1 measured the rewrite (76.96%) and
-# defended the number in prose, which is the one thing this file forbids;
-# rounds 2 and 3 then classified every arm the rewrite opened. Eleven guards
-# whose precondition their own caller had already established were REMOVED —
-# the agent.c boardClaim argument verbatim, see the note on that module — two
-# reachable arms were closed with scenarios, and everything that survives is
-# named below with the input that would reach it. Nothing is unaccounted for:
-# every open arm appears in this list.
+# It did not stand by accident, and it did not stand by prose either. The
+# rewrite first measured 76.96% and tried to defend the number in a comment;
+# rounds 2 and 3 classified the arms the rewrite opened and removed the ones
+# that could not fire, and this is the result: 327/408 branches, 80.1%.
 #
-# Final measurement: 327/408 branches, 80.1%.
-#
-# REMOVED AS UNREACHABLE BY CONSTRUCTION (11):
+# REMOVED AS REDUNDANT OR UNREACHABLE (11), with the reason each cannot fire:
 #
 #   1. brainSelectMachine's `s == NULL` — its only caller resolves the step
 #      one statement earlier and returns when it is NULL.
@@ -308,13 +302,18 @@ src/sim/selection.c		95
 #      brainAbandonErrand callers pass the errand they are abandoning, and
 #      errandAbandon is itself NULL-safe.
 #   6. `!errandBlocked(e)` in brainDecaySatisfaction — its sole caller sits
-#      INSIDE `if (errandBlocked(e))`, which is the same test that decides
-#      whether blockedFor advances. (Round 2 removed the guard two lines above
-#      this one and left this half of the condition behind; that was the
-#      inconsistency round 3 caught.)
-#   7. `e->state != ERRAND_ACTIVE` in brainShouldLeave — its sole caller is
-#      reached only after brainDrive established ACTIVE at the top and the
-#      advance loop broke on it changing. Same half-condition mistake as (6).
+#      INSIDE `if (errandBlocked(e))`, the same test that decides whether
+#      blockedFor advances. (Round 2 removed the guard two lines above and
+#      left this half of the condition behind; round 3 caught it.)
+#   7. `e->state != ERRAND_ACTIVE` in brainShouldLeave. NOT "the caller
+#      guarantees ACTIVE" — it does not; the advance loop breaks on a terminal
+#      errand and carries on to the call. The check is redundant because a
+#      terminal errand can never satisfy the rule that follows it:
+#      errandBlocked() is false for anything that is not ERRAND_ACTIVE
+#      (errand.c), so the blocked clock is reset to zero one statement before
+#      this call and `0.0f < ERRAND_LEAVE_THRESHOLD_WINDOW` answers false.
+#      (Round 3's first attempt at this justification refuted itself; this is
+#      the reason the removal is safe.)
 #   8. `c != NULL` in brainSlotUsed — all seven call sites pass a record taken
 #      out of the registry (`&w->customers[i]`, or a `c` bound to one).
 #   9. `s != NULL` in brainStepNeedsMachine — its one caller returned on a NULL
@@ -323,8 +322,7 @@ src/sim/selection.c		95
 #      the body exists, and this is the only call site.
 #  11. `m->state == MACHINE_STATE_BROKEN` in the collect leg — machineBreak
 #      always clears the owner (machines.c), so a BROKEN machine never has one
-#      for the comparison to be about. Round 2 kept it under a broad label;
-#      round 3 decides it on its own.
+#      for the comparison to be about.
 #
 # CLOSED BY A SCENARIO (rounds 2 and 3):
 #
@@ -336,52 +334,71 @@ src/sim/selection.c		95
 #     adoptions fills its slot and drops the second REPORT, and both errands
 #     are still adopted (test_update_guards).
 #
-# KEPT, each with the input that reaches it:
+# THE OPEN-ARM LIST BELOW IS DERIVED, NOT ASSERTED.
 #
-#   - brainEmit's buffer guard (`out == NULL`, `cap <= 0`): covered for the
-#     whole-tick path in test_update_guards; the per-leg arms need a zero
-#     capacity in the middle of a live scenario.
-#   - brainStepOf / brainLegOfStep's template-and-index bounds (and the
-#     `s == NULL` arms that follow them): only a hand-built errand naming an
-#     id no row claims, or an index past its step count, reaches these —
-#     errandAdvance refuses to advance such a record and marks it FAILED, so
-#     the driver sees a terminal errand rather than a live one.
-#   - brainLegOfStep's `default:` (a job kind that is none of LOAD, COLLECT or
-#     LEAVE): only a template naming a job kind the driver has no leg for.
-#     Template data, not state.
-#   - brainEnqueueLeave's `!activityBindJob` and its board-full refusal: ACT_LEAVE
-#     is a shipped catalogue row, so the bind cannot fail; the refusal needs a
-#     personal board with BOARD_MAX live jobs, and the driver holds one job.
-#   - brainGoToExit's "already on the way out": duplicated defence today —
-#     brainDrive performs the same check before it looks for an errand — kept
-#     because it is the only thing between a future caller that enqueues a
-#     leave job from elsewhere and a double departure. The CASE it protects is
-#     described by test_an_errand_dying_on_its_leave_step_walks_out_once.
-#   - brainAbandonErrand's `c->abandoned`: the two give-up tests (cannot pay,
-#     patience spent) could both fire in one tick; a customer that just paid
-#     was not blocked, so the shipped flow cannot reach it today.
-#   - brainDriveLeave's two arms: the first needs the leave job to have failed
-#     to enqueue at all (the board-full case above); the second needs it to
-#     vanish from the board while it is being walked.
-#   - machineGet returning NULL (the "machine vanished mid-leg" arm in
-#     brainDriveLoad, the gate's "a machine we no longer own" arm, the collect
-#     leg's owner check): nothing in the tree DESTROYS a machine —
-#     machineBreak keeps the slot and clears the owner, and there is no
-#     machineDestroy — so the only way to reach these is a SimCustomer whose
-#     `target` names a slot that was never created. machineGet is NULL-safe by
-#     contract and the alternative is a crash, so these are floored on purpose.
-#   - machineStartRun refused: a machine released out from under a customer
-#     that still believes it holds it, which no shipped path does.
-#   - the `j == NULL || j->state != ...` sub-arms of the load, gate and collect
-#     legs: the errand's job vanishing from its own board between two reads,
-#     which agentsUpdate's ownership check turns into "the job is not mine"
-#     first.
-#   - the retry cap (BRAIN_MAX_WAIT_RETRIES) in brainSupplyTarget. Unreachable
-#     by construction, not by accident: the leave window (45 s) is always the
-#     shorter of the two, so the window abandons long before 120 retries at one
-#     a second. Kept as the bound for a world whose leave window is ever raised
-#     past it, and pinned from the other side by
-#     test_a_gate_bound_outlasts_the_patience_window.
+#   python3 meson/open-arms.py
+#
+# That script reads build-cov/coverage.info (lcov, straight out of gcov) and
+# prints every branch record that reads zero, split into gcov's loop-bound
+# artefacts and genuine never-taken conditionals. At this commit: 408 branch
+# records; 60 lines carry a never-taken branch; 4 of those lines are loop-bound
+# artefacts (813, 1044, 1065, 1169 — `for` conditions whose bodies always leave
+# through `break`, which gcov records as an exit side never taken); the other 56
+# lines, 75 records, are the arms.
+#
+# The script is the authority. What follows groups those 56 lines by the KIND
+# OF INPUT that would reach them, which is a reading aid and not a completeness
+# claim: this comment does not assert that every arm is classified, and the
+# honest way to check is to re-run the script and read its output. Line numbers
+# are from this commit; a later edit that shifts them is not an error in the
+# script, it is the script telling you to re-read.
+#
+#   TEMPLATE AND STEP VALIDITY — a hand-built or exhausted errand:
+#     110, 113, 118, 137, 620, 624, 682 (unknown template id, step index past
+#     the table, a job kind with no leg), 818, 821 (the advance loop's two
+#     "the errand went terminal" breaks: a template whose steps run out, or the
+#     retry-cap abandon), 1003 (a served-need band that never beats the 0 it
+#     starts at, i.e. a template with no satisfied want), 989 (no template
+#     registered for the role, so no errand to adopt).
+#
+#   REGISTRY AND WORLD RACES — a handle the customer no longer owns:
+#     326 (machineGet mid-leg), 441 and 507 (a machine that is not ours any
+#     more), 928 (a NULL world), 938/941 (the entity registry refusing a
+#     spawn), 1040 (machineBreak refused), 1042/1047/1049 (a wake with no
+#     machine, no owner, or an owner that is not a live customer),
+#     1062/1063 (a delivered wake that is not a usable one).
+#     None of these is reachable by ordinary play: nothing destroys a machine
+#     (machineBreak keeps the slot and clears the owner) and nothing reclaims a
+#     machine under a live customer.
+#
+#   THE ERRAND'S OWN JOB IN AN UNEXPECTED STATE:
+#     370, 376, 459, 467, 502, 522, 526, 528, 545 — the job vanishing from the
+#     agent's board between two reads, or sitting in a state the leg does not
+#     expect. agentsUpdate's ownership check turns most of these into "the job
+#     is not mine" before the leg sees them.
+#
+#   BINDING, BOARD AND CATALOGUE FACTS:
+#     194 (ACT_LEAVE failing to bind — a shipped row), 217 (brainGoToExit's
+#     "already on the way out", duplicated by the check brainDrive performs
+#     before it looks for an errand; kept as the only thing in front of a
+#     double departure if a future caller ever enqueues a leave job from
+#     elsewhere), 221 (the leave job failing to enqueue — a board with
+#     BOARD_MAX live jobs, where the driver holds one), 252 (a second abandon
+#     in one tick; the two give-up tests are separate and a customer that just
+#     paid was not blocked), 379 (machineStartRun refused), 643/664 (a binding
+#     whose machine is not in the state the sub-step expects), 784/785 (the
+#     leave step converging on a leave job that is already enqueued), 693 (the
+#     retry cap: unreachable by construction rather than by accident, because
+#     the leave window is always the shorter of the two — pinned from the other
+#     side by test_a_gate_bound_outlasts_the_patience_window), 735 (the
+#     reported flag being already set on a second visit to the walk-out).
+#
+#   EVENT REPORTING:
+#     84 (brainEmit's buffer guard — covered for the whole-tick path, not per
+#     leg), 857 (the FILL announcement's own guard, which duplicates brainEmit's
+#     so it can stamp the band on the event it just wrote), 1006/1007 (the
+#     spawn's adopt announcement, same shape), 1186 (an event for a customer
+#     with no mind), 1193 (an event kind no case names).
 #
 src/sim/brain.c			80
 
@@ -522,27 +539,29 @@ src/agents/job.c		100
 # it carries, the blacklist's idempotence and bound, the rewind (and its
 # "nothing to go back to" failure), and every NULL guard.
 #
-# THE ARMS THAT REMAIN, and why each is not closeable today:
+# THE OPEN ARMS, DERIVED LIKE brain.c's: `python3 meson/open-arms.py
+# src/agents/errand.c` prints them from the lcov artifact. At this commit 17 of
+# 200 records are never taken, on 17 lines, with no loop-bound artefacts among
+# them. The prose below says what kind of input each group would take; it is a
+# reading aid, not a claim that every arm is classified — the script is the
+# authority.
 #
-#   - the unbound-tile check and the unknown-activity / unscoreable-job
-#     checks inside errandEnqueueJob. Each is a guard on a value its own
-#     caller (errandAdvance) has already checked, or on a template row that
-#     names an activity the catalogue always has: with the shipped table
-#     there is no sequence of steps, failures or adoptions that reaches
-#     them. They are kept because a template is DATA — the next one loaded
-#     can name anything — and a broken row must be reported and refused
-#     rather than walked to the origin.
-#
-#   - the board-full refusal. A personal board is BOARD_MAX jobs and the
-#     laundry errand's longest template holds one live job, so no sequence of
-#     steps can fill it.
-#
-#   - errandFinishJob's "no job handle to retire" and errandRewindToJob's
-#     "template id no row claims" sub-arms: both are the false side of a
-#     condition the caller has already established.
-#
-#   - the gate band's floor comparison is covered on one side only: with the
-#     shipped templates a gate is always enqueued while the step that
-#     preceded it is at least as urgent, so the two sides are not separable
-#     without a template whose steps contradict each other.
+#   - the unbound-tile check and the unknown-activity / unscoreable-job checks
+#     inside errandEnqueueJob (506, 508, 539). Each guards a value its own
+#     caller (errandAdvance) has already checked, or a template row naming an
+#     activity the catalogue always has: with the shipped table no sequence of
+#     steps, failures or adoptions reaches them. Kept because a template is
+#     DATA — the next one loaded can name anything — and a broken row must be
+#     reported and refused rather than walked to the origin.
+#   - the board-full refusal (297): a personal board is BOARD_MAX jobs and the
+#     laundry errand's longest template holds one live job.
+#   - the gate band's floor comparison, one side only (549): with the shipped
+#     templates a gate is always enqueued while the step before it is at least
+#     as urgent, so the two sides are not separable without a template whose
+#     steps contradict each other.
+#   - the remaining guards are on template and step validity (139, 152, 438,
+#     456, 584 — an id no row claims, an index past the table) and on the
+#     errand's own job handle (250, 555, 570, 664, 701, 708 — a list slot
+#     matching two fields at once, an enqueue the board refused, a blacklisted
+#     MACHINE binding that is not one, a gate job that did not land).
 src/agents/errand.c		91

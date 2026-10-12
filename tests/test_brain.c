@@ -668,8 +668,10 @@ static void test_a_machine_broken_during_the_collect_walk_rewinds(void)
  * would announce a second departure for a customer who is already walking to
  * the door, and enqueue a second leave job for the same walk.
  *
- * (It is also the branch that says the guard is not merely defensive: this is
- * how you reach it.) */
+ * (The GUARD at the top of brainGoToExit is not reached by this test — the
+ * driver notices the leave job before it looks for an errand, so the guard
+ * stays duplicated defence. That is recorded in meson/coverage-min.txt, and
+ * this test is here for the behaviour, not for the branch.) */
 static void test_an_errand_dying_on_its_leave_step_walks_out_once(void)
 {
 	Voxmap *map = smallMap();
@@ -767,8 +769,8 @@ static void test_the_mind_vanishing_releases_the_machine(void)
 	TEST_ASSERT_TRUE(countKind(&t, BRAIN_EV_PAY) > 0);
 	m = machineGetConst(&w.machines, 0);
 	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_CLAIMED, m->state);
-	ah = simCustomerFor(&w, h)->agent;
 	TEST_ASSERT_NOT_NULL(simCustomerFor(&w, h));
+	ah = simCustomerFor(&w, h)->agent;
 	TEST_ASSERT_TRUE(ah != AGENT_INVALID);
 
 	/* The MIND goes; the body and the record stay. */

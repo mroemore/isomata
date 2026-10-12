@@ -41,9 +41,11 @@
  *     and there is nothing to re-select.
  *   - brainDriveCollect's completion: the NORMAL release, on the happy path.
  *
- * (This file does not claim those are the only places machineRelease is called
- * from — two of them are not failure paths at all, and the list above is about
- * which paths can end holding a machine, not about where the call happens.)
+ * (The list is about which PATHS can end holding a machine, not about where
+ * the call happens: two of the three are not failure paths. Outside this file
+ * machineRelease is called only by machines.c's own break path and by the
+ * suites — `grep -rn "machineRelease" src/` is the check, and it lists three
+ * sites here.)
  *
  * Three oracles back the sentence. tests/test_brain.c asserts the claim
  * invariant on EVERY TICK of every scenario (no machine is ever owned by a
@@ -572,9 +574,14 @@ static void brainDecaySatisfaction(Agent *a, float dt)
  * are checked, both are named in errand.h, and neither is pretended to be
  * more load-bearing than it is: read agents/errand.h's note on
  * ERRAND_LEAVE_THRESHOLD before changing either half. */
-/* Called with a live errand: brainDrive returns early unless the errand is
- * ACTIVE, and the advance loop breaks the moment it stops being one, so there
- * is no state arm here — just the walk-out rule itself. */
+/* THE WINDOW ALONE DECIDES, and the errand's state is not part of it — not
+ * because the caller guarantees ACTIVE (it does NOT: the advance loop breaks
+ * on a terminal errand and carries on to this call), but because a terminal
+ * errand can never satisfy the rule: errandBlocked() is false for anything
+ * that is not ERRAND_ACTIVE (errand.c), so the blocked clock is reset to zero
+ * one statement earlier and `0.0f < ERRAND_LEAVE_THRESHOLD_WINDOW` answers
+ * false here. The state check that used to stand above it was therefore
+ * redundant rather than unreachable, which is the reason it was removed. */
 static bool brainShouldLeave(const Agent *a, const Errand *e)
 {
 	if (e->blockedFor < ERRAND_LEAVE_THRESHOLD_WINDOW)
