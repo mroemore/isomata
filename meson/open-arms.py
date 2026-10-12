@@ -11,19 +11,26 @@ Paths are resolved from the repository root, so it can be run from anywhere;
 with no argument it uses build-cov/coverage.info under that root.
 
 It reads the lcov artifact (straight out of gcov) rather than a line-number
-approximation, and it splits the records that read zero into three buckets:
+approximation, and it sorts the records gcov did not count as hits into three
+buckets:
 
   NEVER-TAKEN ARM      taken == "0" on a line that is not a loop condition —
                        a decision the suite does not make. These are the arms.
   LOOP-BOUND RECORD    taken == "0" on a `for`/`while` condition. gcov emits an
-                       extra record per loop, so a loop whose body always
-                       leaves through `break` or `return` reads as an exit side
-                       nobody skipped. Not a decision.
+                       extra branch record per loop, so a loop that never
+                       reaches its natural exit (its body breaks out, returns,
+                       or runs the counter out first) reads as an exit side
+                       nobody skipped. Whether a given loop is one of those is
+                       a property of the loop, not something this script
+                       checks, so it prints the lines and leaves the judgement
+                       to the reader.
   LCOV-EXCLUDED        taken == "-", which lcov uses for records it will not
                        count. The gate's denominator (BRF) includes them and the
-                       numerator does not, so they are printed rather than
+                       numerator never can, so they are printed rather than
                        dropped: that is what makes the floor's arithmetic
                        reconcile.
+
+A bucket's note is printed only when that bucket has something in it.
 
 The line shown under each record is the one lcov attributes the record to,
 which for a condition wrapped over several lines is often the statement AFTER
@@ -81,19 +88,24 @@ for ln, blocks in sorted(by_line.items()):
 
 
 def show(title, rows, note):
+    # An empty bucket prints its header and nothing else: a note under an
+    # empty bucket would describe a bucket that is not there.
+    if not rows:
+        print(f"{title} (0 lines)\n")
+        return
     plural = "line" if len(rows) == 1 else "lines"
     print(f"{title} ({len(rows)} {plural}):")
     for ln, miss, tot, text in rows:
         print(f"  {ln:5d}  {miss}/{tot}   {text[:66]}")
-    if note:
-        print(f"  {note}\n")
+    print(f"  {note}\n")
 
 
 print(f"{REL}: {total} branch records, {hit} hit, {missed} never taken, "
       f"{dropped} lcov-excluded\n")
 show("NEVER-TAKEN ARMS — decisions the suite does not make",
-     arms, "")
-show("LOOP-BOUND RECORDS — gcov artefacts, not decisions",
-     loops, "(every path out of these loops is a break or a return)")
-show("LCOV-EXCLUDED RECORDS — counted in BRF, never in BRH",
-     excluded, "(these are why BRF > hit + never-taken)")
+     arms, "(hit count 0; the line lcov attributes the record to)")
+show("LOOP-BOUND RECORDS — gcov's extra per-loop record, listed so it is "
+     "not read as an arm",
+     loops, "(the script does not claim why each loop misses its exit)")
+show("LCOV-EXCLUDED RECORDS — taken == '-', counted in BRF and never in BRH",
+     excluded, "(these are why BRF is larger than hit + never-taken)")

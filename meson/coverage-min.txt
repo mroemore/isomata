@@ -285,7 +285,8 @@ src/sim/selection.c		95
 # It did not stand by accident, and it did not stand by prose either. The
 # rewrite first measured 76.96% and tried to defend the number in a comment;
 # rounds 2 and 3 classified the arms the rewrite opened and removed the ones
-# that could not fire, and this is the result: 327/408 branches, 80.1%.
+# that could not fire. The measured figure is on the gate's own output
+# (80.1% against a floor of 80) and the derivation is `meson/open-arms.py`.
 #
 # REMOVED AS REDUNDANT OR UNREACHABLE (11), with the reason each cannot fire:
 #
@@ -340,24 +341,25 @@ src/sim/selection.c		95
 #
 # That script reads build-cov/coverage.info (lcov, straight out of gcov),
 # collects every branch record it did not hit, and sorts them into the three
-# kinds there are: never-taken arms (a decision the suite does not make),
-# loop-bound records (gcov's extra record per loop, whose body always leaves
-# through a break or a return — an artefact, not a decision), and lcov-excluded
-# records (taken == "-", which the gate counts in its denominator but can never
-# count as hit). It resolves paths from the repository root, so it runs from
-# anywhere.
+# buckets there are: never-taken arms (a decision the suite does not make),
+# loop-bound records (gcov's extra record per loop condition, listed separately
+# so they are not read as decisions — the script does not assert why any given
+# loop misses its exit), and lcov-excluded records (taken == "-", which the gate
+# counts in its denominator but can never count as hit). It resolves paths from
+# the repository root, so it runs from anywhere.
 #
-# At this commit brain.c is: 408 branch records, 327 hit, 79 never taken across
-# 59 lines (of which ONE is a loop-bound artefact — the `for` over the customer
-# list in the wake loop), plus 2 lcov-excluded records on one line. That is the
-# floor's arithmetic exactly: 327/408 = 80.1%.
+# READ THE NUMBERS OFF THE SCRIPT. This entry does not restate them: a count
+# written here has been wrong three times, twice by being derived rather than
+# read. `python3 meson/open-arms.py` prints the totals in its first line and the
+# gate's own output prints the percentage, so nothing here needs to be right
+# about a number to stay useful.
 #
-# The script is the authority. What follows describes, in words, WHAT KIND OF
-# THING each group of arms would need in order to be taken. It deliberately
-# carries no line numbers — a list of line numbers beside prose is a list that
-# goes stale the next time a comment is edited, and it is the reason this entry
-# was wrong twice before this one. It is also not a claim that every arm is
-# classified; the honest way to check is to run the script and read it.
+# What follows describes, in words, WHAT KIND OF THING each group of arms would
+# need in order to be taken. It deliberately carries no line numbers — a list of
+# line numbers beside prose goes stale the next time a comment is edited, and it
+# is one of the reasons this entry was wrong before. It is also not a claim that
+# every arm is classified; the honest way to check is to run the script and read
+# it.
 #
 #   TEMPLATE AND STEP VALIDITY — a hand-built or exhausted errand: an id no row
 #   claims, a step index past the table, a job kind the driver has no leg for,
@@ -520,8 +522,8 @@ src/agents/board.c		100
 # branches, 9/9 functions, 88/88 lines.
 src/agents/job.c		100
 # Task 5: errand templates, the two adoption producers, and one step of an
-# errand. A FIRST measurement for a new module (183/200 branches, 91.5%), so
-# the floor is parked at the measured figure rather than at 100.
+# errand. A FIRST measurement for a new module, so the floor is parked at the
+# measured figure rather than at 100 (the gate prints it: 91.5% against 91).
 #
 # CLOSED by the suite: the template table row by row (ids, names, roles,
 # floors, step counts, every step naming a real activity or a real gate), the
@@ -534,13 +536,11 @@ src/agents/job.c		100
 # it carries, the blacklist's idempotence and bound, the rewind (and its
 # "nothing to go back to" failure), and every NULL guard.
 #
-# THE OPEN ARMS, DERIVED LIKE brain.c's:
-# `python3 meson/open-arms.py src/agents/errand.c`. At this commit: 200 branch
-# records, 183 hit, 17 never taken across 17 lines, no loop-bound artefacts and
-# no lcov-excluded records — which is the floor's arithmetic exactly
-# (183/200 = 91.5%). As with brain.c, the words below say what kind of input
-# each group would take, the script is the authority, and no line numbers are
-# printed here because a list of them goes stale.
+# THE OPEN ARMS, DERIVED LIKE brain.c's, with the same rule about numbers:
+# `python3 meson/open-arms.py src/agents/errand.c` prints the totals in its
+# first line, and the gate prints the percentage; neither is restated here. The
+# words below say what kind of input each group would take, the script is the
+# authority, and no line numbers are printed because a list of them goes stale.
 #
 #   - the unbound-tile check and the unknown-activity / unscoreable-job checks
 #     inside errandEnqueueJob. Each guards a value its own caller
@@ -559,28 +559,4 @@ src/agents/job.c		100
 #     past the table) and the errand's own job handle (a list slot matching two
 #     fields at once, an enqueue the board refused, a blacklisted MACHINE
 #     binding that is not one, a gate job that did not land).
-src/agents/errand.c` prints them from the lcov artifact. At this commit 17 of
-# 200 records are never taken, on 17 lines, with no loop-bound artefacts among
-# them. The prose below says what kind of input each group would take; it is a
-# reading aid, not a claim that every arm is classified — the script is the
-# authority.
-#
-#   - the unbound-tile check and the unknown-activity / unscoreable-job checks
-#     inside errandEnqueueJob (506, 508, 539). Each guards a value its own
-#     caller (errandAdvance) has already checked, or a template row naming an
-#     activity the catalogue always has: with the shipped table no sequence of
-#     steps, failures or adoptions reaches them. Kept because a template is
-#     DATA — the next one loaded can name anything — and a broken row must be
-#     reported and refused rather than walked to the origin.
-#   - the board-full refusal (297): a personal board is BOARD_MAX jobs and the
-#     laundry errand's longest template holds one live job.
-#   - the gate band's floor comparison, one side only (549): with the shipped
-#     templates a gate is always enqueued while the step before it is at least
-#     as urgent, so the two sides are not separable without a template whose
-#     steps contradict each other.
-#   - the remaining guards are on template and step validity (139, 152, 438,
-#     456, 584 — an id no row claims, an index past the table) and on the
-#     errand's own job handle (250, 555, 570, 664, 701, 708 — a list slot
-#     matching two fields at once, an enqueue the board refused, a blacklisted
-#     MACHINE binding that is not one, a gate job that did not land).
 src/agents/errand.c		91
