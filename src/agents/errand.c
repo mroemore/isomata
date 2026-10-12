@@ -390,6 +390,42 @@ int errandOfferToAgent(Agent *a, int templateId, float now)
 	return errandAdopt(a, t, now);
 }
 
+int errandsOfferToRole(struct AgentRegistry *r, int templateId, float now)
+{
+	const ErrandTemplate *t;
+	int adopted = 0;
+	int i;
+
+	if (r == NULL)
+		return 0;
+	/* A broken row is reported by errandsTemplate (with its diagnostic)
+	 * and addressed to nobody: the WORLD named an errand that does not
+	 * exist, which is a missing declaration rather than an agent's
+	 * refusal. */
+	t = errandsTemplate(templateId);
+	if (t == NULL)
+		return 0;
+	for (i = 0; i < AGENT_MAX; i++) {
+		Agent *a = &r->slots[i];
+
+		if (!r->alive[i])
+			continue;
+		/* The same gate errandAdopt applies, read from the same row, so
+		 * "who is this errand for" has exactly one answer in the
+		 * framework. */
+		if (a->role != t->role)
+			continue;
+		/* Every refusal below is an ordinary answer: the agent already
+		 * holds this goal, or its list is full. Neither is an error and
+		 * neither stops the sweep — the rest of the floor is still
+		 * being offered. */
+		if (errandOfferToAgent(a, templateId, now) == ERRAND_INVALID)
+			continue;
+		adopted++;
+	}
+	return adopted;
+}
+
 void errandBindTarget(Errand *e, int targetKind, int id, int targetTile)
 {
 	if (e == NULL)

@@ -26,6 +26,7 @@
 
 #include "unity.h"
 
+#include "agents/agent.h"
 #include "agents/board.h"
 
 #include <string.h>
@@ -74,6 +75,484 @@ static void stepTo(JobBoard *b, int handle, int state)
 		jobStep(j, JOB_ARRIVED);	/* WALKING -> INTERACTING */
 	if (state > JOB_INTERACTING)
 		jobStep(j, JOB_PHASE_DONE);	/* -> WAITING */
+}
+
+/* ---- the shared board under staffing (task 6) --------------------------- *
+ *
+ * A shared board is only SHARED if N agents contend for one board's jobs, so
+ * these tests drive agentsClaimFromShared — the one pass that does the
+ * contention — rather than boardClaim directly. The oracles are the ones the
+ * framework promises: exclusivity, a reservation that lapses instead of
+ * hoarding, a RUNNING job nobody steals, and one job per agent. */
+
+/* A staff agent with no body: the claim pass is the claim half and needs no
+ * entity registry or map (the MOVE is the tick's, agents/agent.h). */
+static Agent *hire(AgentRegistry *r, int role)
+{
+	Agent *a = agentGet(r, agentCreate(r, role));
+
+	TEST_ASSERT_NOT_NULL(a);
+	return a;
+}
+
+/* How many live agents of `role` are holding a job OFF THE SHARED BOARD. The
+ * invariant "one job per staff agent" is about HOLDS, so it is counted over
+ * the whole registry rather than over the agents a test happens to hold
+ * pointers to — and it counts shared work only, because an agent busy on its
+ * own errand is busy either way. */
+static int sharedHolders(const AgentRegistry *r, int role)
+{
+	int n = 0;
+	int i;
+
+	for (i = 0; i < AGENT_MAX; i++)
+		if (r->alive[i] && r->slots[i].role == role &&
+		    r->slots[i].engagedShared &&
+		    r->slots[i].engagedJob != JOB_INVALID)
+			n++;
+	return n;
+}
+
+/* The id of the agent holding `handle`, or JOB_INVALID. */
+static int claimerOf(const JobBoard *b, int handle)
+{
+	return b->slots[handle].claimer;
+}
+
+static void test_claim_from_shared_gives_a_contended_job_to_one_agent(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	Agent *b;
+	Agent *cust;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	a = hire(&reg, ROLE_STAFF);
+	b = hire(&reg, ROLE_STAFF);
+	cust = hire(&reg, ROLE_CUSTOMER);
+	TEST_ASSERT_TRUE(a->id != b->id);
+	TEST_ASSERT_TRUE(push(&shared, 3) == 0);
+
+	/* ONE pass, one job, two staff: exactly one claim. Exclusivity is
+	 * boardClaim's (agents/board.h) — this is the contract being driven
+	 * from the staffing side rather than asserted about it. */
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_TRUE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+	/* The reservation, not a start: JOB_CLAIMED is the one state
+	 * boardExpire will free, which is what stops a claim from becoming a
+	 * lease (agents/board.h). */
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, shared.slots[0].state);
+	/* The loser's business: nobody else got it. */
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b->engagedJob);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, cust->engagedJob);
+	TEST_ASSERT_EQUAL_INT(1, sharedHolders(&reg, ROLE_STAFF));
+
+	/* A second pass INSIDE the window changes nothing: the job is held,
+	 * so it is not a candidate for anybody, and the loser does not get a
+	 * consolation claim. */
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.5f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b->engagedJob);
+}
+
+static void test_a_lapsed_reservation_goes_to_another_staffer(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	AgentHandle ah;
+	Agent *a;
+	Agent *b;
+	int t;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	ah = agentCreate(&reg, ROLE_STAFF);
+	a = agentGet(&reg, ah);
+	b = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 1) == 0);
+
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+
+	/* The window is honoured to its FULL length: at exactly the deadline
+	 * the reservation still stands. */
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared,
+						       BOARD_RESERVE_SECS));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+
+	/* Past it, the reservation goes back on the board. That is the
+	 * no-hoarding rule and it is observable on its own: nobody sits on a
+	 * job they never started. */
+	TEST_ASSERT_EQUAL_INT(1, boardExpire(&shared,
+					     BOARD_RESERVE_SECS + 0.1f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, claimerOf(&shared, 0));
+
+	/* And a DIFFERENT agent takes it, which is what the sweep is for: the
+	 * staffer that stopped mid-reservation is gone, so the pool serves
+	 * somebody who is here. (An idle staffer that lets its own
+	 * reservation lapse would simply re-take the job on the next pass —
+	 * the work DID go back to the board — but the case the spec names is
+	 * the dead worker, and it is the one pinned here.) */
+	agentDestroy(&reg, ah);
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared,
+						       BOARD_RESERVE_SECS + 0.2f));
+	TEST_ASSERT_EQUAL_INT(b->id, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(0, b->engagedJob);
+	TEST_ASSERT_TRUE(b->engagedShared);
+	TEST_ASSERT_EQUAL_INT(1, sharedHolders(&reg, ROLE_STAFF));
+
+	/* And it is a fresh reservation, measured from the sweep that freed
+	 * it — not the original deadline, which has passed. */
+	for (t = 0; t < 3; t++)
+		TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared,
+			BOARD_RESERVE_SECS + 0.3f + (float)t * 0.1f));
+	TEST_ASSERT_EQUAL_INT(b->id, claimerOf(&shared, 0));
+}
+
+static void test_a_lapsed_reservation_skips_a_staffer_that_is_busy(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	Agent *b;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	a = hire(&reg, ROLE_STAFF);
+	b = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 1) == 0);
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+
+	/* Meanwhile the first staffer took on its own errand's work, which
+	 * the tick may do to anybody whose dwell has expired. One job per
+	 * agent means it is not offered the shared one back — and the work it
+	 * abandoned goes to the staffer that is free, rather than waiting for
+	 * a window it will not notice. */
+	a->engagedJob = push(&a->personal, 5);
+	TEST_ASSERT_TRUE(boardClaim(&a->personal, a->engagedJob, a->id));
+	a->engagedShared = false;	/* its own board now, as a switch does */
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared,
+						       BOARD_RESERVE_SECS + 0.1f));
+	TEST_ASSERT_EQUAL_INT(b->id, claimerOf(&shared, 0));
+	TEST_ASSERT_TRUE(b->engagedShared);
+	TEST_ASSERT_EQUAL_INT(1, sharedHolders(&reg, ROLE_STAFF));
+}
+
+static void test_a_running_job_is_never_stolen_by_the_pass(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	Agent *b;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	a = hire(&reg, ROLE_STAFF);
+	b = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 1) == 0);
+
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	/* The MOVE was spent: the job is under way, and a running claim is the
+	 * owner's however long it runs (agents/board.h). Ten windows later the
+	 * pass must still decline to hand it to anybody. */
+	stepTo(&shared, 0, JOB_WALKING);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared,
+						       BOARD_RESERVE_SECS * 10.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, shared.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b->engagedJob);
+}
+
+static void test_the_pass_gives_a_job_to_a_staffer_that_is_not_busy(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *busy;
+	Agent *idle;
+	int second;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	busy = hire(&reg, ROLE_STAFF);
+	idle = hire(&reg, ROLE_STAFF);
+	/* Busy running its own errand's work on its PERSONAL board: one job
+	 * per agent is an invariant of the pass, not a hope, so a staffer
+	 * already engaged is not offered a second beside it. Claimed as well
+	 * as engaged, because the pass RE-VERIFIES the handle before it
+	 * believes it. */
+	busy->engagedJob = push(&busy->personal, 5);
+	TEST_ASSERT_TRUE(boardClaim(&busy->personal, busy->engagedJob,
+				    busy->id));
+
+	TEST_ASSERT_TRUE(push(&shared, 2) == 0);
+	second = push(&shared, 1);
+
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	/* The busy staffer took NOTHING: its one job stays its one job, and
+	 * the idle one is the only claim taken. */
+	TEST_ASSERT_EQUAL_INT(0, busy->engagedJob);
+	TEST_ASSERT_FALSE(busy->engagedShared);
+	TEST_ASSERT_EQUAL_INT(0, idle->engagedJob);
+	TEST_ASSERT_TRUE(idle->engagedShared);
+	/* Both jobs are the same activity off a content agent, so both band
+	 * 0 and the pick is the LOWEST SLOT — the determinism rule
+	 * (agents/board.h), not a preference between the two jobs. */
+	TEST_ASSERT_EQUAL_INT(idle->id, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, claimerOf(&shared, second));
+	TEST_ASSERT_EQUAL_INT(1, sharedHolders(&reg, ROLE_STAFF));
+}
+
+static void test_no_staffer_holds_more_than_one_job(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *staff[4];
+	int claimed;
+	int round;
+	int i;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	for (i = 0; i < 4; i++)
+		staff[i] = hire(&reg, ROLE_STAFF);
+	/* More jobs than staff, so the pass has to ration as well as claim. */
+	for (i = 0; i < 6; i++)
+		TEST_ASSERT_EQUAL_INT(i, push(&shared, i));
+
+	/* A LONG run over the fake clock. Every pass re-verifies ownership and
+	 * sweeps, so a reservation nobody started circulates until every job
+	 * is legitimately held — and the two properties that make the floor
+	 * safe hold on every pass of it: NO agent ever holds two jobs, and NO
+	 * two agents ever hold the same one. */
+	for (round = 0; round < 40; round++) {
+		float now = (float)round * (BOARD_RESERVE_SECS / 4.0f);
+		int live = 0;
+		int k;
+
+		claimed = agentsClaimFromShared(&reg, &shared, now);
+		TEST_ASSERT_TRUE(claimed >= 0);
+		/* Four staff, so at most four claims in a pass ... */
+		TEST_ASSERT_TRUE(claimed <= 4);
+		for (i = 0; i < 4; i++) {
+			int h = staff[i]->engagedJob;
+
+			if (h == JOB_INVALID)
+				continue;
+			TEST_ASSERT_TRUE(h < BOARD_MAX);
+			/* Whatever an agent holds, it holds by CLAIM: the pass
+			 * is the only writer of Job.claimer and it wrote this
+			 * one. */
+			TEST_ASSERT_EQUAL_INT(staff[i]->id,
+					      claimerOf(&shared, h));
+			/* ONE JOB PER AGENT, and exclusivity: no two staff
+			 * may name the same slot, which is what stops one job
+			 * being executed twice. */
+			for (k = i + 1; k < 4; k++)
+				TEST_ASSERT_TRUE(staff[k]->engagedJob != h);
+		}
+		for (k = 0; k < BOARD_MAX; k++)
+			if (shared.alive[k] &&
+			    claimerOf(&shared, k) != JOB_INVALID)
+				live++;
+		/* ... and the floor never has more claims than it has work. */
+		TEST_ASSERT_TRUE(live <= 6);
+	}
+
+	/* The board drains: retiring every job leaves nobody engaged, because
+	 * a handle whose slot no longer holds this agent's work reads as
+	 * vanished rather than as work to finish. */
+	for (i = 0; i < BOARD_MAX; i++)
+		if (shared.alive[i])
+			boardRetire(&shared, i);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 99.0f));
+	TEST_ASSERT_EQUAL_INT(0, sharedHolders(&reg, ROLE_STAFF));
+	for (i = 0; i < 4; i++)
+		TEST_ASSERT_EQUAL_INT(JOB_INVALID, staff[i]->engagedJob);
+}
+
+static void test_the_pass_asks_about_competency_and_never_gates(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *clumsy;
+	Agent *skilled;
+	Job *j;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	/* The worst hire the record can express: no repair skill at all and
+	 * a clumsiness flaw. The pass takes the job anyway. */
+	clumsy = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 4) == 0);
+	j = &shared.slots[0];
+
+	/* THE RULE, asked directly, across every input that could plausibly
+	 * make it refuse: role, competency, deficiency, the job, and the two
+	 * NULLs. */
+	TEST_ASSERT_TRUE(agentCanAttempt(clumsy, j));
+	TEST_ASSERT_TRUE(agentCanAttempt(NULL, j));
+	TEST_ASSERT_TRUE(agentCanAttempt(clumsy, NULL));
+	TEST_ASSERT_TRUE(agentCanAttempt(NULL, NULL));
+	clumsy->skills[SKILL_REPAIR] = 9;
+	clumsy->flaws[SKILL_SPEED] = 1;
+	TEST_ASSERT_TRUE(agentCanAttempt(clumsy, j));
+	clumsy->role = ROLE_CUSTOMER;
+	TEST_ASSERT_TRUE(agentCanAttempt(clumsy, j));
+	clumsy->role = ROLE_STAFF;
+
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(clumsy->id, claimerOf(&shared, 0));
+
+	/* A fluent hire is not preferred over a clumsy one: there is nothing
+	 * to prefer ON, because the pass picks the best job for the agent it
+	 * is asking, not the best agent for the job. With one job the pick is
+	 * the only pick, and it goes to whoever is idle first. */
+	skilled = hire(&reg, ROLE_STAFF);
+	skilled->skills[SKILL_REPAIR] = 9;
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.1f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, skilled->engagedJob);
+}
+
+static void test_a_staffer_never_reclaims_a_reservation_it_holds(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	int i;
+	int h = 0;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	a = hire(&reg, ROLE_STAFF);
+	for (i = 0; i < 3; i++)
+		TEST_ASSERT_TRUE(push(&shared, i) == i);
+
+	/* A RAW reservation: claimed by this agent and never engaged. Nothing
+	 * in the tree does this — the pass claims and engages in the same
+	 * breath, and so does the fill path — but the claim is public, so the
+	 * state is reachable and has to have an answer. */
+	TEST_ASSERT_TRUE(boardClaim(&shared, h, a->id));
+
+	/* THE ANSWER: the pass declines. boardBestFor offers an agent a job
+	 * it already holds (it is that agent's own work), the low slot index
+	 * wins the tie against the other two jobs, and boardClaim refuses
+	 * because START is not a re-claim (agents/board.h). So the pass takes
+	 * nothing this round and leaves the reservation to its window — it
+	 * will not double-book the agent, and it will not release work the
+	 * agent legitimately holds in order to re-claim it. */
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, h));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(0, sharedHolders(&reg, ROLE_STAFF));
+
+	/* AND IT KEEPS DECLINING, because a claim whose lifecycle never left
+	 * JOB_UNCLAIMED is the one case the sweep does NOT free (agents/
+	 * board.h: the sweep only frees a RESERVATION, which is a job in
+	 * JOB_CLAIMED). This is not a window, it is forever — which is
+	 * exactly why nothing in the tree produces this state: the pass
+	 * claims and engages in the same breath, and so does the fill path.
+	 * The way out is the owner releasing it. */
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared,
+						       BOARD_RESERVE_SECS * 10.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, h));
+	TEST_ASSERT_EQUAL_INT(JOB_UNCLAIMED, shared.slots[h].state);
+
+	/* Once the window lapses the sweep hands it back and the pass takes
+	 * it properly, engaged and started. (Not THIS reservation: see the
+	 * next test for the case a sweep cannot free.) */
+	boardRelease(&shared, h);
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 1.0f));
+	TEST_ASSERT_EQUAL_INT(a->id, claimerOf(&shared, h));
+	TEST_ASSERT_EQUAL_INT(h, a->engagedJob);
+	TEST_ASSERT_TRUE(a->engagedShared);
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, shared.slots[h].state);
+	TEST_ASSERT_EQUAL_INT(1, sharedHolders(&reg, ROLE_STAFF));
+}
+
+static void test_a_finished_shared_job_is_released_by_the_pass(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	Agent *b;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	a = hire(&reg, ROLE_STAFF);
+	b = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_TRUE(push(&shared, 1) == 0);
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+
+	/* The job finishes under its owner. The claim pass is where a
+	 * staffer's next look happens, so it is also where a FINISHED job is
+	 * let go of — the same rule the tick applies (agents/agent.c), and the
+	 * reason a staffer does not sit on a completed job. */
+	stepTo(&shared, 0, JOB_WAITING);
+	jobStep(&shared.slots[0], JOB_PHASE_DONE);
+	TEST_ASSERT_EQUAL_INT(JOB_DONE, shared.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.1f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, claimerOf(&shared, 0));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, b->engagedJob);
+	/* Terminal work is not re-taken either: the job is still enqueued,
+	 * but DONE is not a candidate (agents/board.h) — the WORLD retires
+	 * finished work, and a pass that re-claimed it would run a job that
+	 * has already run. */
+	TEST_ASSERT_EQUAL_INT(JOB_DONE, shared.slots[0].state);
+
+	/* Retired instead of finished: the slot is gone, and the agent that
+	 * still names it must read it as vanished rather than as work. */
+	boardRetire(&shared, 0);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.2f));
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, a->engagedJob);
+	TEST_ASSERT_EQUAL_INT(0, sharedHolders(&reg, ROLE_STAFF));
+}
+
+static void test_the_pass_is_guarded_and_deterministic(void)
+{
+	AgentRegistry reg;
+	JobBoard shared;
+	Agent *a;
+	int first;
+
+	agentsInit(&reg);
+	boardInit(&shared, true);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(NULL, &shared, 0.0f));
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, NULL, 0.0f));
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(NULL, NULL, 0.0f));
+
+	/* A registry with no agents, and a board with no jobs: both are
+	 * normal answers, not errors. */
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.0f));
+	a = hire(&reg, ROLE_STAFF);
+	TEST_ASSERT_EQUAL_INT(0, agentsClaimFromShared(&reg, &shared, 0.0f));
+	TEST_ASSERT_TRUE(push(&shared, 2) == 0);
+	first = agentsClaimFromShared(&reg, &shared, 0.0f);
+	TEST_ASSERT_EQUAL_INT(1, first);
+	/* Byte-identical run to run: the same registry, the same board and
+	 * the same clock produce the same claim, the same way. */
+	{
+		AgentRegistry reg2;
+		JobBoard shared2;
+		Agent *a2;
+
+		agentsInit(&reg2);
+		boardInit(&shared2, true);
+		a2 = hire(&reg2, ROLE_STAFF);
+		TEST_ASSERT_TRUE(push(&shared2, 2) == 0);
+		TEST_ASSERT_EQUAL_INT(first,
+				      agentsClaimFromShared(&reg2, &shared2,
+							    0.0f));
+		TEST_ASSERT_EQUAL_MEMORY(&reg, &reg2, sizeof(reg));
+		TEST_ASSERT_EQUAL_MEMORY(&shared, &shared2, sizeof(shared));
+		TEST_ASSERT_EQUAL_INT(a->id, a2->id);
+	}
 }
 
 /* ---- init and record size ----------------------------------------------- */
@@ -746,4 +1225,14 @@ void run_test_board(void)
 	RUN_TEST(test_best_for_ignores_dead_and_terminal_jobs);
 	RUN_TEST(test_best_for_on_an_empty_board);
 	RUN_TEST(test_board_is_deterministic);
+	RUN_TEST(test_claim_from_shared_gives_a_contended_job_to_one_agent);
+	RUN_TEST(test_a_lapsed_reservation_goes_to_another_staffer);
+	RUN_TEST(test_a_lapsed_reservation_skips_a_staffer_that_is_busy);
+	RUN_TEST(test_a_running_job_is_never_stolen_by_the_pass);
+	RUN_TEST(test_the_pass_gives_a_job_to_a_staffer_that_is_not_busy);
+	RUN_TEST(test_no_staffer_holds_more_than_one_job);
+	RUN_TEST(test_the_pass_asks_about_competency_and_never_gates);
+	RUN_TEST(test_a_staffer_never_reclaims_a_reservation_it_holds);
+	RUN_TEST(test_a_finished_shared_job_is_released_by_the_pass);
+	RUN_TEST(test_the_pass_is_guarded_and_deterministic);
 }

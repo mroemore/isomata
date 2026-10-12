@@ -22,11 +22,20 @@
  *     claim matters, and where two agents can want the same job in the same
  *     tick.
  *
- * EVERY AGENT MAY PULL FROM THE SHARED BOARD. There is deliberately NO ROLE
- * GATE here: the spec says staff pull from the shared board, but which roles
- * may do so is the staffing question (task 6), and this module knows nothing
- * about roles — board.c does not include agents/agent.h. A reader arriving
- * from task 6 should wire the gate in agentsUpdate's scan, not here.
+ * STAFF PULL FROM THE SHARED BOARD; EVERYBODY ELSE DOES NOT. There is
+ * deliberately NO ROLE GATE IN THIS MODULE, and there still is not one:
+ * the spec says staff pull from the shared board, and board.c knows nothing
+ * about roles — it does not include agents/agent.h, which includes this one.
+ * The gate therefore lives with the agents, in the two places a shared job
+ * can actually be picked up: agentsUpdate's scan and agentsClaimFromShared,
+ * both on ROLE_STAFF (agents/agent.h). Task 3 shipped that scan ungated and
+ * named this as the seat; this note is the seat filled.
+ *
+ * Nothing is lost by the gate being elsewhere: a role decides WHO may claim
+ * (agentsClaimFromShared asks before it claims), and a claim is still decided
+ * by the exclusivity below. What a board must never do is ask "is this agent
+ * a customer", because that is a question about the agent, not about the work
+ * waiting here.
  * The personal board is embedded in Agent BY VALUE (agents/agent.h), so
  * "personal" is literal rather than an index into a pool: AGENT_MAX x
  * BOARD_MAX x sizeof(Job) of static memory, and nothing else. That is the

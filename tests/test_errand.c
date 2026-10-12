@@ -371,6 +371,77 @@ static void test_offer_to_agent_is_adopted_at_its_floor(void)
 							       1.0f));
 }
 
+/* THE WORLD-SEEDED PRODUCER AT REGISTRY SCALE: one offer reaches EVERY agent
+ * of the template's role, nobody else, and still forces nothing. The floor is
+ * carried by each adoption and by no other field (the "never forced" contract
+ * is the snapshot below it, not a comment). */
+static void test_the_world_offers_to_every_agent_of_the_role(void)
+{
+	static AgentRegistry reg;
+	AgentHandle dead;
+	AgentHandle h1;
+	AgentHandle custH;
+	Agent *staff0;
+	Agent *staff1;
+	Agent *cust;
+	NeedSet before;
+
+	agentsInit(&reg);
+	staff0 = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	dead = agentCreate(&reg, ROLE_STAFF);
+	h1 = agentCreate(&reg, ROLE_STAFF);
+	staff1 = agentGet(&reg, h1);
+	custH = agentCreate(&reg, ROLE_CUSTOMER);
+	cust = agentGet(&reg, custH);
+	TEST_ASSERT_NOT_NULL(staff0);
+	TEST_ASSERT_NOT_NULL(staff1);
+	TEST_ASSERT_NOT_NULL(cust);
+	/* A dead slot BETWEEN two staff: the sweep must step over it rather
+	 * than offer a ghost, and must reach the agent behind it. */
+	agentDestroy(&reg, dead);
+	TEST_ASSERT_NULL(agentGet(&reg, dead));
+
+	before = staff0->needs;
+	TEST_ASSERT_EQUAL_INT(2, errandsOfferToRole(&reg, ERR_FIX_MACHINE,
+						    7.0f));
+	/* Both staff adopted, at the template's DECLARED floor ... */
+	TEST_ASSERT_NOT_NULL(activeErrand(staff0));
+	TEST_ASSERT_NOT_NULL(activeErrand(staff1));
+	TEST_ASSERT_EQUAL_INT(JOB_PRIO_ASSIGNED,
+			      activeErrand(staff0)->priorityFloor);
+	TEST_ASSERT_EQUAL_INT(JOB_PRIO_ASSIGNED,
+			      activeErrand(staff1)->priorityFloor);
+	TEST_ASSERT_FLOAT_WITHIN(0.0001f, 7.0f,
+				 activeErrand(staff0)->startedAt);
+	/* ... and a customer was not offered a staffer's fault round. The role
+	 * comes from the row, so a caller cannot mis-cast the sweep. */
+	TEST_ASSERT_NULL(errandActive(cust));
+	TEST_ASSERT_EQUAL_INT(0, cust->errands.count);
+	/* ADOPTION STILL WRITES NOTHING ELSE: the snapshot from the single-agent
+	 * offer, applied to the sweep. */
+	TEST_ASSERT_EQUAL_MEMORY(&before, &staff0->needs, sizeof(NeedSet));
+	/* And nothing was enqueued for anybody — an offer is a goal, not a
+	 * job. */
+	TEST_ASSERT_EQUAL_INT(0, staff0->personal.liveCount);
+	TEST_ASSERT_EQUAL_INT(0, staff1->personal.liveCount);
+
+	/* Offering again adopts nothing: one instance of a goal at a time, so
+	 * a world event that fires every frame cannot fill the floor with
+	 * copies of the same errand. */
+	TEST_ASSERT_EQUAL_INT(0, errandsOfferToRole(&reg, ERR_FIX_MACHINE,
+						    8.0f));
+
+	/* THE GUARDS. No registry is nothing offered; an id no row claims is a
+	 * broken data row, reported by errandsTemplate and addressed to nobody
+	 * — NOT silently adopted by whoever has the nearest role. */
+	TEST_ASSERT_EQUAL_INT(0, errandsOfferToRole(NULL, ERR_FIX_MACHINE,
+						    0.0f));
+	TEST_ASSERT_EQUAL_INT(0, errandsOfferToRole(&reg, 999, 0.0f));
+	/* ... and the refusals above changed nobody. */
+	TEST_ASSERT_NOT_NULL(activeErrand(staff0));
+	TEST_ASSERT_NULL(errandActive(cust));
+}
+
 /* THE FLOOR IS PROVENANCE, NEVER AN ORDER. This is the assertion that says a
  * world event cannot put itself on top of the agent's own wants: the seeded
  * errand carries JOB_PRIO_ASSIGNED on every job it enqueues, and its first
@@ -926,6 +997,7 @@ void run_test_errand(void)
 	RUN_TEST(test_need_driven_adoption);
 	RUN_TEST(test_adoption_is_role_gated);
 	RUN_TEST(test_offer_to_agent_is_adopted_at_its_floor);
+	RUN_TEST(test_the_world_offers_to_every_agent_of_the_role);
 	RUN_TEST(test_the_floor_is_provenance_never_an_order);
 	RUN_TEST(test_the_list_is_bounded_and_compacts);
 	RUN_TEST(test_a_step_with_nothing_bound_enqueues_nothing);

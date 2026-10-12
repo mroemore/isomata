@@ -253,6 +253,25 @@ EntityHandle simSpawnCustomer(SimWorld *w, int policy, int money,
  * simUpdate; this exists for the level's scripted demo break. */
 bool simBreakMachine(SimWorld *w, MachineHandle h);
 
+/* THE WORLD-SEEDED ERRAND, at the world's own level: offer `templateId` to
+ * every agent in `w` registered for its role — the spec's "a world event
+ * (fire, complaint, machine fault) offers an errand at a declared priority
+ * floor". Returns how many adopted it; 0 for a NULL world, an unknown
+ * template (reported with a diagnostic by errandsTemplate), or a floor whose
+ * staff are all busy on that errand already.
+ *
+ * It is a two-line wrapper on purpose. The rule that matters — the role
+ * gate, the already-active refusal, the floor being RECORDED and nothing
+ * else — is errandOfferToAgent and errandsOfferToRole's (agents/errand.h),
+ * which is where it is tested. What this file adds is the one thing no pure
+ * module can: the world's OWN registry, so a caller says "offer this to the
+ * world" instead of holding a registry it does not own.
+ *
+ * ADOPTION IS NOT ASSIGNMENT: nothing here writes a need, claims a job or
+ * touches the ladder, so an offered errand wins or loses like everything
+ * else (agents/errand.h, "WHAT priorityFloor DOES TODAY"). */
+int errandSeedWorld(SimWorld *w, int templateId, float now);
+
 /* Advance the world by `dt` (clamped to [0, BRAIN_MAX_DT]): run the spawner,
  * sweep the boards' reservations, advance the machines and collect wakes,
  * deliver each wake to its owner's customer, run the agent tick

@@ -317,6 +317,62 @@ static void test_a_customer_adopts_its_errand_on_arrival(void)
 	destroyVoxmap(map);
 }
 
+/* --- the world-seeded errand (task 6) ---------------------------------- */
+
+/* The world half of the offer: the SAME producer as errandOfferToAgent, run
+ * over the WORLD's own agent registry — which is the registry the critters,
+ * the customers and the staff now all live in (agents/agent.h). A machine
+ * fault offers "fix this" to every staffer on the floor; a customer is not
+ * offered a repair round, and nothing is enqueued or forced. */
+static void test_the_world_seeds_an_errand_to_its_staff(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	AgentHandle sh;
+	Agent *staff;
+	Agent *cust;
+	BrainEvent buf[16];
+	int n = 0;
+
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);
+
+	/* A staffer and a customer in the world's registry — the two roles the
+	 * fault round is and is not for. The customer's mind is reached the
+	 * way every other caller reaches it: through the SimCustomer row,
+	 * because a handle is a slot index and the registry's order is not
+	 * something to guess at. */
+	sh = agentCreate(&w.agents, ROLE_STAFF);
+	staff = agentGet(&w.agents, sh);
+	TEST_ASSERT_NOT_NULL(staff);
+	TEST_ASSERT_TRUE(simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf,
+					  16, &n) != ENTITY_INVALID);
+	TEST_ASSERT_EQUAL_INT(1, w.customerCount);
+	cust = agentGet(&w.agents, w.customers[0].agent);
+	TEST_ASSERT_NOT_NULL(cust);
+	TEST_ASSERT_EQUAL_INT(ROLE_CUSTOMER, cust->role);
+	TEST_ASSERT_TRUE(cust != staff);
+
+	TEST_ASSERT_EQUAL_INT(1, errandSeedWorld(&w, ERR_FIX_MACHINE, 3.0f));
+	TEST_ASSERT_NOT_NULL(errandFind(staff, ERR_FIX_MACHINE));
+	/* Adopted AT ITS FLOOR and nothing else: an offer writes the errand
+	 * list, not a need, a job or a band (agents/errand.h). */
+	TEST_ASSERT_EQUAL_INT(JOB_PRIO_ASSIGNED,
+			      errandFind(staff, ERR_FIX_MACHINE)->priorityFloor);
+	TEST_ASSERT_EQUAL_INT(0, staff->personal.liveCount);
+	/* The customer is not on a fault round. */
+	TEST_ASSERT_NULL(errandFind(cust, ERR_FIX_MACHINE));
+
+	/* The event fires again with nothing new to adopt (one instance of a
+	 * goal at a time), an unknown id is addressed to nobody, and a NULL
+	 * world is not a crash. */
+	TEST_ASSERT_EQUAL_INT(0, errandSeedWorld(&w, ERR_FIX_MACHINE, 4.0f));
+	TEST_ASSERT_EQUAL_INT(0, errandSeedWorld(&w, 999, 5.0f));
+	TEST_ASSERT_EQUAL_INT(0, errandSeedWorld(NULL, ERR_FIX_MACHINE, 6.0f));
+	TEST_ASSERT_NOT_NULL(errandFind(staff, ERR_FIX_MACHINE));
+	destroyVoxmap(map);
+}
+
 /* --- payment ----------------------------------------------------------- */
 
 static void test_payment_debit_and_events(void)
@@ -1908,6 +1964,7 @@ void run_test_brain(void)
 	(void)dumpStory;
 	RUN_TEST(test_event_names);
 	RUN_TEST(test_a_customer_adopts_its_errand_on_arrival);
+	RUN_TEST(test_the_world_seeds_an_errand_to_its_staff);
 	RUN_TEST(test_payment_debit_and_events);
 	RUN_TEST(test_insufficient_funds_abandons);
 	RUN_TEST(test_no_candidate_bounded_then_abandons);

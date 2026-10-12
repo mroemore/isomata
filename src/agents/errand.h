@@ -46,13 +46,27 @@
  * writes NOTHING ELSE — no need, no panic, no job, no band — so its first job
  * is scored by the same jobUrgency fold as every other job and wins or loses
  * on the agent's own needs. The floor is the SEAT that rule sits in: the place
- * the declared class is recorded so a future board can act on it. Task 6 is
- * that board work (one shared board, exclusive claims, a provenance gate on
- * who may claim what), and it is where the floor starts MEANING something.
- * Until then, treat priorityFloor as data about the errand, not as a
- * mechanism: do not go looking for a claim right that does not exist, and do
- * not read "adopted at JOB_PRIO_ASSIGNED" as "outranks an errand-class
- * errand".
+ * the declared class is recorded so a future board can act on it.
+ *
+ * TASK 6 FILLED THE SEAT AND STILL DID NOT WIRE IT — and that is a decision,
+ * not an omission, so here is the reasoning. Task 6 built the shared board the
+ * floor was waiting for (agents/agent.h: agentsClaimFromShared, ROLE_STAFF,
+ * exclusive claims) and the one place a provenance gate COULD have gone:
+ * boardEnqueue's stored class, read by the claim. It did not, because on the
+ * shared board there is nothing for it to decide. Who may claim work off the
+ * shared board is answered by the ROLE (staff), not by the class; which job a
+ * staffer claims next is answered by the BAND, which is the reader's own
+ * arithmetic (agents/agent.c); and a job's class cannot order anything, because
+ * board.h's first rule is that provenance never orders. A gate with no
+ * question to answer is a branch nobody can test, and this file's whole
+ * argument is about what is knowable.
+ *
+ * So: treat priorityFloor as DATA ABOUT THE ERRAND, not as a mechanism. Do
+ * not go looking for a claim right that does not exist, and do not read
+ * "adopted at JOB_PRIO_ASSIGNED" as "outranks an errand-class errand". The
+ * next thing that would make it mean something is a rule that says which
+ * AGENTS may take which class of work — a licence, a uniform — and that is a
+ * change to agentsClaimFromShared and this module together, not a field.
  *
  * A STEP IS A JOB OR A GATE. STEP_JOB enqueues one job of the step's jobKind
  * and waits for it to end: DONE advances the errand, FAILED re-selects (the
@@ -183,8 +197,11 @@
 /* Forward declaration only: the agent record owns the errand list, so
  * agent.h includes THIS header. The functions below that take an agent say
  * `struct Agent *`, which is the very same type as `Agent *` (agents/
- * activity.h makes the same argument for the same reason). */
+ * activity.h makes the same argument for the same reason). AgentRegistry is
+ * declared for the same reason and one level up: the world-seeded producer
+ * below walks a registry, and agent.h is what completes that type. */
 struct Agent;
+struct AgentRegistry;
 
 /* What one step IS. STEP_JOB enqueues work; STEP_GATE waits. The two gate
  * values are the WAKE a gate resumes on, and they are a separate range from
@@ -256,8 +273,9 @@ typedef struct ErrandTemplate {
 	 * recorded on the errand and handed to boardEnqueue, which VALIDATES
 	 * it and does not store it — so it decides nothing yet, and the
 	 * "never forced" contract rests on adoption writing nothing else
-	 * rather than on this. It is the seat for task 6's provenance gate;
-	 * see the header note. */
+	 * rather than on this. Task 6 built the shared board it was waiting
+	 * for and deliberately left it unwired; see the header note for why
+	 * there is nothing there for a gate to decide. */
 	int priorityFloor;
 	bool worldSeeded;	/* offered by the world, not chosen by need */
 } ErrandTemplate;
@@ -367,8 +385,32 @@ int errandAdoptByNeed(struct Agent *a, float now);
  * comparison — an errand offered at JOB_PRIO_ASSIGNED loses to an urgent wash
  * exactly as a job from the shared board would. The declared floor rides along
  * to boardEnqueue and is discarded there (see "WHAT priorityFloor DOES
- * TODAY"); it is what task 6 will read, not what makes the offer lose. */
+ * TODAY"); it is not what makes the offer lose, and task 6 left it unwired on
+ * purpose. */
 int errandOfferToAgent(struct Agent *a, int templateId, float now);
+
+/* THE SAME PRODUCER AT REGISTRY SCALE — the world half, with the loop over
+ * agents in it. Offer `templateId` to EVERY live agent registered for that
+ * template's ROLE, and return how many adopted it.
+ *
+ * The role comes from the template row rather than from the caller, so a
+ * caller cannot offer a staffer's fault round to the customers: the row
+ * decides who is addressed, exactly as errandAdopt's own role gate decides
+ * who may hold it. The two gates cannot disagree, because they read the same
+ * field.
+ *
+ * Every per-agent refusal is an ordinary answer and is counted out, not
+ * reported: an agent that already holds this errand, or whose list is full,
+ * simply does not adopt it (errandOfferToAgent). An unknown template id is a
+ * DIFFERENT kind of refusal — a broken data row, reported by errandsTemplate
+ * with a diagnostic — and returns 0 with nothing offered.
+ *
+ * This is the spec's "a world event (fire, complaint, machine fault) offers
+ * an errand at a declared priority floor": adoption writes the floor and
+ * NOTHING else, so the errand's jobs then win or lose on the ladder like
+ * every other job (see "WHAT priorityFloor DOES TODAY").
+ */
+int errandsOfferToRole(struct AgentRegistry *r, int templateId, float now);
 
 /* The live errand on `a` — the first ERRAND_ACTIVE entry — or NULL. This is
  * the one an errand-driven caller steps each tick. */

@@ -397,6 +397,14 @@ src/sim/selection.c		95
 #   adopt announcement (same shape), an event for a customer with no mind, and
 #   an event kind no case names.
 #
+# TASK 6 ADDS errandSeedWorld HERE — the world's own registry is what this file
+# owns that no pure module can, so the world-seeded offer is a two-line wrapper
+# over errandsOfferToRole (agents/errand.h), where the rule and its tests live.
+# Both of its arms are taken (test_the_world_seeds_an_errand_to_its_staff: a
+# NULL world, and a world with a staffer and a customer in it), so the floor
+# does not move. The floor's number is read off
+# `meson/coverage.sh --gate | grep brain.c`, as everywhere else here.
+#
 src/sim/brain.c			80
 
 # Agent framework, task 1: the want ladder (need.c) and the agent record
@@ -455,6 +463,26 @@ src/agents/need.c		100
 # path (a job whose activity no row claims), the in-place start that never
 # routes, the cooldown stamp on DONE and NOT on FAILED, and the empty-board
 # fill generation with its claim and start.
+#
+# TASK 6 ADDS THE STAFFING HALF AND THE FLOOR STAYS AT 100 — every new arm is
+# taken, which is worth saying because two of them COULD not have been:
+#
+#   - agentsClaimFromShared's guards are all covered from the real API, not from
+#     a manufactured board: the NULL registry and NULL board, the dead slot,
+#     the non-STAFF skip, the finished-job release, the vanished slot, the
+#     empty board, and the boardClaim REFUSAL — which is reachable because
+#     boardBestFor offers an agent a job it already holds, and a raw
+#     boardClaim without an engagement is something the public API permits.
+#   - the ROLE GATE is covered from both sides (a staffer takes the shared job,
+#     a customer and a critter do not, and swapping the roles swaps the
+#     behaviour), so the `a->role == ROLE_STAFF` binding has both edges.
+#   - agentCanAttempt is CALLED and its result is deliberately NOT a branch
+#     (agents/agent.c says why), so the constant-true policy costs no arm. If
+#     this floor ever fails after a change to that call, the change is what
+#     made it a filter.
+#
+# Read the numbers off `meson/coverage.sh --gate` and `python3
+# meson/open-arms.py src/agents/agent.c`; neither is restated here.
 src/agents/agent.c		100
 # Task 4: the activity catalogue and the urgency fold — the module that makes
 # "an activity is never primary or secondary" true in code.
@@ -492,7 +520,25 @@ src/agents/agent.c		100
 # four of its states, binding in place vs needs-place plus the band left dirty,
 # the cooldown stamp, the inclusive boundary, the per-agent isolation, and
 # every guard on the fill pick (NULL agent, NULL board, cooling down, place
-# unsatisfied, already queued, and a terminal job of that kind queued).
+#   unsatisfied, already queued, and a terminal job of that kind queued).
+#
+# TASK 6 LEAVES THIS FLOOR WHERE IT IS, and says why rather than raising it to
+# the figure `lcov --list` prints: the GATE's number is the one that counts,
+# and on this commit it is below 99. The open arm above is still open — it
+# cannot be closed without a catalogue row that DISQUALIFIES, which the brief's
+# skillMin of 0 and the spec's "low competency never disqualifies" both forbid.
+#
+#   meson/coverage.sh --gate | grep activity.c        # the number the gate uses
+#   python3 meson/open-arms.py src/agents/activity.c  # what is still open
+#
+# What task 6 did change is the PREMISE of that arm. Nothing in the tree wrote
+# skills[] before, so it was doubly unreachable: no gated row AND no agent that
+# could fail one. Staff are hired with levels now
+# (src/scenes/level_scene.c), so the arm needs only a row with a real minimum.
+# The data the arithmetic trusts is pinned instead, by
+# test_every_catalogue_row_declares_a_valid_skill_gate: a row's skillGate is
+# either "no gate" or a valid AgentSkill, which is what makes indexing skills[]
+# with it safe — the same trust activitySkillOpen places in the field.
 src/agents/activity.c		98
 # Task 3: the job board. Every arm is taken (74/74 branches, 104/104 lines,
 # 10/10 functions — 74 since fix round 1 added the reservation-vs-lease state
@@ -559,4 +605,20 @@ src/agents/job.c		100
 #     past the table) and the errand's own job handle (a list slot matching two
 #     fields at once, an enqueue the board refused, a blacklisted MACHINE
 #     binding that is not one, a gate job that did not land).
-src/agents/errand.c		91
+#
+# TASK 6 RATCHETS THIS UP BY ADDING errandsOfferToRole — the world-seeded
+# producer with the loop over agents in it (agents/errand.h). The floor moves
+# because the gate's measurement moved: every arm of the new sweep is taken
+# from the real API (a NULL registry, an id no row claims, a dead slot between
+# two live staff, a customer the row's role does not address, and a second
+# offer to staff who already hold the goal, which adopts nothing), and that
+# closed several of the arms listed above as well.
+#
+# The gate's number is the authority — NOT the figure `lcov --list` prints for
+# the same file, which reads higher because it does not count the lcov-excluded
+# records the gate carries in its denominator. (Task 5's lesson, hit twice in
+# one commit: read the artifact the GATE prints.)
+#
+#   meson/coverage.sh --gate | grep errand.c        # the measured % and the floor
+#   python3 meson/open-arms.py src/agents/errand.c  # what is still open
+src/agents/errand.c		92

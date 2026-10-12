@@ -984,16 +984,39 @@ typedef struct TickWorld {
 
 static TickWorld g_world;
 
-static void worldInit(TickWorld *w, int bodyX, int bodyZ)
+/* The world's one agent, in the role the test needs. ROLE_CRITTER is the
+ * default because most of these tests are about the demo patrol, and the
+ * shared board is STAFF-ONLY (agents/agent.h), so a test that puts a job
+ * there has to be a staffer or it is measuring the gate by accident. */
+static void worldInitRole(TickWorld *w, int bodyX, int bodyZ, int role)
 {
 	w->map = flatMap();
 	entitiesInit(&w->ents, w->map);
 	agentsInit(&w->reg);
 	boardInit(&w->boards.shared, true);
-	w->agent = agentCreate(&w->reg, ROLE_CRITTER);
+	w->agent = agentCreate(&w->reg, role);
 	w->a = agentGet(&w->reg, w->agent);
 	w->body = makeBody(&w->ents, w->map, bodyX, bodyZ);
 	w->a->entity = w->body;
+}
+
+static void worldInit(TickWorld *w, int bodyX, int bodyZ)
+{
+	worldInitRole(w, bodyX, bodyZ, ROLE_CRITTER);
+}
+
+/* A SECOND agent in the world's registry, with a body of its own — the
+ * staffing tests need two minds contending for one board, which is the whole
+ * point of a shared one. */
+static Agent *hireSecond(TickWorld *w, int role, int bodyX, int bodyZ)
+{
+	AgentHandle h = agentCreate(&w->reg, role);
+	Agent *a = agentGet(&w->reg, h);
+
+	if (a == NULL)
+		return NULL;
+	a->entity = makeBody(&w->ents, w->map, bodyX, bodyZ);
+	return a;
 }
 
 static void worldFree(TickWorld *w)
@@ -1358,7 +1381,7 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	int decisions = 0;
 	int i;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	pushWander(&w->boards.shared, 5, 1, 12, 0.4f);
 	boardExpire(&w->boards.shared, 1.0f);
 
@@ -1386,7 +1409,7 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 					      JOB_PRIO_FILL) != JOB_INVALID);
 	}
 
-	/* Our critter sees an empty candidate set — the only job on either
+	/* Our staffer sees an empty candidate set — the only job on either
 	 * board is held by somebody else — and takes NOTHING. Its own board
 	 * is empty, so the tick generates its own filler instead, which is a
 	 * decision the perf counter counts but emphatically not a theft:
@@ -1397,7 +1420,7 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	TEST_ASSERT_FALSE(w->a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, w->boards.shared.slots[0].state);
 
-	/* Let the critter's own filler run to completion so it is idle again
+	/* Let the staffer's own filler run to completion so it is idle again
 	 * (the generated wander is in place and parks on its 3s), and retire
 	 * it: an idle agent with an empty board is the state this test needs
 	 * to show what it does with a lapsed claim. */
@@ -1422,9 +1445,9 @@ static void test_update_ignores_a_job_another_agent_holds(void)
 	TEST_ASSERT_TRUE(w->a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(w->a->id, w->boards.shared.slots[0].claimer);
 
-	/* The staffer is in the same registry and ticked in the same call: it
-	 * has nothing of its own, and the shared job now belongs to the
-	 * critter, so the second agent still takes nothing. */
+	/* The other staffer is in the same registry and ticked in the same
+	 * call: it has nothing of its own, and the shared job now belongs to
+	 * the first agent, so the second still takes nothing. */
 	TEST_ASSERT_EQUAL_INT(JOB_INVALID, other->engagedJob);
 	TEST_ASSERT_EQUAL_INT(w->a->id, w->boards.shared.slots[0].claimer);
 	worldFree(w);
@@ -1439,7 +1462,7 @@ static void test_update_sees_the_other_board_behind_its_slot_number(void)
 	TickWorld *w = &g_world;
 	Agent *a;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
 	/* The agent's own work is personal slot 0 ... */
@@ -1471,7 +1494,7 @@ static void test_update_sees_the_personal_board_behind_its_slot_number(void)
 	TickWorld *w = &g_world;
 	Agent *a;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
 	pushScored(a, &w->boards.shared, ACT_PLAY_ARCADE, 6, 5, 2, 4.0f);
@@ -1499,7 +1522,7 @@ static void test_update_holds_the_margin_across_boards(void)
 	Agent *a;
 	int i;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
 	/* A long duration: this test is about the MARGIN, and a job that
@@ -1561,7 +1584,7 @@ static void test_update_drops_a_slot_it_no_longer_owns(void)
 	Job *stolen;
 	float expiry;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	thief = agentGet(&w->reg, agentCreate(&w->reg, ROLE_STAFF));
 	TEST_ASSERT_NOT_NULL(thief);
 	pushWander(&w->a->personal, 3, 1, 5, 4.0f);
@@ -1610,13 +1633,13 @@ static void test_update_compares_bands_across_boards(void)
 	Agent *second;
 	int decisions = 0;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	boardExpire(&w->boards.shared, 1.0f);
 	pushScored(w->a, &w->a->personal, ACT_PLAY_ARCADE, 3, 1, 2, 0.4f);
 	pushScored(w->a, &w->boards.shared, ACT_TALK, 6, 5, 4, 0.4f);
 	pushScored(w->a, &w->boards.shared, ACT_NAP, 7, 5, 8, 0.4f);
 
-	/* The first critter's own job is the weakest of the three, so the
+	/* The first staffer's own job is the weakest of the three, so the
 	 * urgent shared job is what it takes. */
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
 			 &decisions);
@@ -1626,7 +1649,9 @@ static void test_update_compares_bands_across_boards(void)
 	TEST_ASSERT_EQUAL_INT(w->a->id, w->boards.shared.slots[1].claimer);
 
 	/* A second critter with a better job of its own keeps it: provenance
-	 * never orders, the band does. */
+	 * never orders, the band does — and a critter may not touch the
+	 * shared board at all, which is a separate rule this test does not
+	 * measure (test_update_never_engages_a_shared_job_as_a_non_Staff). */
 	second = agentGet(&w->reg, agentCreate(&w->reg, ROLE_CRITTER));
 	TEST_ASSERT_NOT_NULL(second);
 	second->entity = makeBody(&w->ents, w->map, 1, 1);
@@ -1634,9 +1659,9 @@ static void test_update_compares_bands_across_boards(void)
 	decisions = 0;
 	agentsUpdate(&w->reg, &w->ents, &w->boards, w->map, 0.1f,
 			 &decisions);
-	/* The first critter holds its urgent job through its dwell (its
+	/* The first staffer holds its urgent job through its dwell (its
 	 * only challenger is the weaker band 4 talk), so the one decision
-	 * this tick is the second critter taking its own band-5 job. */
+	 * this tick is the second agent taking its own band-5 job. */
 	TEST_ASSERT_EQUAL_INT(1, decisions);
 	TEST_ASSERT_EQUAL_INT(0, second->engagedJob);
 	TEST_ASSERT_FALSE(second->engagedShared);
@@ -1781,7 +1806,7 @@ static void test_update_releases_a_vanished_board(void)
 	TickWorld *w = &g_world;
 	Agent *a;
 
-	worldInit(w, 1, 1);
+	worldInitRole(w, 1, 1, ROLE_STAFF);
 	a = w->a;	/* read AFTER worldInit: g_world is reused per test */
 	boardExpire(&w->boards.shared, 1.0f);
 	pushWander(&w->boards.shared, 5, 5, 6, 4.0f);
@@ -1874,6 +1899,287 @@ static void test_update_is_deterministic(void)
 	worldFree(&b);
 }
 
+/* --- Task 6: the shared board is the STAFF's, and a competency modifies --- *
+ *
+ * Two rules land here, and they are the rules the whole staffing story rests
+ * on:
+ *
+ *   - THE SHARED BOARD IS STAFF-ONLY. A customer and a critter are offered
+ *     the same shared job and neither takes it, while a staffer takes it in
+ *     the same tick. This is the role gate agentsUpdate applies (agents/
+ *     agent.h), and it is asserted from both sides: a gate nobody can trip
+ *     is not a gate, and a gate that trips for everybody is worse than none.
+ *
+ *   - A COMPETENCY MODIFIES AND NEVER GATES. jobDurationFor is the whole of
+ *     what a skill does today — the activity's declared runtime divided by
+ *     1 + the level the row declares — and a flaw multiplies it. The tick
+ *     spends that number as the job's wait, so a fluent hire finishes a
+ *     repair sooner and a clumsy one takes longer, and neither is ever refused
+ *     the work. */
+
+/* The role gate, from both sides: staff pull, nobody else does. */
+static void test_the_shared_board_is_staff_only(void)
+{
+	TickWorld *w = &g_world;
+	Agent *cust;
+	Agent *critter;
+	Agent *staff;
+	int i;
+
+	worldInitRole(w, 1, 1, ROLE_STAFF);
+	cust = hireSecond(w, ROLE_CUSTOMER, 1, 2);
+	critter = hireSecond(w, ROLE_CRITTER, 1, 3);
+	staff = w->a;
+	TEST_ASSERT_NOT_NULL(cust);
+	TEST_ASSERT_NOT_NULL(critter);
+
+	/* The most urgent work the floor has, on the shared board, addressed to
+	 * whoever reads it first. */
+	pushScored(staff, &w->boards.shared, ACT_TIDY, 5, 1, 2, 4.0f);
+	boardExpire(&w->boards.shared, 1.0f);
+
+	runTicks(w, 1, 0.0f);
+
+	/* The staffer took it ... */
+	TEST_ASSERT_EQUAL_INT(0, staff->engagedJob);
+	TEST_ASSERT_TRUE(staff->engagedShared);
+	TEST_ASSERT_EQUAL_INT(staff->id, w->boards.shared.slots[0].claimer);
+	/* ... and the customer and the critter, ticked in the same pass over
+	 * the same registry, did not. Each is idle — or busy with its own
+	 * filler, which is its own business and emphatically not a theft. */
+	TEST_ASSERT_FALSE(cust->engagedShared);
+	TEST_ASSERT_FALSE(critter->engagedShared);
+	TEST_ASSERT_EQUAL_INT(staff->id, w->boards.shared.slots[0].claimer);
+
+	/* The gate is on the ROLE, not on the board: swap the two roles over
+	 * and the follow goes with them, so the refusals above are the shared
+	 * board's rule and not two broken agents. (Both are cleared first: the
+	 * tick gave an idle agent a fill of its own, and one job per agent
+	 * means an engaged agent is not offered shared work at all.) */
+	cust->role = ROLE_STAFF;
+	staff->role = ROLE_CUSTOMER;
+	for (i = 0; i < BOARD_MAX; i++) {
+		boardRetire(&cust->personal, i);
+		boardRetire(&staff->personal, i);
+		boardRetire(&critter->personal, i);
+	}
+	cust->engagedJob = JOB_INVALID;
+	cust->engagedShared = false;
+	boardRetire(&w->boards.shared, 0);
+	staff->engagedJob = JOB_INVALID;
+	staff->engagedShared = false;
+	pushScored(staff, &w->boards.shared, ACT_NAP, 6, 1, 8, 1.0f);
+	boardExpire(&w->boards.shared, 2.0f);
+	runTicks(w, 1, 0.0f);
+	TEST_ASSERT_FALSE(staff->engagedShared);
+	TEST_ASSERT_TRUE(cust->engagedShared);
+}
+
+/* THE ARITHMETIC. A skill divides the activity's declared runtime; a flaw
+ * multiplies it; neither is a gate and neither is a zero divisor. */
+static void test_a_competency_modifies_the_work_it_does(void)
+{
+	static AgentRegistry reg;
+	Agent *plain;
+	Agent *skilled;
+	Agent *clumsy;
+	Job repair;
+	float base;
+	float got;
+
+	agentsInit(&reg);
+	plain = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	skilled = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	clumsy = agentGet(&reg, agentCreate(&reg, ROLE_STAFF));
+	TEST_ASSERT_NOT_NULL(plain);
+	TEST_ASSERT_NOT_NULL(skilled);
+	TEST_ASSERT_NOT_NULL(clumsy);
+
+	/* A repair job: the catalogue row is ACT_TIDY, which declares
+	 * SKILL_REPAIR, so REPAIR is the competency that shortens it. */
+	TEST_ASSERT_TRUE(activityBindJob(&repair, ACT_TIDY));
+	TEST_ASSERT_EQUAL_INT(SKILL_REPAIR,
+			      activitiesGet(ACT_TIDY)->skillGate);
+	base = repair.duration;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 4.0f, base);
+
+	/* NO COMPETENCY IS THE DECLARED RUNTIME, exactly. A skill of 0
+	 * divides by 1.0f, which is the division-by-zero case the arithmetic
+	 * has to survive, and it survives it by construction. */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base, jobDurationFor(plain, &repair));
+
+	/* A LEVEL SHORTENS THE WORK, by exactly the declared formula. */
+	skilled->skills[SKILL_REPAIR] = 3;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base / 4.0f,
+				 jobDurationFor(skilled, &repair));
+	skilled->skills[SKILL_REPAIR] = 1;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base / 2.0f,
+				 jobDurationFor(skilled, &repair));
+	/* A LEVEL IS NOT A MULTIPLIER ON THE OTHER HALF: the same hire is no
+	 * slower at the work it is not qualified for. */
+	skilled->skills[SKILL_SPEED] = 3;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base / 2.0f,
+				 jobDurationFor(skilled, &repair));
+
+	/* A DEFICIENCY LENGTHENS THE WORK (FLAW_PENALTY), and a skill does not
+	 * cancel it: the spec's "a flaw can make a job fail outright" has no
+	 * quality model to fail through yet, so today a clumsy hire simply
+	 * takes longer — which is the half that is arithmetic. */
+	clumsy->flaws[SKILL_SPEED] = 1;
+	got = jobDurationFor(clumsy, &repair);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base * FLAW_PENALTY, got);
+	TEST_ASSERT_TRUE(got >= jobDurationFor(plain, &repair));
+	/* Both at once: the division and the penalty compose. */
+	clumsy->skills[SKILL_REPAIR] = 1;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, (base / 2.0f) * FLAW_PENALTY,
+				 jobDurationFor(clumsy, &repair));
+
+	/* A ROW THAT DECLARES NO COMPETENCY IS UNMODIFIED: the divide is by
+	 * the row's own declaration, not a constant, so a wander is the same
+	 * length for everybody. */
+	{
+		Job wander;
+
+		TEST_ASSERT_TRUE(activityBindJob(&wander, ACT_WANDER));
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, wander.duration,
+					 jobDurationFor(skilled, &wander));
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, wander.duration * FLAW_PENALTY,
+					 jobDurationFor(clumsy, &wander));
+	}
+
+	/* THE EDGES. Nobody to ask, no job to time, and an activity no row
+	 * claims (whose duration is unmodified because it has no DECLARED
+	 * competency — the band refresh is where an unknown activity is
+	 * reported, agents/activity.h). */
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, jobDurationFor(NULL, &repair));
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, jobDurationFor(plain, NULL));
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, jobDurationFor(NULL, NULL));
+	{
+		Job broken;
+
+		jobInit(&broken, JOB_KIND_COUNT);
+		broken.duration = 7.0f;
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 7.0f, jobDurationFor(skilled, &broken));
+	}
+
+	/* NO INPUT REACHES INFINITY OR NaN. The divisor is 1 + an unsigned
+	 * level, so it cannot be zero and cannot be negative; this pins the
+	 * extreme rather than the arithmetic, because "a skill of 0 must not
+	 * divide by zero" is a claim about a number and the number is the
+	 * proof. */
+	plain->skills[SKILL_REPAIR] = 0;
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, base, jobDurationFor(plain, &repair));
+	plain->skills[SKILL_REPAIR] = UINT16_MAX;
+	got = jobDurationFor(plain, &repair);
+	TEST_ASSERT_TRUE(got > 0.0f);
+	TEST_ASSERT_TRUE(got == got);		/* not NaN */
+	TEST_ASSERT_TRUE(got < base / 1000.0f);
+}
+
+/* The data the arithmetic trusts, pinned: a row's skillGate indexes skills[],
+ * so it is either "no gate" or a real AgentSkill. This is the same trust
+ * activitySkillOpen places in the field, made testable instead of assumed. */
+static void test_every_catalogue_row_declares_a_valid_skill_gate(void)
+{
+	int i;
+	int n = activitiesCount();
+
+	TEST_ASSERT_TRUE(n > 0);
+	for (i = 0; i < n; i++) {
+		const Activity *act = activitiesAt(i);
+
+		TEST_ASSERT_NOT_NULL(act);
+		if (act->skillGate < 0)
+			continue;
+		TEST_ASSERT_TRUE(act->skillGate < SKILL_COUNT);
+	}
+	/* And the one gated row this task depends on really is the repair. */
+	TEST_ASSERT_EQUAL_INT(SKILL_REPAIR,
+			      activitiesGet(ACT_TIDY)->skillGate);
+}
+
+/* THE TICK SPENDS THE NUMBER. A claim taken off the shared board is a
+ * reservation; the tick completes it, walks the body, and parks the job on
+ * this staffer's own arithmetic — so a fluent hire's repair is visibly
+ * quicker and a clumsy hire's is visibly slower, and the second staffer never
+ * gets a claim at all. */
+static void test_a_shared_claim_is_completed_run_and_released(void)
+{
+	TickWorld *w = &g_world;
+	Agent *clumsy;
+	Agent *skilled;
+	Job *j;
+	int i;
+
+	worldInitRole(w, 1, 1, ROLE_STAFF);
+	skilled = w->a;
+	skilled->skills[SKILL_REPAIR] = 3;
+	clumsy = hireSecond(w, ROLE_STAFF, 1, 2);
+	TEST_ASSERT_NOT_NULL(clumsy);
+	clumsy->skills[SKILL_REPAIR] = 0;
+	clumsy->flaws[SKILL_SPEED] = 1;
+
+	/* ONE repair on the shared board, and one claim pass: the fluent
+	 * staffer holds the first slot in the registry and takes it. */
+	pushScored(skilled, &w->boards.shared, ACT_TIDY, 4, 1, 2, 4.0f);
+	boardExpire(&w->boards.shared, 1.0f);
+	TEST_ASSERT_EQUAL_INT(1, agentsClaimFromShared(&w->reg,
+						       &w->boards.shared, 1.0f));
+	j = boardJob(&w->boards.shared, 0);
+	TEST_ASSERT_NOT_NULL(j);
+	/* RESERVED, NOT YET WALKING: a claim is a promise to start, and the
+	 * lifecycle says exactly that in its state. */
+	TEST_ASSERT_EQUAL_INT(JOB_CLAIMED, j->state);
+	TEST_ASSERT_EQUAL_INT(skilled->id, j->claimer);
+	/* The loser took no share of it: contention is resolved by the claim,
+	 * so one job is one job. (It may well be busy — the tick gives an
+	 * agent with an empty board a fill of its own — but never THIS.) */
+	TEST_ASSERT_FALSE(clumsy->engagedShared);
+
+	/* THE TICK SPENDS THE PROMISE: the CLAIMED cell is the move, and the
+	 * body is routed to the machine. */
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(JOB_WALKING, j->state);
+	TEST_ASSERT_EQUAL_INT(skilled->id, j->claimer);
+	TEST_ASSERT_FALSE(clumsy->engagedShared);
+
+	/* Walk it out and into the activity: the wait is now THIS staffer's
+	 * duration, not the row's. (INTERACTING is entered a tick before the
+	 * wait begins — the lifecycle's move is two cells, agents/job.h — so
+	 * the loop runs until the job is genuinely parked.) */
+	for (i = 0; i < 40 && j->state <= JOB_INTERACTING; i++)
+		runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(JOB_WAITING, j->state);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, jobDurationFor(skilled, j), j->timer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 4.0f / 4.0f, j->timer);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 4.0f, j->duration);
+
+	/* The same job, the same row, the other hire: a deficiency lengthens
+	 * it and no skill shortens it away. (Asked on a COPY — the live job is
+	 * mid-wait and stays that way.) */
+	{
+		Job ask = *j;
+
+		TEST_ASSERT_FLOAT_WITHIN(0.0f, 4.0f * FLAW_PENALTY,
+					 jobDurationFor(clumsy, &ask));
+	}
+
+	/* And the job finishes: the owner is released, the claim goes with it,
+	 * and the second staffer is still not on the board. */
+	for (i = 0; i < 200 && j->state == JOB_WAITING; i++)
+		runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(JOB_DONE, j->state);
+	runTicks(w, 1, 0.1f);
+	/* Released: the claim goes with the job, which is how a shared board
+	 * never ends up with a claim on work that is finished. (The staffer
+	 * is not idle for long — the tick gives it a fill of its own — but
+	 * that is its PERSONAL board, and the shared claim is gone.) */
+	TEST_ASSERT_FALSE(skilled->engagedShared);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, j->claimer);
+	TEST_ASSERT_FALSE(clumsy->engagedShared);
+	worldFree(w);
+}
+
 void run_test_agent(void);
 
 void run_test_agent(void)
@@ -1924,4 +2230,8 @@ void run_test_agent(void)
 	RUN_TEST(test_update_releases_a_vanished_board);
 	RUN_TEST(test_update_guards_and_clamping);
 	RUN_TEST(test_update_is_deterministic);
+	RUN_TEST(test_the_shared_board_is_staff_only);
+	RUN_TEST(test_a_competency_modifies_the_work_it_does);
+	RUN_TEST(test_every_catalogue_row_declares_a_valid_skill_gate);
+	RUN_TEST(test_a_shared_claim_is_completed_run_and_released);
 }

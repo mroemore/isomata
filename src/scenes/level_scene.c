@@ -156,6 +156,46 @@ typedef struct DemoCritter {
 	bool fillTurn;
 } DemoCritter;
 
+/* A STAFF MEMBER (task 6): a hired mind in the world's agent registry, the
+ * body that walks for it, and the competencies the hire came with.
+ *
+ * WHY THIS IS NOT THE CRITTER STRUCT AGAIN. A critter is a demo patrol with
+ * a hardcoded route; a staffer is a worker whose competencies are what the
+ * shared board's work is measured against (agents/agent.h). The one thing
+ * they have in common is a body, and bodies live in the world's entity
+ * registry, which is shared. */
+typedef struct StaffMember {
+	EntityHandle handle;	/* the body, in the shared entity registry */
+	AgentHandle agent;	/* the mind, in SimWorld.agents */
+	const char *name;	/* "FITTER" / "APPRENTICE" — the log's word */
+	int lastState;		/* last observed job state, for the log */
+} StaffMember;
+
+/* --- T24 staff ---------------------------------------------------------- *
+ *
+ * The staff half of the floor: two hires who pull from the ONE shared board
+ * the world owns, and a scripted machine fault that puts work there.
+ *
+ * The two hires differ in the only way that is visible without a readout: the
+ * fitter is competent at repairs (SKILL_REPAIR) and quick (SKILL_SPEED); the
+ * apprentice has neither, plus a clumsiness flaw — so the same job takes the
+ * fitter a quarter of the time the apprentice would, and the apprentice takes
+ * twice the declared runtime (FLAW_PENALTY). Neither is refused the work:
+ * a bad hire lengthens a job, it does not disqualify anybody.
+ *
+ * Two hires rather than one is the point of a SHARED board: they contend for
+ * one posting, exactly one claim succeeds, and the other visibly does not
+ * double-claim. */
+#define LEVEL_STAFF_COUNT 2
+#define LEVEL_STAFF_W 1.0f
+#define LEVEL_STAFF_H 1.8f
+/* The two hires are told apart by colour ALONE, so the pair has to be
+ * distinct from everything else on the floor: violet against the tan
+ * dryers, teal against the blue/green/amber customer tints and the red
+ * critters. */
+#define LEVEL_STAFF_TINT_FITTER DRAW_TINT(200, 130, 255, 255)	/* violet */
+#define LEVEL_STAFF_TINT_APPRENTICE DRAW_TINT(90, 225, 215, 255)	/* teal */
+
 /* --- T23 customers ------------------------------------------------------ *
  *
  * The customer demo replaces the T22 smoke driver wholesale. Customers spawn
@@ -179,11 +219,12 @@ typedef struct DemoCritter {
 #define LEVEL_CUSTOMER_TINT_CLOSEST DRAW_TINT(120, 200, 255, 255)	/* blue */
 #define LEVEL_CUSTOMER_TINT_SPREAD DRAW_TINT(150, 255, 150, 255)	/* green */
 #define LEVEL_CUSTOMER_TINT_CHEAPEST DRAW_TINT(255, 220, 120, 255)	/* amber */
-/* Scripted break: washer 0 goes down this many seconds into its second run,
- * and is repaired this many seconds later. */
+/* Scripted break: washer 0 goes down this many seconds into its second run.
+ * It is REPAIRED BY THE FLOOR now — a repair posted on the shared board and
+ * claimed by a staffer — rather than by a timer, which is the whole of task
+ * 6's demo (see levelPostFault and levelFinishRepair). */
 #define LEVEL_SCRIPT_BREAK_MACHINE 0
 #define LEVEL_SCRIPT_BREAK_DELAY 2.0f
-#define LEVEL_SCRIPT_REPAIR_SECS 25.0f
 
 /* Forward declaration: the opening pair is spawned (and logged) from
  * level_init, before the brain-glue helpers are defined. */
@@ -203,8 +244,18 @@ typedef struct LevelState {
 	SimWorld sim;			/* T23: registries + customers + machines */
 	DemoCritter critters[LEVEL_WALKER_COUNT];
 	int critterCount;
-	AgentRegistry agents;		/* one agent per demo critter */
-	AgentBoards boards;		/* the shared board (idle in this demo) */
+	/* THE STAFF (task 6). Two agents in the WORLD's registry — the one
+	 * registry the whole floor lives in (agents/agent.h) — each with a
+	 * body of its own, a competency the shared board's work is shortened
+	 * by, and a tint that says which hire it is at a glance. */
+	StaffMember staff[LEVEL_STAFF_COUNT];
+	int staffCount;
+	int16_t staffMaterial;		/* atlas material for the staff */
+	/* The fault the floor is currently carrying: the handle of the machine
+	 * a repair was posted for, or MACHINE_INVALID. The posting is retired
+	 * when its job finishes (levelFinishRepair), so a fault is repaired
+	 * exactly once and the board never fills with stale work. */
+	MachineHandle repairFor;
 	float clock;			/* seconds since load: the board clock */
 	int16_t spriteMaterial;		/* atlas material for the critters */
 	int16_t machineMaterial;	/* atlas material for the machines */
@@ -215,7 +266,6 @@ typedef struct LevelState {
 	int washer0Runs;	/* RUN_START events seen for washer 0 */
 	bool divergenceSpawned;	/* the closest/spread_k pair was spawned */
 	float breakTimer;	/* countdown to the scripted break (<= 0 = idle) */
-	float repairTimer;	/* countdown to the scripted repair (<= 0 = idle) */
 	EntityDebugMarker markers[LEVEL_DEBUG_MARKER_MAX];	/* T20 overlay */
 	const MaterialTable *materials;	/* borrowed from the GPU backend */
 
@@ -227,6 +277,14 @@ typedef struct LevelState {
 	Element *toast;		/* achievement toast */
 	LevelControls controls;	/* rotate x2 / debug / reset icon buttons */
 } LevelState;
+
+/* The same reason as levelLogBrainEvent above, for the fault path (task 6):
+ * the frame split runs the shared-board claim pass, the brain driver posts a
+ * fault, and the frame's tail pays a finished repair out — all four are
+ * timestamped and none of them is defined before its callers. */
+static unsigned long long levelMs(void);
+static void levelPostFault(LevelState *st, MachineHandle h);
+static void levelFinishRepair(LevelState *st);
 
 /* Create the demo critters (T19/T21): three registry entities placed on open
  * plateau, each now paired with an Agent that decides what it does next (see
@@ -270,8 +328,8 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 		entitySetSprite(e, demo[i].width, demo[i].height,
 				DRAW_TINT(255, 255, 255, 255), spriteMaterial);
 
-		ah = agentCreate(&st->agents, ROLE_CRITTER);
-		a = agentGet(&st->agents, ah);
+		ah = agentCreate(&st->sim.agents, ROLE_CRITTER);
+		a = agentGet(&st->sim.agents, ah);
 		if (a == NULL) {
 			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
 				     "level_scene: demo agent %d create failed", i);
@@ -292,6 +350,78 @@ static void levelBuildEntities(LevelState *st, int16_t spriteMaterial)
 		st->critterCount++;
 		SDL_Log("isomata: demo entity %d created at (%d,%d), agent %d",
 			h, demo[i].startX, demo[i].startZ, ah);
+	}
+}
+
+/* Create the STAFF (task 6): two hires with bodies in the shared entity
+ * registry and minds in the world's agent registry, and the competencies they
+ * were hired with.
+ *
+ * THE FIRST TIME ANYTHING IN THE TREE WRITES skills[] / flaws[]. Until this,
+ * every agent was born at zero and a competency was a field nothing could
+ * express (agents/agent.h); the hire is what makes the modifier observable,
+ * and the APPOINTMENT is deliberately the bad one — a hire with no repair
+ * skill at all and a clumsiness flaw takes the same job and takes twice as
+ * long (jobDurationFor). Nothing here refuses anybody anything: a bad hire
+ * lengthens the work, it does not disqualify the worker. */
+static void levelBuildStaff(LevelState *st, int16_t spriteMaterial)
+{
+	static const struct {
+		int x;
+		int z;
+		const char *name;
+		uint32_t tint;
+		/* The competencies this hire came with. */
+		uint16_t repair;
+		uint16_t speed;
+		uint16_t clumsy;	/* a SKILL_SPEED flaw: the deficiency */
+	} hire[LEVEL_STAFF_COUNT] = {
+		{ 6, 2, "FITTER", LEVEL_STAFF_TINT_FITTER, 3, 2, 0 },
+		{ 8, 2, "APPRENTICE", LEVEL_STAFF_TINT_APPRENTICE, 0, 0, 1 },
+	};
+	int i;
+
+	st->staffCount = 0;
+	for (i = 0; i < LEVEL_STAFF_COUNT; i++) {
+		EntityHandle h = entityCreate(&st->sim.entities);
+		Entity *e = entityGet(&st->sim.entities, h);
+		AgentHandle ah;
+		Agent *a;
+		StaffMember *m;
+
+		if (e == NULL || !entityPlace(e, hire[i].x, hire[i].z)) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: staff %d placement failed", i);
+			continue;
+		}
+		e->speed = 2.6f;
+		e->animated = true;
+		entitySetSprite(e, LEVEL_STAFF_W, LEVEL_STAFF_H, hire[i].tint,
+				spriteMaterial);
+
+		ah = agentCreate(&st->sim.agents, ROLE_STAFF);
+		a = agentGet(&st->sim.agents, ah);
+		if (a == NULL) {
+			SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				     "level_scene: staff agent %d create failed",
+				     i);
+			continue;
+		}
+		a->entity = h;
+		a->skills[SKILL_REPAIR] = hire[i].repair;
+		a->skills[SKILL_SPEED] = hire[i].speed;
+		a->flaws[SKILL_SPEED] = hire[i].clumsy;
+
+		m = &st->staff[st->staffCount];
+		m->handle = h;
+		m->agent = ah;
+		m->name = hire[i].name;
+		m->lastState = JOB_UNCLAIMED;
+		st->staffCount++;
+		SDL_Log("isomata: staff %s hired (entity %d, agent %d):"
+			" repair %u, speed %u, clumsy %u",
+			hire[i].name, h, ah, (unsigned)hire[i].repair,
+			(unsigned)hire[i].speed, (unsigned)hire[i].clumsy);
 	}
 }
 
@@ -321,6 +451,69 @@ static const char *levelErrandName(int tmplId)
 	return (t != NULL) ? t->name : "?";
 }
 
+/* The errand a staffer is on, by name — the world-seeded fault round, or "-"
+ * for none. Read the same way the customer's is: a missing declaration must
+ * be visible rather than guessed at. */
+static const char *levelStaffErrandName(Agent *a)
+{
+	const Errand *e = (a != NULL) ? errandActive(a) : NULL;
+
+	if (e == NULL)
+		return "-";
+	{
+		const ErrandTemplate *t = errandsTemplate(e->tmplId);
+
+		return (t != NULL) ? t->name : "?";
+	}
+}
+
+/* The shared-board staffing log: one line per staffer whose engagement
+ * CHANGED, so the contention is legible in the log the way it is on screen —
+ * "FITTER took the repair, APPRENTICE did not" is exactly one claim and two
+ * lines. The band and the competency are on the line because without them the
+ * log says only that somebody moved. */
+static void levelLogStaff(LevelState *st, const int *before)
+{
+	int i;
+
+	for (i = 0; i < st->staffCount; i++) {
+		Agent *a = agentGet(&st->sim.agents, st->staff[i].agent);
+		JobBoard *ab;
+		Job *j;
+		int band = JOB_INVALID;
+
+		if (a == NULL || a->engagedJob == before[i])
+			continue;
+		ab = a->engagedShared ? &st->sim.boards.shared : &a->personal;
+		j = boardJob(ab, a->engagedJob);
+		if (j == NULL) {
+			SDL_Log("isomata: staff %s (agent %d) released job %d",
+				st->staff[i].name, a->id, before[i]);
+			continue;
+		}
+		band = j->band;
+		SDL_Log("isomata: staff %s (agent %d) took %s job %d"
+			" (%s band %d, repair %u speed %u clumsy %u)"
+			" -> errand %s",
+			st->staff[i].name, a->id,
+			a->engagedShared ? "shared" : "own",
+			a->engagedJob,
+			levelActivityName(j->kind), band,
+			(unsigned)a->skills[SKILL_REPAIR],
+			(unsigned)a->skills[SKILL_SPEED],
+			(unsigned)a->flaws[SKILL_SPEED],
+			levelStaffErrandName(a));
+		if (j->state != st->staff[i].lastState) {
+			st->staff[i].lastState = j->state;
+			SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
+				     "isomata: staff %s job %d (%s) state %s",
+				     st->staff[i].name, a->engagedJob,
+				     levelActivityName(j->kind),
+				     jobStateName(j->state));
+		}
+	}
+}
+
 /* Queue the critter's next leg on its personal board. It is taken on the NEXT
  * tick: this runs after agentsUpdate, so the queue lands with the frame's
  * decisions already made — one frame per leg, the same one-frame-per-leg the
@@ -332,7 +525,7 @@ static const char *levelErrandName(int tmplId)
  * after, either way). */
 static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
 {
-	Agent *a = agentGet(&st->agents, c->agent);
+	Agent *a = agentGet(&st->sim.agents, c->agent);
 	const int *d;
 	Job j;
 
@@ -392,7 +585,7 @@ static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
  * between a queued leg and a self-generated fill (see levelQueueNextLeg). */
 static void levelReapLeg(LevelState *st, DemoCritter *c)
 {
-	Agent *a = agentGet(&st->agents, c->agent);
+	Agent *a = agentGet(&st->sim.agents, c->agent);
 	int h;
 
 	if (a == NULL)
@@ -439,7 +632,7 @@ static void levelReapLeg(LevelState *st, DemoCritter *c)
  * rather than one line per frame. */
 static void levelLogDecision(LevelState *st, DemoCritter *c, int before)
 {
-	Agent *a = agentGet(&st->agents, c->agent);
+	Agent *a = agentGet(&st->sim.agents, c->agent);
 	JobBoard *ab;
 	Job *from;
 	Job *to;
@@ -457,7 +650,7 @@ static void levelLogDecision(LevelState *st, DemoCritter *c, int before)
 	/* The engaged job lives on whichever board the agent holds it, which
 	 * for the demo is always its own; the log reads it the same way the
 	 * tick does rather than assuming. */
-	ab = a->engagedShared ? &st->boards.shared : &a->personal;
+	ab = a->engagedShared ? &st->sim.boards.shared : &a->personal;
 	from = (before != JOB_INVALID) ? boardJob(ab, before) : NULL;
 	to = boardJob(ab, a->engagedJob);
 	fromBand = (from != NULL) ? from->band : JOB_INVALID;
@@ -491,42 +684,84 @@ static void levelLogDecision(LevelState *st, DemoCritter *c, int before)
 		a->pathLen > straight ? " DETOUR" : "");
 }
 
-/* Advance the demo critters: the board clock, then the agent tick (decay,
- * decide, claim, route, run the lifecycle), then the reap. entitiesUpdate
- * still walks the shared entity registry once per frame, after every decision
- * is in — the same order the hardcoded walker loop ran in. */
-static void levelUpdateAgents(LevelState *st, float dt)
+/* THE CRITTER HALF OF A FRAME, SPLIT IN TWO — and the split is the registry
+ * merge, not a preference.
+ *
+ * There is ONE agent registry in the floor (SimWorld.agents) and ONE shared
+ * board (SimWorld.boards), so there is exactly one agentsUpdate per frame and
+ * it happens inside simUpdate, where the world already ticks every agent it
+ * owns (sim/brain.h). The level therefore no longer ticks anything: it runs
+ * the parts only the level can do — sweeping its critters' own personal
+ * boards, and claiming shared work for the staff — BEFORE the world advances,
+ * and reaping and queueing AFTER it.
+ *
+ * What this buys, stated because it is the whole of the change: the
+ * critters, the customers and the staff are ticked by one call over one
+ * registry, so needs decay once per agent per frame and the shared board is
+ * the board every staff can see. Two registries could not say that.
+ *
+ * The order within the frame is unchanged in the part that shows: the
+ * critters' legs were always queued after the tick that claimed them, and
+ * still are. */
+static void levelPreSim(LevelState *st, float dt, int *outBefore,
+			int *outStaffBefore)
 {
-	int before[LEVEL_WALKER_COUNT];
 	int i;
 
 	st->clock += dt;
-	/* The board clock is stamped before any claim, so a reservation is
-	 * measured from the tick it was taken on and a claim nobody starts
-	 * lapses instead of sitting on a job forever. A critter's own claim
-	 * is never swept: it starts its job in the same tick, so the sweep
-	 * sees a running job and leaves it alone. */
-	boardExpire(&st->boards.shared, st->clock);
+	/* The critters' OWN boards are swept against the level's clock. The
+	 * shared board is swept inside simUpdate, against the world's — both
+	 * are accumulated dt from zero, so they are the same number; the
+	 * reason they are two sweeps is that they are two registries' worth
+	 * of state, not two clocks. */
 	for (i = 0; i < st->critterCount; i++) {
-		Agent *a = agentGet(&st->agents, st->critters[i].agent);
+		Agent *a = agentGet(&st->sim.agents, st->critters[i].agent);
 
 		if (a != NULL)
 			boardExpire(&a->personal, st->clock);
-		before[i] = (a != NULL) ? a->engagedJob : JOB_INVALID;
+		outBefore[i] = (a != NULL) ? a->engagedJob : JOB_INVALID;
 	}
+	for (i = 0; i < st->staffCount; i++) {
+		Agent *a = agentGet(&st->sim.agents, st->staff[i].agent);
 
-	agentsUpdate(&st->agents, &st->sim.entities, &st->boards, st->map, dt,
-		     NULL);
+		outStaffBefore[i] = (a != NULL) ? a->engagedJob : JOB_INVALID;
+	}
+	/* THE SHARED-BOARD CLAIM PASS: every staff agent that is not already
+	 * running something takes the best job the world has posted, and the
+	 * claim itself settles who wins (agents/agent.h). One pass for the
+	 * whole floor — the spec's "N staff scan one board in one claim pass,
+	 * not N boards each". It runs BEFORE the tick, so a job claimed this
+	 * frame is spent by it: the tick's JOB_CLAIMED cell is the move. */
+	{
+		int claimed = agentsClaimFromShared(&st->sim.agents,
+						    &st->sim.boards.shared,
+						    st->sim.now);
+
+		if (claimed > 0)
+			SDL_Log("isomata: [t=%llums] %d staff claimed shared work",
+				levelMs(), claimed);
+	}
+}
+
+/* Everything the level does once the world has advanced the frame: the
+ * critters' legs, the staff's engagement log, and the repair a finished
+ * shared job pays for. */
+static void levelPostSim(LevelState *st, const int *before,
+			 const int *staffBefore)
+{
+	int i;
 
 	/* Retire what finished, then queue the next leg: the agent has let
-	 * go of a finished job during the tick above, so this is the moment
-	 * its board has room again. */
+	 * go of a finished job during the tick, so this is the moment its
+	 * board has room again. */
 	for (i = 0; i < st->critterCount; i++)
 		levelReapLeg(st, &st->critters[i]);
 	for (i = 0; i < st->critterCount; i++) {
 		levelQueueNextLeg(st, &st->critters[i]);
 		levelLogDecision(st, &st->critters[i], before[i]);
 	}
+	levelLogStaff(st, staffBefore);
+	levelFinishRepair(st);
 }
 
 /* Derive the billboard array from the registry each frame (position + sprite
@@ -638,7 +873,7 @@ static void levelSyncSprites(LevelState *st)
 
 				if (st->critters[i].handle != h)
 					continue;
-				a = agentGet(&st->agents,
+				a = agentGet(&st->sim.agents,
 					     st->critters[i].agent);
 				if (a != NULL) {
 					st->sprites[n].tint = levelUrgencyTint(a);
@@ -830,6 +1065,10 @@ static bool level_init(void *self, App *app)
 	st->spriteMaterial = spriteMaterial;
 	st->machineMaterial =
 		(int16_t)materialIdByName(st->materials, "machine");
+	/* The staff draw through the flat-white material for the same reason
+	 * the machines do: a tinted sprite needs a white base to tint, so
+	 * "violet fitter / tan apprentice" is readable instead of two reds. */
+	st->staffMaterial = st->machineMaterial;
 
 	/* Load the demo map through SDL I/O so Android APK assets resolve. The
 	 * PNG slice directory (T13b) is preferred; the ASCII demo.txt is the
@@ -885,14 +1124,19 @@ static bool level_init(void *self, App *app)
 	st->washer0Runs = 0;
 	st->divergenceSpawned = false;
 	st->breakTimer = -1.0f;
-	st->repairTimer = -1.0f;
-	/* The agent side: a registry (which owns every critter's personal
-	 * board by value), the one shared board, and the clock that board's
-	 * reservations are measured against. */
-	agentsInit(&st->agents);
-	boardInit(&st->boards.shared, true);
+	st->repairFor = MACHINE_INVALID;
+	/* THE AGENT SIDE IS THE WORLD'S (task 6). simWorldInit has already
+	 * built the one AgentRegistry — which owns every critter's and every
+	 * staff member's personal board by value — and the one shared board,
+	 * so there is nothing left to initialise here but the level's own
+	 * clock. The two registries this file used to have (critters in one,
+	 * customers in the other) are why the shared board could only ever be
+	 * shared with whichever half held the staff; see agents/agent.h for
+	 * the decision and its reasoning. */
 	st->clock = 0.0f;
+	st->staffCount = 0;
 	levelBuildEntities(st, spriteMaterial);
+	levelBuildStaff(st, st->staffMaterial);
 	levelBuildMachines(st);
 	/* The interval spawner stays OFF until the scripted divergence pair has
 	 * arrived (see levelUpdateBrain). One closest customer goes in first and
@@ -1183,21 +1427,137 @@ static void levelUpdateBrain(LevelState *st, float dt)
 					    LEVEL_SCRIPT_BREAK_MACHINE))
 				SDL_Log("isomata: [t=%llums] SCRIPTED BREAK: washer %d broke mid-run",
 					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
-			st->repairTimer = LEVEL_SCRIPT_REPAIR_SECS;
+			levelPostFault(st, LEVEL_SCRIPT_BREAK_MACHINE);
 			st->breakTimer = -1.0f;
 		}
 	}
-	if (st->repairTimer > 0.0f) {
-		st->repairTimer -= dt;
-		if (st->repairTimer <= 0.0f) {
+	/* THE REPAIR IS NO LONGER ON A TIMER. It was a 25-second scripted
+	 * fix; it is now work the floor actually does (levelFinishRepair),
+	 * which is the only version of "the machine comes back" that shows
+	 * the staffing rules at all. */
+}
+
+/* A MACHINE FAULT BECOMES WORK, in BOTH of the ways the framework offers it.
+ *
+ *   1. A POSTING ON THE SHARED BOARD. The world queues one JOB_REPAIR bound
+ *      to the faulty machine's tile, and every staffer pulls from it in one
+ *      claim pass (agentsClaimFromShared, agents/agent.h). The claim settles
+ *      the contention: two staff, one job, one winner, and the loser is
+ *      visibly idle rather than half-way into somebody else's repair.
+ *   2. THE WORLD-SEEDED ERRAND. errandSeedWorld offers ERR_FIX_MACHINE to
+ *      every agent of the template's role, which is the spec's "a world event
+ *      (fire, complaint, machine fault) offers an errand at a declared
+ *      priority floor". Adoption writes the FLOOR AND NOTHING ELSE
+ *      (agents/errand.h), so the errand does not get ahead of the posting and
+ *      does not put a job on the board behind the staff's back — it is the
+ *      goal the worker is now on, at JOB_PRIO_ASSIGNED, and it loses like
+ *      everything else.
+ *
+ * THE BAND IS NOT ASSIGNED HERE. It is left dirty (-1) on purpose: a job's
+ * urgency is COMPUTED from the needs it serves by whoever is about to read it
+ * (agents/activity.h), and the tick's band refresh does exactly that for each
+ * staff member immediately before their scan. A producer that hand-set a band
+ * would be asserting a number that belongs to an agent it does not have.
+ *
+ * AND THE ADOPTED ERRAND ENQUEUES NOTHING IN THIS DEMO, which is worth saying
+ * out loud: errandAdvance is the CUSTOMER driver's half (sim/brain.c drives a
+ * customer's errand and binds the machine it is about), and a staffer's step is
+ * bound by the world, not by the level. What the offer buys here is the thing
+ * the spec asks for and the log line records — the floor now has a goal on it,
+ * at JOB_PRIO_ASSIGNED, that wins or loses like everything else. The WORK is
+ * the posting above, which is what the shared board is for; binding an errand's
+ * step to the same machine would enqueue a SECOND repair for one fault, and two
+ * repairs for one broken machine is not a staffing model.
+ *
+ * Both halves are logged, because the whole of this task is visible in two
+ * lines: what was posted, and who took it. */
+static void levelPostFault(LevelState *st, MachineHandle h)
+{
+	const Machine *m = machineGetConst(&st->sim.machines, h);
+	Job j;
+	int handle;
+	int adopted;
+
+	if (m == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: fault posted for no machine %d", h);
+		return;
+	}
+	/* One fault, one posting: a fault already being worked is not posted
+	 * twice (the claim would be contention the floor did not create). */
+	if (st->repairFor != MACHINE_INVALID) {
+		SDL_Log("isomata: [t=%llums] fault on machine %d ignored:"
+			" machine %d is still out for repair",
+			levelMs(), h, st->repairFor);
+		return;
+	}
+	if (!activityBindJob(&j, ACT_TIDY)) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: ACT_TIDY does not resolve");
+		return;
+	}
+	jobSetTarget(&j, JOB_TARGET_TILE, JOB_TILE_PACK(m->tileX, m->tileZ));
+	/* JOB_PRIO_ASSIGNED: "work off the shared board" (agents/board.h).
+	 * boardEnqueue validates the class and does not store it — the class
+	 * decides who may CLAIM, never the order, and the band above is
+	 * computed per reader. */
+	handle = boardEnqueue(&st->sim.boards.shared, &j, JOB_PRIO_ASSIGNED);
+	if (handle == JOB_INVALID) {
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+			     "level_scene: shared board refused the repair for"
+			     " machine %d", h);
+		return;
+	}
+	st->repairFor = h;
+	SDL_Log("isomata: [t=%llums] REPAIR POSTED on the shared board:"
+		" slot %d, machine %d at (%d,%d), %s for %.1fs",
+		levelMs(), handle, h, m->tileX, m->tileZ,
+		levelActivityName(j.kind), (double)j.duration);
+
+	adopted = errandSeedWorld(&st->sim, ERR_FIX_MACHINE, st->sim.now);
+	SDL_Log("isomata: [t=%llums] world-seeded ERR_FIX_MACHINE offered to"
+		" %d staff (floor JOB_PRIO_ASSIGNED, adopted at that tier and"
+		" not above it)", levelMs(), adopted);
+}
+
+/* A FINISHED REPAIR PUTS THE MACHINE BACK. The world owns the effect — a
+ * repair is a machine transition (sim/machines.h) — so the level watches the
+ * shared board for the job it posted, and pays out when it completes. A job
+ * that FAILED is retired without repairing anything, which is the honest
+ * outcome: a repair nobody finished is not a repair.
+ *
+ * The posting is retired either way. A board that kept its finished rows
+ * would fill up with them (agents/board.h: retirement is the reclaim path),
+ * and a fault that was never posted would never be paid for. */
+static void levelFinishRepair(LevelState *st)
+{
+	int slot;
+
+	if (st->repairFor == MACHINE_INVALID)
+		return;
+	for (slot = 0; slot < BOARD_MAX; slot++) {
+		Job *j = boardJob(&st->sim.boards.shared, slot);
+
+		if (j == NULL || j->kind != JOB_REPAIR)
+			continue;
+		if (j->state != JOB_DONE && j->state != JOB_FAILED)
+			continue;
+		if (j->state == JOB_DONE) {
 			Machine *m = machineGet(&st->sim.machines,
-						LEVEL_SCRIPT_BREAK_MACHINE);
+						st->repairFor);
 
 			if (m != NULL && machineRepair(m))
-				SDL_Log("isomata: [t=%llums] SCRIPTED REPAIR: washer %d free again",
-					levelMs(), LEVEL_SCRIPT_BREAK_MACHINE);
-			st->repairTimer = -1.0f;
+				SDL_Log("isomata: [t=%llums] REPAIR DONE:"
+					" machine %d free again (slot %d)",
+					levelMs(), st->repairFor, slot);
+		} else {
+			SDL_Log("isomata: [t=%llums] repair for machine %d"
+				" FAILED; the machine stays down",
+				levelMs(), st->repairFor);
 		}
+		boardRetire(&st->sim.boards.shared, slot);
+		st->repairFor = MACHINE_INVALID;
+		return;
 	}
 }
 
@@ -1205,6 +1565,8 @@ static void level_update(void *self, App *app, float dt)
 {
 	LevelState *st = scenePayload(self);
 	const InputFrame *frame = appInputFrame(app);
+	int before[LEVEL_WALKER_COUNT];
+	int staffBefore[LEVEL_STAFF_COUNT];
 	int i;
 
 	/* Pointer-only: the buttons are tap controls with no keyboard focus
@@ -1232,13 +1594,18 @@ static void level_update(void *self, App *app, float dt)
 		cameraPanByDrag(&st->camera, frame->panDx, frame->panDy);
 
 	updateCamera3D(&st->camera, dt);
-	/* Advance the demo critters: the agent tick decides, claims and routes
-	 * each body (ISO_LOG=debug shows the bands and the margin behind every
-	 * move). */
-	levelUpdateAgents(st, dt);
-	/* Advance the T23 customers + machines: spawner, machine timers and
-	 * wakes, each customer's brain, and the scripted break/repair. */
+	/* BEFORE the world advances: sweep the critters' own boards and run
+	 * the shared-board claim pass, so a job claimed this frame is spent by
+	 * the tick inside simUpdate. */
+	levelPreSim(st, dt, before, staffBefore);
+	/* THE agent tick happens in here, once, over the world's one
+	 * registry: the spawner, the machine timers and wakes, every agent's
+	 * decision and lifecycle (critters, customers and staff alike), each
+	 * customer's errand, and the scripted fault. */
 	levelUpdateBrain(st, dt);
+	/* AFTER it: retire what finished, queue the critters' next legs, log
+	 * what the staff did, and pay out a finished repair. */
+	levelPostSim(st, before, staffBefore);
 	/* Advance every walker once, after all decisions are in for the
 	 * frame. */
 	entitiesUpdate(&st->sim.entities, dt);

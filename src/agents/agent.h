@@ -13,6 +13,45 @@
  * index, a freed slot can be reused, and two live agents never alias. The
  * registry is caller-owned; there is no global state and no constructor.
  *
+ * ONE REGISTRY, AND IT IS THE WORLD'S (settled here; task 5 recorded the
+ * debt this resolves). There used to be two: customers in SimWorld.agents,
+ * the demo critters in LevelState.agents. Two registries meant two decay
+ * passes per frame, two AgentBoards, two clocks, and — the part that
+ * mattered — a "shared" board reachable only from whichever registry happened
+ * to hold the staff, so exclusivity between two workers was not something
+ * one pass could even express. It is settled for SimWorld.agents, and the
+ * order of the reasons is the order they decided it:
+ *
+ *   1. THE SHARED BOARD HAS TO BE SHARED. A claim is a promise made between
+ *      two agents, so the agents that contend for one job must live in one
+ *      registry that hands them one board (agentsClaimFromShared). There is
+ *      no arrangement in which two registries share a board honestly: one of
+ *      them cannot see it, and "cannot see it" is exactly the property that
+ *      makes the board private again.
+ *   2. THE WORLD OWNS THE AGENTS. SimWorld already owns the entity registry
+ *      their bodies live in and the machine registry their errands name
+ *      (sim/brain.h), and the level holds the world by value — so one
+ *      registry means one place an agent is created and one place an agent
+ *      is looked up, which is what made the split expensive in the first
+ *      place. The critters moved to the world registry; the staff did not
+ *      move to a demo one, because a demo is not a home for a workforce.
+ *   3. A HALF-MERGE IS WORSE THAN TWO HONEST REGISTRIES. So LevelState.agents
+ *      and LevelState.boards are GONE: there is exactly one AgentRegistry and
+ *      exactly one AgentBoards in the tree, and both live in SimWorld.
+ *      level_scene.c reaches every agent through st->sim.agents and every
+ *      shared board through st->sim.boards.
+ *
+ * ONLY STAFF PULL FROM THE SHARED BOARD (task 6; task 3 shipped the scan
+ * ungated and named this as the seat). The gate is ROLE_STAFF, applied in
+ * agentsUpdate's scan and in agentsClaimFromShared — the two places a shared
+ * job can be picked up. A customer's laundry round belongs to its own errand
+ * on its own board, and a critter's fill is its own; letting either pull
+ * somebody else's work would make the board a free-for-all and would put a
+ * customer on a repair, which is precisely what the errand's role gate
+ * refuses one step earlier. The gate is on the ROLE, not on the job: who may
+ * take work off the shared board is a staffing fact, and which jobs are on it
+ * is the world's.
+ *
  * The slot is the HANDLE; the `id` is the IDENTITY. `id` is stamped from a
  * monotonic counter and never reissued, so a reused slot gets a NEW id and a
  * stale id can never be mistaken for a live agent. Callers that need a
@@ -89,13 +128,32 @@ typedef enum AgentRole {
 
 /* Fixed competency slots. Skills shorten durations and raise quality; flaws
  * are deficiencies held independently of skill, and can fail a job outright.
- * Both are plain levels today and interpreted by the activity layer later. */
+ * Both are plain levels today and interpreted by the activity layer later.
+ *
+ * NEITHER EVER DISQUALIFIES. The spec's rule is exact — "low competency
+ * never disqualifies an agent, so a bad hire can't deadlock the sim, and
+ * staffing is a soft optimisation puzzle" — and it is why the competency
+ * question is a FUNCTION (agentCanAttempt) rather than a comparison at every
+ * call site: the rule is stated once, and a later game that wants a hard gate
+ * changes one function instead of every caller. Task 6 is what writes these
+ * arrays for the first time (a staff agent is hired with levels); before it
+ * every agent was born at zero and no competency could be observed at all. */
 typedef enum AgentSkill {
 	SKILL_REPAIR,
 	SKILL_SPEED,
 	SKILL_SERVICE,
 	SKILL_COUNT	/* array width for skills[] / flaws[] */
 } AgentSkill;
+
+/* WHAT ONE DEFICIENCY COSTS IN TIME (a multiplier on the job's own
+ * duration). A flaw is a deficiency held independently of skill, and the
+ * spec's "a flaw (clumsy) can make a job fail outright" has no quality or
+ * failure model to fail through yet — so what a flaw does today is make the
+ * work take longer, which is the half that is arithmetic rather than
+ * simulation. The failing half lands when something models job QUALITY; until
+ * then this constant is the whole of a deficiency's effect and is named as
+ * such rather than left to look like a quality weight. */
+#define FLAW_PENALTY 2.0f
 
 /* One row of the per-role curve table: how fast each need decays for this
  * role, and how low it must fall before that need counts as panicking.
@@ -258,7 +316,10 @@ int agentShouldSwitch(const Agent *a, int engagedBand, int challengerBand,
  *   4. agentShouldSwitch decides — an idle agent takes the best job on
  *      either board, an engaged one only a challenger that clears the
  *      margin (bands decide, never which board a job sits on; ties go to
- *      the personal board);
+ *      the personal board). THE SHARED BOARD IS STAFF-ONLY: for any other
+ *      role the tick scans the personal board alone, so a customer or a
+ *      critter cannot be pulled onto somebody else's work (see the role
+ *      gate in the header note);
  *   5. on a switch: the displaced job is INTERRUPTED (failed) and its claim
  *      released — re-planning is a NEW job, never a retarget of a live one —
  *      and the challenger is claimed and STARTed, which resolves the target
@@ -290,6 +351,83 @@ int agentShouldSwitch(const Agent *a, int engagedBand, int challengerBand,
  * agent's bad row or refused move never takes the loop down. */
 int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 		 const Voxmap *map, float dt, int *outDecisions);
+
+/* ONE PASS OVER ONE SHARED BOARD — the staffing claim, and the reason a
+ * shared board is SHARED rather than merely shared-shaped. Every live agent
+ * of ROLE_STAFF that is not already running something takes the best job on
+ * `shared` it may attempt, in registry order, and nothing else happens to
+ * anybody: no other role is offered a job, no agent is preempted, and no
+ * agent ever holds two. Returns how many claims were taken (0 for a NULL
+ * registry or board).
+ *
+ * THE PASS OWNS THE SWEEP. `now` is the only clock a board has (agents/
+ * board.h), and a reservation nobody started has to lapse inside the same
+ * call that hands the freed work to somebody else — otherwise "the job went
+ * back on the board" is a frame late, and an agent that died holding a claim
+ * would keep the floor's work hostage until the caller's next tick.
+ *
+ * THE CLAIM IS A RESERVATION, NOT A START. This function claims (boardClaim,
+ * the only writer of Job.claimer) and STARTs the lifecycle, so the job reads
+ * JOB_CLAIMED — "reserved, not yet walking", which is the one state
+ * boardExpire will free. The MOVE is the tick's: an agent engaged on a
+ * reserved job completes the start on its next agentsUpdate (see
+ * agentAdvanceJob's JOB_CLAIMED cell). That is why the reservation window
+ * exists at all, and it is why this function needs no entity registry and no
+ * map: claiming is not routing.
+ *
+ * ONE JOB PER AGENT IS AN INVARIANT, NOT A HOPE. An agent already engaged —
+ * on either board — is skipped, so an idle staffer never stacks a second
+ * job beside the errand it is running. The engaged handle is RE-VERIFIED
+ * first, by the same ownership rule the tick uses: a slot index can name a job
+ * that is no longer this agent's (retired and refilled between passes, or a
+ * reservation that lapsed and was taken by somebody else), and acting on it
+ * would execute another agent's work. A finished job is released here for the
+ * same reason the tick releases it.
+ *
+ * The pass is the SPEC'S "N staff scan one board in one claim pass, not N
+ * boards each": contention is resolved by boardClaim's exclusivity, so two
+ * staff can never want the same job and both have it.
+ */
+int agentsClaimFromShared(AgentRegistry *r, JobBoard *shared, float now);
+
+/* MAY `a` ATTEMPT `j` AT ALL? ALWAYS TRUE in v1, and that is the policy, not
+ * an omission.
+ *
+ * Low competency MODIFIES work (jobDurationFor) and never disqualifies: a
+ * clumsy hire takes the repair and takes twice as long, which is the spec's
+ * "staffing is a soft optimisation puzzle" and the reason a bad hire cannot
+ * deadlock the floor. Making this a function rather than a comparison at the
+ * call sites is what makes the rule changeable: a later game that wants a hard
+ * gate (a licence, a uniform, a machine only the fitter may touch) implements
+ * it HERE and every caller keeps working, which is why the signature already
+ * takes both the agent and the job rather than a bare competency level.
+ *
+ * The function is asked on every claim (agentsClaimFromShared) and the answer
+ * is deliberately NOT a branch there — see the note at that call site. */
+bool agentCanAttempt(const Agent *a, const Job *j);
+
+/* HOW LONG `j` TAKES `a`: its declared duration, divided by
+ * 1 + the competency the ACTIVITY DECLARES (Activity.skillGate — the repair
+ * row declares SKILL_REPAIR, a wander row declares none and is unmodified),
+ * then multiplied by FLAW_PENALTY when this agent holds a SKILL_SPEED flaw.
+ *
+ * THE DIVISION CANNOT FAIL, and the arithmetic is spelled so that it cannot:
+ * the divisor is 1 + a level read from an unsigned array, so it is >= 1.0f by
+ * construction — a skill of 0 divides by exactly 1.0f (the unfocused worker
+ * takes the declared time), and even the largest level the record can hold
+ * leaves a finite, positive duration. There is no 0 divisor, no infinity and
+ * no NaN to guard for, because the formula has no way to produce one.
+ *
+ * An activity no row claims has no DECLARED competency, so its duration is
+ * unmodified — and the framework's one place that treats an unknown activity
+ * as an error already handles it: agentsUpdate's band refresh DENIES such a
+ * job on sight (agents/activity.h's Review Focus #5 contract). A NULL agent
+ * or a NULL job is 0.0f: there is nobody to take the work, so there is no
+ * duration to report.
+ *
+ * This MODIFIES, never GATES: no job is ever refused because of it, which is
+ * the same rule agentCanAttempt states. */
+float jobDurationFor(const Agent *a, const Job *j);
 
 /* Zero the counters on read, so a phase reports the delta across its own
  * span: agentsUpdate's decisions and route computations accumulate between

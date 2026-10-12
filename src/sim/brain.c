@@ -1051,6 +1051,18 @@ bool simBreakMachine(SimWorld *w, MachineHandle h)
 	return true;
 }
 
+int errandSeedWorld(SimWorld *w, int templateId, float now)
+{
+	if (w == NULL)
+		return 0;
+	/* The world's OWN registry, and nothing else: the role gate, the
+	 * already-active refusal and the recorded floor all live in the errand
+	 * layer (agents/errand.h), and the loop over agents lives there too —
+	 * which is why this is a two-line wrapper on the world's registry and
+	 * not a second implementation of the offer. */
+	return errandsOfferToRole(&w->agents, templateId, now);
+}
+
 /* Hand a wake to the customer that owns the machine it names. */
 static void brainRouteWake(SimWorld *w, const MachineWake *wake)
 {

@@ -1,0 +1,16 @@
+17:isomata: staff FITTER hired (entity 3, agent 3): repair 3, speed 2, clumsy 0
+18:isomata: staff APPRENTICE hired (entity 4, agent 4): repair 0, speed 0, clumsy 1
+28:isomata: staff FITTER (agent 3) took own job 0 (WANDER band 0, repair 3 speed 2 clumsy 0) -> errand -
+29:isomata: staff FITTER job 0 (WANDER) state WAITING
+30:isomata: staff APPRENTICE (agent 4) took own job 0 (WANDER band 0, repair 0 speed 0 clumsy 1) -> errand -
+31:isomata: staff APPRENTICE job 0 (WANDER) state WAITING
+55:isomata: staff FITTER (agent 3) released job 0
+57:isomata: staff APPRENTICE (agent 4) released job 0
+340:isomata: [t=100099ms] SCRIPTED BREAK: washer 0 broke mid-run
+341:isomata: [t=100099ms] REPAIR POSTED on the shared board: slot 0, machine 0 at (1,1), TIDY for 4.0s
+342:isomata: [t=100099ms] world-seeded ERR_FIX_MACHINE offered to 2 staff (floor JOB_PRIO_ASSIGNED, adopted at that tier and not above it)
+343:isomata: [t=100130ms] 1 staff claimed shared work
+345:isomata: staff FITTER (agent 3) took shared job 0 (TIDY band 2, repair 3 speed 2 clumsy 0) -> errand FIX_MACHINE
+346:isomata: staff FITTER job 0 (TIDY) state WALKING
+356:isomata: [t=103500ms] REPAIR DONE: machine 0 free again (slot 0)
+357:isomata: staff FITTER (agent 3) released job 0
