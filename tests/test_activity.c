@@ -20,8 +20,15 @@
  *   A 0.9 slice of an emptied TIER-1 need (a nap) must outrank a 0.2 slice
  *   of an emptied TIER-4 need (a wander). Nothing compares the two
  *   activities; wantUrgency already carries the tier weight, so this goes
- *   red the moment serves[] is treated as a flat priority or the tier
- *   weight is dropped.
+ *   red the moment serves[] is treated as a flat priority — that is, the
+ *   moment the two serves[] strengths stop mattering.
+ *
+ *   test_a_strong_tier4_want_still_loses_to_a_weak_tier1 — the one that
+ *   pins the TIER WEIGHT itself. The inversion test cannot: under uniform
+ *   weights 0.9 of a tier-1 need still beats 0.2 of a tier-4 one, so
+ *   dropping the tier falloff would leave it green. This test serves
+ *   fulfilment at its FULL 0.9 and energy at its FULL 0.9, which only
+ *   inverts while the tier weight is doing its job.
  *
  *   test_urgency_takes_the_max_not_the_sum — with ONLY single-need rows,
  *   max and sum agree and the assertion would pass under either arithmetic,
@@ -102,10 +109,16 @@ static void test_catalogue_rows_are_well_formed(void)
 		/* Intent-revealing names: a row is readable on its own. */
 		TEST_ASSERT_NOT_NULL(act->name);
 		TEST_ASSERT_TRUE(act->name[0] != '\0');
-		/* The id IS a JobKind: jobUrgency resolves a live job back to
-		 * its row through exactly this field. */
+		/* The id must be within the ranges the CODE needs, and the
+		 * binding one is ACTIVITY_MAX: ActivityCooldowns.readyAt is
+		 * indexed by activity id, so an id at or above ACTIVITY_MAX
+		 * would index off the end of the store. The JobKind range is
+		 * also asserted (ids double as JobKinds so a live job can be
+		 * resolved back to its row) but it is not what bounds the
+		 * array. */
 		TEST_ASSERT_TRUE(act->id >= 0);
 		TEST_ASSERT_TRUE(act->id < JOB_KIND_COUNT);
+		TEST_ASSERT_TRUE(act->id < ACTIVITY_MAX);
 		/* Non-negative runtime, non-negative cooldown. A negative
 		 * duration would be a job that ends before it begins. */
 		TEST_ASSERT_TRUE(act->duration > 0.0f);

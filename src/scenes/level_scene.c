@@ -345,7 +345,22 @@ static void levelQueueNextLeg(LevelState *st, DemoCritter *c)
 	/* The band is COMPUTED from the needs a wander serves. Nothing here
 	 * assigns it, which is the whole point: the demo no longer knows what
 	 * its own job is worth. */
-	j.band = jobUrgency(a, &j);
+	/* The activity is a compile-time constant that this file also
+	 * includes the catalogue for, so the -1 error is unreachable; a
+	 * CHECKED write would be a branch that can never be false. If a row
+	 * ever failed to resolve, the tick's own refresh DENIES the job on
+	 * the next tick, which is the single place that handles it. */
+	{
+		int band = jobUrgency(a, &j);
+
+		/* Deliberately UNCHECKED, and the (void) says so: ACT_WANDER is
+		 * a compile-time constant and this file includes the catalogue,
+		 * so the -1 error is structurally unreachable. If it were not,
+		 * the tick's own refresh DENIES any job it cannot score on the
+		 * next tick — the one place that handles it. */
+		(void)band;
+		j.band = band;
+	}
 	c->job = boardEnqueue(&a->personal, &j, JOB_PRIO_FILL);
 	if (c->job == JOB_INVALID)
 		return;		/* board full: retried next tick */

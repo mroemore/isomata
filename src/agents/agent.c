@@ -359,10 +359,20 @@ static void agentDropJob(Agent *a, JobBoard *b, Job *j)
  * ("dirty"), so skipping this would make new work permanently ineligible
  * rather than merely mis-banded.
  *
- * The cost is one walk of the board the agent can already see, per decision,
- * and only on the two boards that agent can read: the spec's "decision
- * points, not per-tick rescoring" is preserved because an agent with no
- * candidate never gets here.
+ * THE COST, stated honestly: this runs EVERY TICK, for EVERY live agent,
+ * over BOTH boards it can read — up to BOARD_MAX slots each — whether or
+ * not that agent has any candidate at all. It is not a decision-point cost
+ * and should not be described as one. The spec's "decision points, not
+ * per-tick rescoring" applies to the DECISION (agentShouldSwitch) and still
+ * holds; the band refresh is a separate, unconditional walk.
+ *
+ * Measured (task 4, .tmp_files/bench_agents.c, headless -O2, 250 agents):
+ * the whole agent tick peaks at ~470 us on a 16666 us frame — 2.8 % — and
+ * the profile says the DEAD-SLOT SCAN, not the jobUrgency arithmetic, is
+ * the dominant term (~374 us of that, against ~96 us of live scoring at 64
+ * jobs per board). A dirty-flagged skip list is the spec's own anticipated
+ * fix and the numbers say it is worth doing before the agent count grows,
+ * but at AGENT_MAX today it is not a 60fps problem.
  *
  * A job whose activity is unknown scores -1, which is an ERROR rather than a
  * boring band, so it is failed here and now through the lifecycle: the
@@ -589,7 +599,24 @@ int agentsUpdate(AgentRegistry *r, EntityRegistry *ents, AgentBoards *boards,
 				 * board asserts the claimer is this agent's,
 				 * which is what would break first. */
 				activityBindJob(&fj, fill);
-				fj.band = jobUrgency(a, &fj);
+				{
+					int band = jobUrgency(a, &fj);
+
+					/* Deliberately UNCHECKED, and the
+					 * (void) says so. The id came from
+					 * agentBestFill over the very catalogue
+					 * this resolves against, so the -1 error
+					 * is structurally unreachable; a real
+					 * check would be a branch that can never
+					 * be false. Were a row ever to go
+					 * missing, the failure is not lost:
+					 * the NEXT tick's refresh DENIES any job
+					 * it cannot score, so it fails loudly
+					 * rather than sitting on a board
+					 * looking merely boring. */
+					(void)band;
+					fj.band = band;
+				}
 				h = boardEnqueue(&a->personal, &fj, JOB_PRIO_FILL);
 				/* Enqueued AND claimed in the same breath,
 				 * exactly as a job taken off a board is: a fill

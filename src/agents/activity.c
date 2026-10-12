@@ -416,11 +416,6 @@ int agentBestFill(const struct Agent *a, const JobBoard *b, float now)
 		/* Scored with the SAME arithmetic as every other job, so a fill
 		 * competes on the identical terms an errand does. This is the
 		 * point of the whole module: one function decides what is
-		 * worth doing, whatever produced the job. */
-		jobInit(&probe, act->id);
-		/* Scored with the SAME arithmetic as every other job, so a fill
-		 * competes on the identical terms an errand does. This is the
-		 * point of the whole module: one function decides what is
 		 * worth doing, whatever produced the job.
 		 *
 		 * A NEGATIVE SCORE IS FILTERED BY THE COMPARISON ITSELF, not
@@ -428,6 +423,7 @@ int agentBestFill(const struct Agent *a, const JobBoard *b, float now)
 		 * and `bestScore` starts at -1, so a strict `>` can never
 		 * adopt one — it would have to beat -1, and it is -1. The
 		 * error value is therefore excluded by construction. */
+		jobInit(&probe, act->id);
 		score = jobUrgency(a, &probe);
 		/* Strict `>` PLUS an explicit lowest-id tie-break: the table is
 		 * not in id order and nothing may depend on that, so permuting
