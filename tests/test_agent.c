@@ -662,6 +662,30 @@ static void tuneNeed(Agent *a, int need, int want)
 	a->panicMask = needPanicMask(&a->needs);
 }
 
+/* Keep the ladder OUT OF PANIC while a test pins bands.
+ *
+ * A pin alone is not enough, and this is not an obvious trap: panic is a MODE
+ * CHANGE, and wantUrgency scales every non-panicking want by
+ * NEED_PANIC_SUPPRESS (0.75) while any need panics. A long run of ticks drains
+ * NEED_SURVIVAL — ROLE_CRITTER's only armable slot, threshold 0.10 — so an
+ * agent left alone crosses into panic partway through and every band under
+ * the pin silently rescales. Pinning SURVIVAL to content says what the test
+ * means by these numbers: PLAIN want bands, not bands read under suppression.
+ *
+ * The alarm channel is cleared outright rather than left to bleed off:
+ * NEED_PANIC_DECAY is 0.5/s, so a pin alone would keep suppression in force
+ * for several ticks after the need is full again. */
+static void tuneNoPanic(Agent *a)
+{
+	int n;
+
+	tuneNeed(a, NEED_SURVIVAL, 0);
+	for (n = 0; n < NEED_COUNT; n++)
+		a->needs.panic[n] = 0.0f;
+	a->panicMask = needPanicMask(&a->needs);
+	TEST_ASSERT_EQUAL_INT(0, needPanicMask(&a->needs));
+}
+
 /* Pin `a`'s needs so that a job of `kind` would score exactly `band`. NEEDS
  * DECAY, so a band pinned before a long run of ticks has drifted by the time
  * that run ends (a hand-set band never would have). This re-pins one without
@@ -1032,19 +1056,45 @@ static void test_update_engages_the_best_job(void)
 static void test_update_does_not_oscillate_on_a_near_equal_band(void)
 {
 	TickWorld *w = &g_world;
+	Job tidy;
+	Job talk;
 	int engagedFirst;
 	int switches = 0;
 	int i;
 
 	worldInit(w, 1, 1);
-	/* The job it takes first, then — one tick later — a challenger one
-	 * band better turns up on the same board. That is the shape the
-	 * property is about: not two jobs at rest, but new work arriving
-	 * beside work already running. */
-	pushWander(&w->a->personal, 3, 1, 9, 0.4f);
+	jobInit(&tidy, ACT_TIDY);
+	jobInit(&talk, ACT_TALK);
+	/* The job it takes first (a talk, band 1), then — one tick later — a
+	 * challenger EXACTLY ONE BAND BETTER (a chat, band 2) turns
+	 * up on the same board. That is the shape the property is about: not
+	 * two jobs at rest, but new work arriving beside work already
+	 * running.
+	 *
+	 * TWO DIFFERENT ACTIVITIES, on two INDEPENDENT needs. This test used
+	 * to push two JOB_WANDERs, which was VACUOUS: jobUrgency is a
+	 * function of (kind, needs) alone, so two jobs of one kind always
+	 * score identically for one agent — the "one band better" challenger
+	 * was really a tie, and the property it claimed to test was never
+	 * evaluated.
+	 *
+	 * Both rows serve EXACTLY ONE need — ACT_TIDY is driven by
+	 * NEED_ESTEEM, ACT_TALK by NEED_SOCIAL — so pinning one provably
+	 * cannot move the other. A multi-need row such as ACT_COFFEE would
+	 * not do: pinning one of its two needs leaves the other to drift
+	 * into the score and the gap stops being the one that was set.
+	 * ACT_TIDY is also the steadiest pin available — ESTEEM has
+	 * decayMul 0.0 for a critter, so its value never moves. */
+	/* BOTH JOBS RUN LONG. The dwell is AGENT_MIN_DWELL (1.5s), and an
+	 * incumbent that finished before it expired would go idle, take the
+	 * challenger as a fresh start, and never consult the margin rule at
+	 * all — the same vacuity one level up, and the reason this test has
+	 * to keep the agent engaged PAST the dwell for "no switch" to mean
+	 * anything. */
+	pushScored(w->a, &w->a->personal, ACT_TIDY, 3, 1, 1, 30.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, w->a->engagedJob);
-	pushWander(&w->a->personal, 3, 3, 9 + 1, 0.4f);
+	pushScored(w->a, &w->a->personal, ACT_TALK, 3, 3, 2, 30.0f);
 	engagedFirst = w->a->engagedJob;
 
 	for (i = 0; i < 200; i++) {
@@ -1052,6 +1102,18 @@ static void test_update_does_not_oscillate_on_a_near_equal_band(void)
 		int state = (before != JOB_INVALID)
 				    ? w->a->personal.slots[before].state
 				    : JOB_UNCLAIMED;
+
+		/* Needs DECAY inside every tick, so a pinned band drifts; this
+		 * pair is one that survives exactly one step of ROLE_CRITTER
+		 * decay, and re-pinning holds the gap at one band across the
+		 * whole 200-tick run. */
+		tuneNoPanic(w->a);
+		tuneToBand(w->a, ACT_TIDY, 1);
+		tuneToBand(w->a, ACT_TALK, 2);
+		/* The gap is EXACTLY one band, asserted every tick — so this
+		 * test cannot quietly decay into asserting a tie. */
+		TEST_ASSERT_EQUAL_INT(1, jobUrgency(w->a, &talk) -
+					     jobUrgency(w->a, &tidy));
 
 		runTicks(w, 1, 0.1f);
 		/* A PREEMPTION is leaving a job that was still running for a
@@ -1062,16 +1124,26 @@ static void test_update_does_not_oscillate_on_a_near_equal_band(void)
 		    state != JOB_DONE && state != JOB_FAILED)
 			switches++;
 	}
-	/* 200 ticks with a one-band challenger sitting on the board the
-	 * whole time: the running job is never displaced. */
+	/* 185 of those 200 ticks are past the 1.5s dwell, so it is the MARGIN
+	 * rather than the dwell that holds the incumbent — with a one-band
+	 * challenger sitting on the board the whole time. Never displaced. */
 	TEST_ASSERT_EQUAL_INT(0, switches);
 	TEST_ASSERT_EQUAL_INT(engagedFirst, 0);
-	/* It is not a stalled agent either: both legs ran to completion (in
-	 * about three seconds), so the final state is an idle agent with two
-	 * finished jobs still on its board for its owner to retire. */
-	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->engagedJob);
-	TEST_ASSERT_EQUAL_INT(JOB_DONE, w->a->personal.slots[0].state);
-	TEST_ASSERT_EQUAL_INT(JOB_DONE, w->a->personal.slots[1].state);
+	TEST_ASSERT_EQUAL_INT(0, w->a->engagedJob);
+
+	/* AND IT IS NOT STUCK. "Never moved" is only a statement about the
+	 * margin if the agent WOULD move once the margin says so; without
+	 * this, a wedged agent passes the loop above exactly as well as a
+	 * well-behaved one. Widen the gap to the margin and it goes. */
+	tuneNoPanic(w->a);
+	tuneToBand(w->a, ACT_TIDY, 1);
+	tuneToBand(w->a, ACT_TALK, 1 + AGENT_PREEMPT_MARGIN);
+	runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(1, w->a->engagedJob);	/* the chat preempted */
+	/* Re-planning is a NEW job, never a retarget: the displaced one is
+	 * FAILED and released, not left claimed. */
+	TEST_ASSERT_EQUAL_INT(JOB_FAILED, w->a->personal.slots[0].state);
+	TEST_ASSERT_EQUAL_INT(JOB_INVALID, w->a->personal.slots[0].claimer);
 	worldFree(w);
 }
 
@@ -1426,28 +1498,48 @@ static void test_update_holds_the_margin_across_boards(void)
 	boardExpire(&w->boards.shared, 1.0f);
 	a = w->a;
 	/* A long duration: this test is about the MARGIN, and a job that
-	 * finished inside the 40-tick loop would let the agent go idle and
-	 * wander off to the shared challenger before the decisive push. */
-	pushScored(a, &a->personal, ACT_TALK, 3, 1, 3, 60.0f);
+	 * finished inside the loop would let the agent go idle and wander off
+	 * to the shared challenger before the decisive push. */
+	pushScored(a, &a->personal, ACT_TIDY, 3, 1, 1, 60.0f);
 	runTicks(w, 1, 0.1f);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
-	/* One band better, on the other board: not a reason to move. */
-	pushScored(a, &w->boards.shared, ACT_COFFEE, 6, 5, 4, 4.0f);
 
-	/* Well past AGENT_MIN_DWELL, so the dwell is not what holds it. */
+	/* LET THE DWELL EXPIRE BEFORE THE CHALLENGER APPEARS. This is the
+	 * state the anti-oscillation guarantee is actually about: an agent
+	 * that MAY move — dwell gone — and still does not. The earlier
+	 * version of this test pushed the challenger on the very next tick,
+	 * so its "one band better" case was never evaluated with
+	 * dwellLeft == 0 at all: it passed because the dwell was still
+	 * running, and afterwards because needs decay had closed the gap to
+	 * zero. Two protections on one loop that silently tested nothing. */
+	for (i = 0; i < 20; i++)
+		runTicks(w, 1, 0.1f);
+	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+	TEST_ASSERT_FALSE(a->engagedShared);
+	TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, a->dwellLeft);
+
+	/* One band better, on the other board, with the dwell already gone:
+	 * not a reason to move, however long we wait. */
+	pushScored(a, &w->boards.shared, ACT_TALK, 6, 5, 2, 60.0f);
 	for (i = 0; i < 40; i++) {
+		/* Re-pinned every tick: needs decay inside each tick, and this
+		 * pair is one whose gap survives exactly one step of
+		 * ROLE_CRITTER decay. Asserted, not assumed. */
+		tuneNoPanic(a);
+		tuneToBand(a, ACT_TIDY, 1);
+		tuneToBand(a, ACT_TALK, 2);
+		TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
+		TEST_ASSERT_FALSE(a->engagedShared);
 		runTicks(w, 1, 0.1f);
 		TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
 		TEST_ASSERT_FALSE(a->engagedShared);
 	}
+
 	/* One more band and it moves: the rule reads the band, not the board
 	 * the two jobs happen to sit on. */
 	boardRetire(&w->boards.shared, 0);
-	/* Re-pin the incumbent: its computed band drifted as its need decayed
-	 * through the 40 ticks above, so the decisive gap is measured against
-	 * a freshly pinned 3. */
-	tuneToBand(a, ACT_TALK, 3);
-	pushScored(a, &w->boards.shared, ACT_NAP, 7, 5, 5, 4.0f);
+	tuneToBand(a, ACT_TIDY, 1);
+	pushScored(a, &w->boards.shared, ACT_TALK, 7, 5, 3, 60.0f);
 	runTicks(w, 2, 0.1f);
 	TEST_ASSERT_TRUE(a->engagedShared);
 	TEST_ASSERT_EQUAL_INT(0, a->engagedJob);
