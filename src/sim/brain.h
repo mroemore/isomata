@@ -31,13 +31,13 @@
  * and the release of its claim is the same code path every other failure
  * takes.
  *
- * THE RELEASE RULE, in one line because everything else here depends on it:
- * every way out of a machine goes through machineRelease (brain.c's
- * brainReplan, the only place this driver frees one) — including the walk out,
- * including an errand that went terminal while its step still held a machine,
- * and including a body or mind that vanished underneath it. A customer can
- * never leave the building still holding somebody else's washing, and the
- * suites assert that on every tick of every scenario rather than trusting it.
+ * THE RELEASE RULE, in one line because everything else here depends on it: a
+ * customer never leaves the building still holding somebody else's washing.
+ * brain.c releases a machine in three places — brainReplan (every failure, the
+ * walk out, and a body or mind that vanishes), the cannot-pay hand-back, and
+ * the collect leg's normal completion — and every path that can END while
+ * holding one goes through one of them. The suites assert that on every tick of
+ * every scenario, and pin the two paths that used to be exceptions.
  *
  * SATISFACTION AND THE WALK OUT. Blocked time decays NEED_SATISFACTION (the
  * spec's tier-1 reading: being blocked is an inconvenience), and an errand

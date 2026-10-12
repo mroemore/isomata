@@ -653,7 +653,144 @@ static void test_a_machine_broken_during_the_collect_walk_rewinds(void)
 	}
 	TEST_ASSERT_EQUAL_INT(MACHINE_NO_OWNER,
 			      machineGetConst(&w.machines, 0)->owner);
-	assertMachinesReleased(&w, 1);
+	/* 0, not 1: the broken machine is BROKEN, which the helper does not
+	 * count as held — so this scenario now demands a completely clean
+	 * registry, not merely the one machine the customer did release. */
+	assertMachinesReleased(&w, 0);
+	destroyVoxmap(map);
+}
+
+/* AN ERRAND THAT DIES ON ITS OWN LEAVE STEP STILL WALKS OUT — ONCE. The other
+ * terminal-errand test ends the errand on the FIRST step, where there is no
+ * leave job and the driver has to enqueue one. This is the case where the
+ * leave job is already on the board when the errand dies, which is what
+ * brainGoToExit's "already on the way out" guard is for: without it the driver
+ * would announce a second departure for a customer who is already walking to
+ * the door, and enqueue a second leave job for the same walk.
+ *
+ * (It is also the branch that says the guard is not merely defensive: this is
+ * how you reach it.) */
+static void test_an_errand_dying_on_its_leave_step_walks_out_once(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	Agent *a;
+	Errand *e;
+	int n = 0;
+	int step;
+	int leaves = 0;
+	int i;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 1.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+
+	/* Walk the whole round to the errand's OWN leave step. */
+	for (step = 0; step < MAX_STEPS; step++) {
+		step1(&w, &t, DT);
+		if (countKind(&t, BRAIN_EV_LEAVE_BEGIN) > 0)
+			break;
+	}
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_LEAVE_BEGIN));
+	a = agentOfCustomer(&w, h);
+	TEST_ASSERT_NOT_NULL(a);
+	e = errandActive(a);
+	TEST_ASSERT_NOT_NULL(e);
+	TEST_ASSERT_TRUE(e->jobHandle != ERRAND_INVALID);
+
+	/* Kill the errand underneath it. The leave JOB is already on the board
+	 * and stays there. */
+	TEST_ASSERT_TRUE(boardRetire(&a->personal, e->jobHandle));
+	e->jobHandle = ERRAND_INVALID;
+	e->state = ERRAND_FAILED;
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	if (getenv("BRAIN_DUMP") != NULL) {
+		fprintf(stderr, "== errand dies on its leave step ==\n");
+		dumpStory(&t);
+	}
+	for (i = 0; i < t.count; i++)
+		if (t.ev[i].kind == BRAIN_EV_LEAVE_BEGIN)
+			leaves++;
+	TEST_ASSERT_EQUAL_INT(1, leaves);
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_DEPART));
+	TEST_ASSERT_EQUAL_INT(0, simCustomerCount(&w));
+	assertMachinesReleased(&w, 0);
+	destroyVoxmap(map);
+}
+
+/* THE MIND VANISHES WHILE THE BODY STILL HOLDS A MACHINE. The release path
+ * that `brainDrive`'s death branch exists for, with only ONE of the two halves
+ * gone: the customer record stays (the sweep that reclaims records only runs
+ * for customers whose body is gone), the agent is destroyed under it, and the
+ * machine must come back.
+ *
+ * The existing mid-life test destroys a customer immediately after spawn —
+ * before any claim — and destroys the BODY, which takes the whole record with
+ * it. So neither half of this route was covered: there was no test that
+ * destroyed an agent alone while it held a machine, which is precisely the case
+ * the `(a != NULL) ? errandActive(a) : NULL` in that branch was written for.
+ */
+static void test_the_mind_vanishing_releases_the_machine(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	AgentHandle ah;
+	const Machine *m;
+	int n = 0;
+	int step;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3, 1.0f);
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 1.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+
+	/* Step to the point where the fee is paid, so the machine is CLAIMED. */
+	for (step = 0; step < MAX_STEPS; step++) {
+		step1(&w, &t, DT);
+		if (countKind(&t, BRAIN_EV_PAY) > 0)
+			break;
+	}
+	TEST_ASSERT_TRUE(countKind(&t, BRAIN_EV_PAY) > 0);
+	m = machineGetConst(&w.machines, 0);
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_CLAIMED, m->state);
+	ah = simCustomerFor(&w, h)->agent;
+	TEST_ASSERT_NOT_NULL(simCustomerFor(&w, h));
+	TEST_ASSERT_TRUE(ah != AGENT_INVALID);
+
+	/* The MIND goes; the body and the record stay. */
+	agentDestroy(&w.agents, ah);
+	TEST_ASSERT_NULL(agentGet(&w.agents, ah));
+	m = machineGetConst(&w.machines, 0);
+	TEST_ASSERT_EQUAL_INT(h, m->owner);	/* still held — nothing has
+						 * cleaned up yet */
+
+	TEST_ASSERT_TRUE(runToEmpty(&w, &t, DT) > 0);
+	if (getenv("BRAIN_DUMP") != NULL) {
+		fprintf(stderr, "== mind vanishes ==\n");
+		dumpStory(&t);
+	}
+	/* The washer went back on the free list with no owner, and the customer
+	 * whose mind was gone did not leave the building. */
+	m = machineGetConst(&w.machines, 0);
+	TEST_ASSERT_NOT_NULL(m);
+	TEST_ASSERT_EQUAL_INT(MACHINE_STATE_FREE, m->state);
+	TEST_ASSERT_EQUAL_INT(MACHINE_NO_OWNER, m->owner);
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_DEPART));
+	assertMachinesReleased(&w, 0);
 	destroyVoxmap(map);
 }
 
@@ -1284,6 +1421,7 @@ static void test_update_guards(void)
 	SimWorld w;
 	BrainEvent buf[8];
 	float nan = 0.0f;
+	int n2 = 0;
 
 	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
 	simWorldInit(NULL, map, 0, 0, 0, 0, 0, 0);	/* no crash */
@@ -1295,6 +1433,33 @@ static void test_update_guards(void)
 	TEST_ASSERT_EQUAL_INT(0, simUpdate(&w, nan, buf, 8));
 	/* A NULL event buffer must not take the world's state with it. */
 	TEST_ASSERT_EQUAL_INT(0, simUpdate(&w, 0.05f, NULL, 0));
+	/* Nor must a SHORT one: the buffer bounds how many events the tick
+	 * REPORTS, never what the tick does. Two customers arriving in one
+	 * tick each adopt an errand, which is two events; a one-slot buffer
+	 * takes the first and drops the second, and both errands must still
+	 * be on the agents afterwards — a dropped REPORT is not a dropped
+	 * adoption. */
+	{
+		EntityHandle a1 = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20,
+						   buf, 8, &n2);
+		EntityHandle a2 = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20,
+						   buf, 8, &n2);
+
+		TEST_ASSERT_TRUE(a1 != ENTITY_INVALID);
+		TEST_ASSERT_TRUE(a2 != ENTITY_INVALID);
+		/* The tick has two adoptions to report and one slot to report
+		 * them in: it fills the slot and drops the second report, so
+		 * the NEXT tick has nothing to say. Both adoptions happened. */
+		TEST_ASSERT_EQUAL_INT(1, simUpdate(&w, 0.05f, buf, 1));
+		TEST_ASSERT_EQUAL_INT(0, simUpdate(&w, 0.05f, buf, 1));
+		TEST_ASSERT_EQUAL_INT(2, simCustomerCount(&w));
+		TEST_ASSERT_NOT_NULL(agentOfCustomer(&w, a1));
+		TEST_ASSERT_NOT_NULL(errandActive(agentOfCustomer(&w, a1)));
+		TEST_ASSERT_NOT_NULL(agentOfCustomer(&w, a2));
+		TEST_ASSERT_NOT_NULL(errandActive(agentOfCustomer(&w, a2)));
+		/* And no capacity at all is still a tick, not a crash. */
+		TEST_ASSERT_EQUAL_INT(0, simUpdate(&w, 0.05f, buf, 0));
+	}
 	destroyVoxmap(map);
 }
 
@@ -1747,6 +1912,8 @@ void run_test_brain(void)
 	RUN_TEST(test_a_customer_who_is_progressing_never_walks_out);
 	RUN_TEST(test_the_patience_budget_is_spent_only_on_blocked_time);
 	RUN_TEST(test_a_machine_broken_during_the_collect_walk_rewinds);
+	RUN_TEST(test_an_errand_dying_on_its_leave_step_walks_out_once);
+	RUN_TEST(test_the_mind_vanishing_releases_the_machine);
 	RUN_TEST(test_a_gate_bound_outlasts_the_patience_window);
 	RUN_TEST(test_an_abandoned_errand_releases_its_machine);
 	RUN_TEST(test_a_preempted_use_machine_releases_its_claim);

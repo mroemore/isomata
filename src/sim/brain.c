@@ -24,21 +24,32 @@
  * carry is the world's bookkeeping the framework cannot hold — which machine,
  * whether the fee has been paid, which job is walking to the door.
  *
- * EVERY WAY OUT OF A MACHINE RELEASES IT — and that is a TEST, not an
- * aspiration. brainReplan is the only place this file gives a machine back, and
- * it reads the machine the CUSTOMER is holding (c->target) rather than the
- * errand's binding, because the two are not the same thing and only one of them
- * is still true when an errand goes terminal. Every exit from a leg goes
- * through it: a claim refused at arrival, a route that will not compute, a gate
- * whose bound expired, a machine that broke mid-run, an errand abandoned for
- * want of patience, an errand that went terminal while its step still held a
- * machine, and a body or mind that vanished underneath it all.
+ * A CUSTOMER NEVER LEAVES HOLDING SOMEBODY ELSE'S WASHING, and that is a TEST
+ * rather than an intention. There are THREE places this file gives a machine
+ * back, and every path that can END while holding one goes through one of them:
  *
- * Two oracles back the word "every". tests/test_brain.c asserts the claim
+ *   - brainReplan — the shared release. It reads the machine the CUSTOMER is
+ *     holding (c->target) rather than the errand's binding, because the two are
+ *     not the same thing and only one of them is still true once an errand has
+ *     gone terminal. Every failure takes it (a claim refused at arrival, a route
+ *     that will not compute, a gate whose bound expired, a machine that broke
+ *     mid-run, an errand abandoned for want of patience) and so does the walk
+ *     out, including an errand that went terminal while its step still held a
+ *     machine, and a body or mind that vanished underneath it.
+ *   - brainDriveLoad's "claimed but cannot pay": a machine taken straight back
+ *     rather than through the re-plan, because the errand is being abandoned
+ *     and there is nothing to re-select.
+ *   - brainDriveCollect's completion: the NORMAL release, on the happy path.
+ *
+ * (This file does not claim those are the only places machineRelease is called
+ * from — two of them are not failure paths at all, and the list above is about
+ * which paths can end holding a machine, not about where the call happens.)
+ *
+ * Three oracles back the sentence. tests/test_brain.c asserts the claim
  * invariant on EVERY TICK of every scenario (no machine is ever owned by a
- * customer that no longer exists), and
- * test_a_terminal_errand_releases_the_machine_it_holds aims it at the one exit
- * that used to be an exception.
+ * customer that no longer exists),
+ * test_a_terminal_errand_releases_the_machine_it_holds aims it at the walk out,
+ * and test_the_mind_vanishing_releases_the_machine aims it at the death branch.
  */
 
 #include "sim/brain.h"
@@ -53,9 +64,12 @@
  * free marker (it is -1, so a zeroed slot does NOT read as live). This
  * replaces the old BrainPhase's BRAIN_PH_INACTIVE gate: what a slot is for is
  * no longer a phase of a switch. */
+/* The only caller-side fact: does this slot hold a live mind? Every call site
+ * passes a record taken out of the registry (`&w->customers[i]`, or a `c` bound
+ * to one), so there is no NULL arm — the registry itself is the check. */
 static bool brainSlotUsed(const SimCustomer *c)
 {
-	return c != NULL && c->agent != AGENT_INVALID;
+	return c->agent != AGENT_INVALID;
 }
 
 /* Append one event if the buffer has room (a bounded, deterministic prefix). */
@@ -186,7 +200,15 @@ static int brainEnqueueLeave(SimWorld *w, Agent *a)
 }
 
 /* Begin the walk to the exit. Used by the abandon path and by an errand that
- * ended without reaching its own LEAVE step. */
+ * ended without reaching its own LEAVE step.
+ *
+ * The "already on the way out" guard is duplicated defence TODAY: brainDrive
+ * performs the same check two functions up, before it looks for an errand, so
+ * both call sites arrive with leaveJob == ERRAND_INVALID. It is kept (and named
+ * in coverage-min.txt) because it is the only thing standing between a future
+ * caller that enqueues a leave job from somewhere else and a customer being
+ * announced as leaving twice — the case
+ * test_an_errand_dying_on_its_leave_step_walks_out_once describes. */
 static void brainGoToExit(SimWorld *w, SimCustomer *c, Agent *a, BrainEvent *out,
 			  int cap, int *n)
 {
@@ -220,6 +242,11 @@ static Job *brainStepJob(Agent *a, Errand *e)
 static void brainAbandonErrand(SimWorld *w, SimCustomer *c, Agent *a, Errand *e,
 			       BrainEvent *out, int cap, int *n)
 {
+	/* Once per errand. The two give-up tests (cannot pay, patience spent)
+	 * are separate and could both fire in one tick; without this a single
+	 * abandoned customer would be announced ABANDONed twice. Not reachable
+	 * by the shipped flow today (a customer that just paid was not blocked),
+	 * which is why it is named rather than tested — see coverage-min.txt. */
 	if (c->abandoned)
 		return;
 	c->abandoned = true;
@@ -317,7 +344,9 @@ static void brainDriveLoad(SimWorld *w, SimCustomer *c, Agent *a, Errand *e,
 			brainReplan(w, c, e, out, cap, n, BRAIN_EV_CLAIM_DENIED);
 			return;
 		}
-		if (ent == NULL || ent->money < m->fee) {
+		/* `ent` is non-NULL here by construction: brainDrive returns
+		 * early unless the body exists, and this is the only call site. */
+		if (ent->money < m->fee) {
 			/* Claimed and cannot pay: give the machine straight back
 			 * and give the errand up. Half a transaction is not a
 			 * transaction. */
@@ -473,8 +502,7 @@ static void brainDriveCollect(SimWorld *w, SimCustomer *c, Errand *e, Job *j,
 			 * DONE. If it is gone or was broken there is nothing to
 			 * collect, and walking the errand on would hand it a
 			 * step it cannot finish. */
-			if (m == NULL || m->owner != c->handle ||
-			    m->state == MACHINE_STATE_BROKEN) {
+			if (m == NULL || m->owner != c->handle) {
 				brainReplan(w, c, e, out, cap, n, BRAIN_EV_REPLAN);
 				errandRewindToJob(e, JOB_USE_MACHINE);
 				return;
@@ -525,13 +553,14 @@ static void brainDriveLeave(SimCustomer *c, Agent *a, BrainEvent *out, int cap,
  * counter in disguise. The decay is written by the WORLD (need.h is explicit
  * that influences write needs; this is one) on top of the role decay
  * agentsDecay already applies. */
-static void brainDecaySatisfaction(Agent *a, const Errand *e, float dt)
+/* Called from inside `if (errandBlocked(e))` — the blocked-ness is the CALLER's
+ * decision (the same test decides whether blockedFor advances), so repeating it
+ * here would be a branch that cannot be false. That is also why this function
+ * needs no errand of its own: it writes a WANT, and the errand was only ever
+ * the reason to write it. */
+static void brainDecaySatisfaction(Agent *a, float dt)
 {
-	float v;
-
-	if (!errandBlocked(e))
-		return;
-	v = a->needs.value[NEED_SATISFACTION] - ERRAND_BLOCKED_DECAY * dt;
+	float v = a->needs.value[NEED_SATISFACTION] - ERRAND_BLOCKED_DECAY * dt;
 	a->needs.value[NEED_SATISFACTION] = (v > 0.0f) ? v : 0.0f;
 }
 
@@ -543,19 +572,21 @@ static void brainDecaySatisfaction(Agent *a, const Errand *e, float dt)
  * are checked, both are named in errand.h, and neither is pretended to be
  * more load-bearing than it is: read agents/errand.h's note on
  * ERRAND_LEAVE_THRESHOLD before changing either half. */
+/* Called with a live errand: brainDrive returns early unless the errand is
+ * ACTIVE, and the advance loop breaks the moment it stops being one, so there
+ * is no state arm here — just the walk-out rule itself. */
 static bool brainShouldLeave(const Agent *a, const Errand *e)
 {
-	if (e->state != ERRAND_ACTIVE)
-		return false;
 	if (e->blockedFor < ERRAND_LEAVE_THRESHOLD_WINDOW)
 		return false;
 	return a->needs.value[NEED_SATISFACTION] < ERRAND_LEAVE_THRESHOLD;
 }
 
-/* The step wants a machine this errand has not been given one for. */
+/* The step wants a machine this errand has not been given one for. Its one
+ * caller has already returned on a NULL step, so there is no NULL arm here. */
 static bool brainStepNeedsMachine(const ErrandStep *s)
 {
-	return s != NULL && s->kind == STEP_JOB &&
+	return s->kind == STEP_JOB &&
 	       (s->jobKind == JOB_USE_MACHINE || s->jobKind == JOB_COLLECT);
 }
 
@@ -674,7 +705,10 @@ static void brainDrive(SimWorld *w, SimCustomer *c, float dt, BrainEvent *out,
 		 * a machine whose owner has been deleted is claimed for ever,
 		 * and nothing in the registry would ever free it. The release
 		 * reads the CUSTOMER, so it runs whether or not there is still a
-		 * mind — and a mind that has gone has no errand to clear. */
+		 * mind — and a mind that has gone has no errand to clear, which
+		 * is the whole reason for the test: an agent destroyed while it
+		 * holds a machine (pinned by
+		 * test_the_mind_vanishing_releases_the_machine). */
 		brainReplan(w, c, (a != NULL) ? errandActive(a) : NULL, out,
 			    cap, n, BRAIN_EV_REPLAN);
 		c->wantDespawn = true;
@@ -788,7 +822,7 @@ static void brainDrive(SimWorld *w, SimCustomer *c, float dt, BrainEvent *out,
 	 * not working. */
 	if (errandBlocked(e)) {
 		e->blockedFor += dt;
-		brainDecaySatisfaction(a, e, dt);
+		brainDecaySatisfaction(a, dt);
 	} else {
 		e->blockedFor = 0.0f;
 	}

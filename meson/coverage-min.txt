@@ -280,71 +280,110 @@ src/sim/machines.c		100
 src/sim/garments.c		100
 src/sim/selection.c		95
 #
-# TASK 5 REWRITES brain.c. The floor was 80 under T23 and sat at 76 after the
-# rewrite on the first measurement, which is exactly the pattern this file
-# forbids: a lowered number standing in for arms nobody had classified. Fix
-# round 2 classified every one of them, REMOVED the provably dead ones the way
-# agents/agent.c's boardClaim guard was removed (see the note on that module),
-# closed the reachable ones with scenarios, and named the survivors. The
-# floor is set from what is left: 331/422 branches, 78.4%.
+# TASK 5 REWRITES brain.c, and T23's floor of 80 STANDS.
 #
-# CLOSED BY REMOVAL (7 branches) — each was a guard whose precondition its own
-# caller had already established, so it could never be false:
+# It did not stand by accident. Round 1 measured the rewrite (76.96%) and
+# defended the number in prose, which is the one thing this file forbids;
+# rounds 2 and 3 then classified every arm the rewrite opened. Eleven guards
+# whose precondition their own caller had already established were REMOVED —
+# the agent.c boardClaim argument verbatim, see the note on that module — two
+# reachable arms were closed with scenarios, and everything that survives is
+# named below with the input that would reach it. Nothing is unaccounted for:
+# every open arm appears in this list.
 #
-#   - brainSelectMachine's `s == NULL`: its only caller resolves the step one
-#     statement earlier and returns when it is NULL.
-#   - brainSelectMachine's "raced away between choose and read" NULL: selChoose
-#     returns a handle from the very registry it was handed (sim/selection.h:
-#     "a candidate is a live machine") and nothing runs in between. This is
-#     agent.c's fill-boardClaim argument verbatim.
-#   - `j != NULL` inside brainDriveLoad's claim-denial branch, which is only
-#     entered from a test that has just established j is non-NULL.
-#   - `a == NULL || e == NULL` in brainStepJob, brainDecaySatisfaction and
-#     brainShouldLeave: brainDrive returns early without an agent, and every
-#     call site passes the errand it is working on.
-#   - `a == NULL` in brainEnqueueLeave: the same caller-established fact.
+# Final measurement: 327/408 branches, 80.1%.
 #
-# CLOSED BY A SCENARIO (round 2):
+# REMOVED AS UNREACHABLE BY CONSTRUCTION (11):
+#
+#   1. brainSelectMachine's `s == NULL` — its only caller resolves the step
+#      one statement earlier and returns when it is NULL.
+#   2. brainSelectMachine's "raced away between choose and read" — selChoose
+#      returns a handle from the very registry it was handed ("a candidate is
+#      a live machine") and nothing runs in between.
+#   3. `j != NULL` in brainDriveLoad's claim-denial branch — only entered from
+#      the test directly above it, which returns unless j is non-NULL.
+#   4. `a == NULL` in brainStepJob, brainDecaySatisfaction, brainShouldLeave,
+#      brainEnqueueLeave — brainDrive returns early without an agent.
+#   5. `e == NULL` in brainStepJob and brainAbandonErrand — all three
+#      brainAbandonErrand callers pass the errand they are abandoning, and
+#      errandAbandon is itself NULL-safe.
+#   6. `!errandBlocked(e)` in brainDecaySatisfaction — its sole caller sits
+#      INSIDE `if (errandBlocked(e))`, which is the same test that decides
+#      whether blockedFor advances. (Round 2 removed the guard two lines above
+#      this one and left this half of the condition behind; that was the
+#      inconsistency round 3 caught.)
+#   7. `e->state != ERRAND_ACTIVE` in brainShouldLeave — its sole caller is
+#      reached only after brainDrive established ACTIVE at the top and the
+#      advance loop broke on it changing. Same half-condition mistake as (6).
+#   8. `c != NULL` in brainSlotUsed — all seven call sites pass a record taken
+#      out of the registry (`&w->customers[i]`, or a `c` bound to one).
+#   9. `s != NULL` in brainStepNeedsMachine — its one caller returned on a NULL
+#      step two functions earlier.
+#  10. `ent == NULL` in the cannot-pay test — brainDrive returns early unless
+#      the body exists, and this is the only call site.
+#  11. `m->state == MACHINE_STATE_BROKEN` in the collect leg — machineBreak
+#      always clears the owner (machines.c), so a BROKEN machine never has one
+#      for the comparison to be about. Round 2 kept it under a broad label;
+#      round 3 decides it on its own.
+#
+# CLOSED BY A SCENARIO (rounds 2 and 3):
 #
 #   - the collect leg's "the machine broke while the customer walked back"
-#     rewind, which round 1 called unreachable-by-arrangement. It is not: break
-#     on the MACHINE_DONE that starts the walk and the guard fires
-#     (test_a_machine_broken_during_the_collect_walk_rewinds).
+#     rewind (test_a_machine_broken_during_the_collect_walk_rewinds) — round 1
+#     called it unreachable-by-arrangement; break on the MACHINE_DONE that
+#     starts the walk and it fires.
+#   - the event buffer's `*n >= cap` arm: a one-slot buffer on a tick with two
+#     adoptions fills its slot and drops the second REPORT, and both errands
+#     are still adopted (test_update_guards).
 #
-# THE ARMS THAT REMAIN, each with the input that would reach it — so the next
-# reader can tell deliberate defence from erosion:
+# KEPT, each with the input that reaches it:
 #
+#   - brainEmit's buffer guard (`out == NULL`, `cap <= 0`): covered for the
+#     whole-tick path in test_update_guards; the per-leg arms need a zero
+#     capacity in the middle of a live scenario.
+#   - brainStepOf / brainLegOfStep's template-and-index bounds (and the
+#     `s == NULL` arms that follow them): only a hand-built errand naming an
+#     id no row claims, or an index past its step count, reaches these —
+#     errandAdvance refuses to advance such a record and marks it FAILED, so
+#     the driver sees a terminal errand rather than a live one.
+#   - brainLegOfStep's `default:` (a job kind that is none of LOAD, COLLECT or
+#     LEAVE): only a template naming a job kind the driver has no leg for.
+#     Template data, not state.
+#   - brainEnqueueLeave's `!activityBindJob` and its board-full refusal: ACT_LEAVE
+#     is a shipped catalogue row, so the bind cannot fail; the refusal needs a
+#     personal board with BOARD_MAX live jobs, and the driver holds one job.
+#   - brainGoToExit's "already on the way out": duplicated defence today —
+#     brainDrive performs the same check before it looks for an errand — kept
+#     because it is the only thing between a future caller that enqueues a
+#     leave job from elsewhere and a double departure. The CASE it protects is
+#     described by test_an_errand_dying_on_its_leave_step_walks_out_once.
+#   - brainAbandonErrand's `c->abandoned`: the two give-up tests (cannot pay,
+#     patience spent) could both fire in one tick; a customer that just paid
+#     was not blocked, so the shipped flow cannot reach it today.
+#   - brainDriveLeave's two arms: the first needs the leave job to have failed
+#     to enqueue at all (the board-full case above); the second needs it to
+#     vanish from the board while it is being walked.
 #   - machineGet returning NULL (the "machine vanished mid-leg" arm in
 #     brainDriveLoad, the gate's "a machine we no longer own" arm, the collect
-#     leg's owner check). Nothing in the tree DESTROYS a machine: machineBreak
-#     keeps the slot and clears the owner, and there is no machineDestroy. The
-#     only way to reach these is a SimCustomer whose `target` names a slot that
-#     was never created — a corrupted record, not a reachable state. Kept
-#     because machineGet's contract is NULL-safe and dereferencing past it
-#     would be a crash; floored on purpose.
-#   - machineStartRun refused (the machine stopped being ours between the claim
-#     and the start): needs a machine released out from under a customer that
-#     still believes it holds it, which no shipped path does.
-#   - the `j == NULL || j->state != ...` sub-arms in the load and collect legs:
-#     reachable only if the errand's job vanishes from its board between two
-#     reads (retired by another owner), and agentsUpdate's ownership check
-#     turns that into "the job is not mine" first.
-#   - brainEnqueueLeave's board-full refusal: a personal board is BOARD_MAX
-#     jobs and the driver holds one at a time.
-#   - the FILL announcement's `out != NULL && cap > 0` guard and the brainEmit
-#     bounds check: reachable only with a NULL or zero-capacity event buffer
-#     mid-scenario (covered for simUpdate, not for every leg).
-#   - brainStepOf / brainLegOfStep's template-and-index bounds: reachable only
-#     with a hand-built errand naming an id no row claims — errandAdvance
-#     refuses to advance such a record and marks it FAILED, so the driver sees
-#     a terminal errand, not a live one.
+#     leg's owner check): nothing in the tree DESTROYS a machine —
+#     machineBreak keeps the slot and clears the owner, and there is no
+#     machineDestroy — so the only way to reach these is a SimCustomer whose
+#     `target` names a slot that was never created. machineGet is NULL-safe by
+#     contract and the alternative is a crash, so these are floored on purpose.
+#   - machineStartRun refused: a machine released out from under a customer
+#     that still believes it holds it, which no shipped path does.
+#   - the `j == NULL || j->state != ...` sub-arms of the load, gate and collect
+#     legs: the errand's job vanishing from its own board between two reads,
+#     which agentsUpdate's ownership check turns into "the job is not mine"
+#     first.
 #   - the retry cap (BRAIN_MAX_WAIT_RETRIES) in brainSupplyTarget. Unreachable
 #     by construction, not by accident: the leave window (45 s) is always the
 #     shorter of the two, so the window abandons long before 120 retries at one
 #     a second. Kept as the bound for a world whose leave window is ever raised
 #     past it, and pinned from the other side by
 #     test_a_gate_bound_outlasts_the_patience_window.
-src/sim/brain.c			78
+#
+src/sim/brain.c			80
 
 # Agent framework, task 1: the want ladder (need.c) and the agent record
 # (agent.c). Both are pure, allocation-free twin suites, and both close
