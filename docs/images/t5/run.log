@@ -1,0 +1,357 @@
+isomata smoke: font measure "Isomata" = 95x30 (height 30, rc 0)
+isomata smoke: safe area 0,0 1280x720
+isomata: SDL 3.4.12, video driver x11, window 1280x720 pixels (1280x720 points, density 1.00), UI scale 1.00
+gpu_backend: swapchain format enum 12
+gpu_backend: atlas 160x160 (9 materials, 20 files)
+gpu_backend: ready (driver vulkan)
+isomata: window 1280x720 pixels (aspect 1.778)
+audio: ready (driver dummy, 8 voices, device 21, 44100 Hz 2 ch)
+isomata: scene -> menu
+audio: play sound 0 on voice 0
+isomata: level camera reset (yaw 0.0, zoom 1.00)
+isomata: level map from PNG directory '/home/krang/proj/isomata/build/assets/maps/demo' (9 slices)
+isomata: light grid 16x16x10, 5 emitters
+isomata: demo entity 0 created at (2,8), agent 0
+isomata: demo entity 1 created at (10,3), agent 1
+isomata: demo entity 2 created at (2,7), agent 2
+isomata: machine 0 WASHER at (1,1) fee 3 run 30s
+isomata: machine 1 WASHER at (2,1) fee 3 run 30s
+isomata: machine 2 WASHER at (3,1) fee 3 run 30s
+isomata: machine 3 DRYER at (4,1) fee 2 run 30s
+isomata: machine 4 DRYER at (5,1) fee 2 run 30s
+isomata: machine 5 WASHER at (14,1) fee 3 run 30s
+isomata: [t=2552ms] customer #0 (handle 3, policy closest) arrived at the door with $20
+isomata: [t=2552ms] customer #0 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=2552ms] customer #0 chose machine 0 (dist 2, score 2, policy closest)
+isomata: scene -> level
+isomata: [t=3406ms] customer #0 paid 3 to machine 0
+isomata: [t=3406ms] customer #0 loading 5s in place at machine 0
+isomata: [t=3406ms] scripted divergence pair (closest + spread_k) arrived; interval spawner on (4s interval, cap 4, door (0,0))
+isomata: [t=3406ms] customer #1 (handle 4, policy closest) arrived at the door with $20
+isomata: [t=3406ms] customer #1 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=3406ms] customer #1 chose machine 1 (dist 3, score 3, policy closest)
+isomata: [t=3406ms] customer #2 (handle 5, policy spread_k) arrived at the door with $20
+isomata: [t=3406ms] customer #2 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=3406ms] customer #2 chose machine 5 (dist 15, score 15, policy spread_k)
+isomata: [t=3437ms] customer #3 (handle 6, policy cheapest) arrived at the door with $20
+isomata: [t=3437ms] customer #3 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=3437ms] customer #3 chose machine 1 (dist 3, score 3003, policy cheapest)
+isomata: [t=4683ms] customer #1 paid 3 to machine 1
+isomata: [t=4683ms] customer #1 loading 5s in place at machine 1
+isomata: [t=4683ms] customer #3 chose machine 2 (dist 1, score 3001, policy cheapest)
+isomata: [t=4683ms] customer #3 chose machine 5 (dist 12, score 3012, policy cheapest)
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=8419ms] customer #0 started machine 0; walking away while it runs
+isomata: [t=9486ms] customer #2 paid 3 to machine 5
+isomata: [t=9486ms] customer #2 loading 5s in place at machine 5
+isomata: [t=9486ms] customer #3 chose machine 2 (dist 10, score 3010, policy cheapest)
+isomata: [t=9549ms] customer #3 paid 3 to machine 2
+isomata: [t=9549ms] customer #3 loading 5s in place at machine 2
+isomata: [t=9711ms] customer #1 started machine 1; walking away while it runs
+isomata: [t=14497ms] customer #2 started machine 5; walking away while it runs
+isomata: [t=14561ms] customer #3 started machine 2; walking away while it runs
+isomata: agent 0 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 1 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 2 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (12,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,13) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: agent 2 (entity 2) job 0 WANDER -> (11,10) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: agent 1 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,3) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: agent 2 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 (entity 2) job 0 WANDER -> (2,7) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: agent 0 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (2,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=38434ms] customer #0: machine 0 run done, walking back to collect
+isomata: [t=38434ms] machine 0 wake PHASE_DONE owner 3
+isomata: [t=39278ms] customer #0 collecting 5s in place at machine 0
+isomata: [t=39731ms] customer #1: machine 1 run done, walking back to collect
+isomata: [t=39731ms] machine 1 wake PHASE_DONE owner 4
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=40971ms] customer #1 collecting 5s in place at machine 1
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: [t=44332ms] customer #0 garment is now WET_CLEAN
+isomata: [t=44332ms] customer #0 chose machine 3 (dist 3, score 3, policy closest)
+isomata: [t=44515ms] customer #2: machine 5 run done, walking back to collect
+isomata: [t=44515ms] machine 5 wake PHASE_DONE owner 5
+isomata: [t=44576ms] customer #3: machine 2 run done, walking back to collect
+isomata: [t=44576ms] machine 2 wake PHASE_DONE owner 6
+isomata: [t=45611ms] customer #0 paid 2 to machine 3
+isomata: [t=45611ms] customer #0 loading 5s in place at machine 3
+isomata: [t=46007ms] customer #1 garment is now WET_CLEAN
+isomata: [t=46007ms] customer #1 chose machine 4 (dist 3, score 3, policy closest)
+isomata: [t=46215ms] customer #3 collecting 5s in place at machine 2
+isomata: [t=47284ms] customer #1 paid 2 to machine 4
+isomata: [t=47284ms] customer #1 loading 5s in place at machine 4
+isomata: [t=50571ms] customer #2 collecting 5s in place at machine 5
+isomata: [t=50633ms] customer #0 started machine 3; walking away while it runs
+isomata: agent 1 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,13) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: [t=51266ms] customer #3 garment is now WET_CLEAN
+isomata: [t=51266ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=51298ms] customer #3 waiting on a machine; filling time with NAP (band 6)
+isomata: [t=52295ms] customer #1 started machine 4; walking away while it runs
+isomata: [t=52327ms] customer #3 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 (entity 2) job 0 WANDER -> (11,10) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: [t=53380ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=54411ms] customer #3 found no free machine; waiting and retrying
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: [t=55459ms] customer #3 found no free machine; waiting and retrying
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: [t=55608ms] customer #2 garment is now WET_CLEAN
+isomata: [t=55608ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=55638ms] customer #2 waiting on a machine; filling time with NAP (band 6)
+isomata: agent 0 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (12,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: [t=56508ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=56660ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=57547ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=57721ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,3) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: [t=58604ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=58759ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=59644ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=59798ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=60709ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=60834ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=61751ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=61876ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 (entity 2) job 0 WANDER -> (2,7) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=62796ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=62920ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: [t=63842ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=63968ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=64875ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=65006ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=65935ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=66066ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (2,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: [t=66970ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=67134ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=68034ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=68200ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=69093ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=69249ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=70134ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=70294ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=71166ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=71346ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=72220ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=72403ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: [t=73266ms] customer #3 found no free machine; waiting and retrying
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=73458ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: [t=74309ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=74499ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=75361ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=75549ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=76427ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=76595ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=77472ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=77631ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 1 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,13) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: [t=78534ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=78695ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=79587ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=79744ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=80619ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=80651ms] customer #0: machine 3 run done, walking back to collect
+isomata: [t=80651ms] machine 3 wake PHASE_DONE owner 3
+isomata: [t=80781ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=81663ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=81823ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=82307ms] customer #1: machine 4 run done, walking back to collect
+isomata: [t=82307ms] machine 4 wake PHASE_DONE owner 4
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: [t=82688ms] customer #0 collecting 5s in place at machine 3
+isomata: [t=82719ms] customer #3 found no free machine; waiting and retrying
+isomata: agent 2 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 (entity 2) job 0 WANDER -> (11,10) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: [t=82878ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=83775ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=83932ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=84777ms] customer #1 collecting 5s in place at machine 4
+isomata: [t=84810ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=84967ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=85855ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=86015ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=86900ms] customer #3 found no free machine; waiting and retrying
+isomata: [t=87059ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=87726ms] customer #0 garment is now DRY_CLEAN
+isomata: [t=87756ms] customer #0 heading for the exit
+isomata: [t=87948ms] customer #3 chose machine 3 (dist 1, score 2001, policy cheapest)
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=88106ms] customer #2 chose machine 3 (dist 10, score 100010, policy spread_k)
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: [t=88427ms] customer #3 paid 2 to machine 3
+isomata: [t=88427ms] customer #3 loading 5s in place at machine 3
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=88459ms] customer #2 found no free machine; waiting and retrying
+isomata: agent 1 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 0 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,3) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: [t=88815ms] customer #0 left (clean dry)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (12,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: [t=89521ms] customer #2 found no free machine; waiting and retrying
+isomata: [t=89824ms] customer #1 garment is now DRY_CLEAN
+isomata: [t=89859ms] customer #1 heading for the exit
+isomata: [t=90578ms] customer #2 chose machine 4 (dist 3, score 100003, policy spread_k)
+isomata: [t=90906ms] customer #1 left (clean dry)
+isomata: [t=91837ms] customer #4 (handle 3, policy closest) arrived at the door with $20
+isomata: [t=91837ms] customer #4 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=91837ms] customer #4 chose machine 0 (dist 2, score 2, policy closest)
+isomata: [t=92189ms] customer #2 paid 2 to machine 4
+isomata: [t=92189ms] customer #2 loading 5s in place at machine 4
+isomata: [t=92694ms] customer #4 paid 3 to machine 0
+isomata: [t=92694ms] customer #4 loading 5s in place at machine 0
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
+isomata: [t=93438ms] customer #3 started machine 3; walking away while it runs
+isomata: agent 2 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band 0)
+isomata: agent 2 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 2 (entity 2) job 0 WANDER -> (2,7) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 18 straight 12 DETOUR
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: [t=95841ms] customer #5 (handle 4, policy spread_k) arrived at the door with $20
+isomata: [t=95841ms] customer #5 adopted errand LAUNDRY_CLEAN (band 0)
+isomata: [t=95841ms] customer #5 chose machine 5 (dist 15, score 15, policy spread_k)
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: [t=97207ms] customer #2 started machine 4; walking away while it runs
+isomata: [t=97722ms] customer #4 started machine 0; walking away while it runs
+isomata: [t=99701ms] SCRIPTED BREAK: washer 0 broke mid-run
+isomata: agent 2 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: [t=99735ms] customer #4: machine 0 BROKE mid-run; re-planning (garment DIRTY)
+isomata: agent 2 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 2 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 2 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 2 (entity 2) released job 0 (band -1)
+isomata: [t=102061ms] customer #5 paid 3 to machine 5
+isomata: [t=102061ms] customer #5 loading 5s in place at machine 5
+isomata: agent 0 job 0 (COFFEE band 4) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band 0)
+isomata: agent 0 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 0 (entity 0) job 0 WANDER -> (2,8) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 20 straight 10 DETOUR
+isomata: [t=107095ms] customer #5 started machine 5; walking away while it runs
+isomata: agent 1 job 0 (NAP band 6) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band 0)
+isomata: agent 1 job 0 (WANDER) state UNCLAIMED -> WALKING
+isomata: agent 1 (entity 1) job 0 WANDER -> (10,13) band 0 (from -1, challenger -1, margin 2, dwell 1.50s) path 10 straight 10
+isomata: agent 0 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 0 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 0 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 0 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 0 (entity 0) released job 0 (band -1)
+isomata: agent 1 job 0 (WANDER) state WALKING -> INTERACTING
+isomata: agent 1 job 0 (WANDER) state INTERACTING -> WAITING
+isomata: agent 1 job 0 (WANDER) state WAITING -> DONE
+isomata: agent 1 job 0 (WANDER band 0) DONE; retiring it
+isomata: agent 1 (entity 1) released job 0 (band -1)
