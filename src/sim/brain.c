@@ -761,6 +761,33 @@ static void brainDrive(SimWorld *w, SimCustomer *c, float dt, BrainEvent *out,
 	} else {
 		e->blockedFor = 0.0f;
 	}
+	/* ANNOUNCE THE FILL, ONCE, WHILE BLOCKED. This is the spec's "an agent
+	 * does secondary activities when blocked" made visible: agentsUpdate
+	 * generates the fill itself and reports nothing, so without this the
+	 * most interesting thing an idle customer does — standing beside a
+	 * washer somebody else is using, doing a coffee break — leaves no
+	 * trace at all.
+	 *
+	 * It is announced rather than repeated because a fill can run for
+	 * fifteen seconds at sixty frames a second, and the flag clears as
+	 * soon as the agent is back on the errand's own work (or the errand
+	 * stops being blocked), so a second fill on the same errand is a
+	 * second event, not a silence. The engaged job is the FILL exactly when
+	 * it is not the job the errand enqueued. */
+	if (a->engagedJob != JOB_INVALID && !a->engagedShared &&
+	    a->engagedJob != e->jobHandle) {
+		const Job *fj = boardJob(&a->personal, a->engagedJob);
+
+		if (fj != NULL && !c->reportedFill) {
+			c->reportedFill = true;
+			brainEmit(out, cap, n, BRAIN_EV_FILL, c, MACHINE_INVALID,
+				  fj->kind, 0, 0);
+			if (out != NULL && cap > 0 && n != NULL && *n > 0)
+				out[*n - 1].band = fj->band;
+		}
+	} else {
+		c->reportedFill = false;
+	}
 	if (brainShouldLeave(a, e))
 		brainAbandonErrand(w, c, a, e, out, cap, n);
 }
@@ -873,6 +900,7 @@ EntityHandle simSpawnCustomer(SimWorld *w, int policy, int money,
 	c->wantDespawn = false;
 	c->abandoned = false;
 	c->reported = false;
+	c->reportedFill = false;
 	{
 		Agent *a = agentGet(&w->agents, ah);
 
@@ -1095,6 +1123,8 @@ const char *brainEventName(int kind)
 		return "SPAWN";
 	case BRAIN_EV_ERRAND_ADOPT:
 		return "ERRAND_ADOPT";
+	case BRAIN_EV_FILL:
+		return "FILL";
 	case BRAIN_EV_TASK_BEGIN:
 		return "TASK_BEGIN";
 	case BRAIN_EV_NO_CANDIDATE:

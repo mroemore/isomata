@@ -1305,6 +1305,69 @@ static void test_entity_destroyed_mid_life(void)
 	destroyVoxmap(map);
 }
 
+/* FILL TIME, VISIBLE. The spec's "an agent does secondary activities when
+ * blocked" is the moment this task exists to show, and agentsUpdate generates
+ * the fill itself and reports nothing — so this pins that the driver notices
+ * one and announces it, once, with the activity and its band.
+ *
+ * The arrangement: the only washer is held by a machine that will not finish
+ * for ever, so the customer's first step has nothing to bind and the framework
+ * fills its (empty) board. Without the announcement the customer is simply
+ * standing in the building. */
+static void test_a_blocked_customer_announces_the_fill_it_takes(void)
+{
+	Voxmap *map = smallMap();
+	SimWorld w;
+	Trace t;
+	BrainEvent buf[8];
+	EntityHandle h;
+	int n = 0;
+	int step;
+	int fills = 0;
+	int i;
+
+	traceReset(&t);
+	simWorldInit(&w, map, 0, 0, 0, 0, 0, 0);
+	/* One washer, busy for a thousand seconds: nothing to wash in. */
+	TEST_ASSERT_TRUE(machineClaim(machineGet(&w.machines,
+		machineCreate(&w.machines, MACHINE_KIND_WASHER, 2, 0, 3,
+			      1000.0f)), 3));
+	TEST_ASSERT_TRUE(machineStartRun(machineGet(&w.machines, 0)));
+	machineCreate(&w.machines, MACHINE_KIND_DRYER, 5, 0, 2, 1.0f);
+	h = simSpawnCustomer(&w, SEL_POLICY_CLOSEST, 20, buf, 8, &n);
+	traceAppend(&t, buf, n);
+	TEST_ASSERT_TRUE(h != ENTITY_INVALID);
+
+	/* Owner 3 is the scenario's own blocking claim, not a customer's, so the
+	 * per-tick claim invariant is stepped with it known. */
+	for (step = 0; step < 600; step++) {
+		step1Foreign(&w, &t, DT, 3);
+		if (countKind(&t, BRAIN_EV_FILL) > 0)
+			break;
+	}
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_FILL));
+	/* Announced once per fill, not once per frame: the flag holds until
+	 * the customer is back on the errand's own work. */
+	for (step = 0; step < 400; step++)
+		step1Foreign(&w, &t, DT, 3);
+	TEST_ASSERT_EQUAL_INT(1, countKind(&t, BRAIN_EV_FILL));
+	/* It names a real activity and reports its band on the agent's own
+	 * arithmetic. */
+	for (i = 0; i < t.count; i++) {
+		if (t.ev[i].kind != BRAIN_EV_FILL)
+			continue;
+		TEST_ASSERT_NOT_NULL(activitiesGet(t.ev[i].amount));
+		TEST_ASSERT_TRUE(t.ev[i].band >= 0);
+		TEST_ASSERT_TRUE(t.ev[i].band <= NEED_BANDS - 1);
+		fills++;
+	}
+	TEST_ASSERT_EQUAL_INT(1, fills);
+	/* And the errand was still waiting for a machine all the while. */
+	TEST_ASSERT_TRUE(countKind(&t, BRAIN_EV_NO_CANDIDATE) >= 1);
+	TEST_ASSERT_EQUAL_INT(0, countKind(&t, BRAIN_EV_ABANDON));
+	destroyVoxmap(map);
+}
+
 /* A CUSTOMER WHOSE ERRAND ENDED WITHOUT A LEAVE STEP STILL WALKS OUT. The
  * driver watches the errand, and an errand can end three ways it did not ask
  * for: a template that ran out, a step that failed past its bound, an errand
@@ -1501,6 +1564,8 @@ void run_test_brain(void)
 	RUN_TEST(test_integration_spread_diverges);
 	RUN_TEST(test_a_wake_during_the_walk_to_the_wait_spot);
 	RUN_TEST(test_an_errand_that_ends_without_leaving_still_walks_out);
+	RUN_TEST(test_a_blocked_customer_announces_the_fill_it_takes);
+	RUN_TEST(test_a_blocked_customer_announces_the_fill_it_takes);
 	RUN_TEST(test_integration_single_washer_contention);
 	RUN_TEST(test_integration_break_mid_run_replans);
 	RUN_TEST(test_determinism);

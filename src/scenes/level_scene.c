@@ -1022,6 +1022,15 @@ static void levelLogBrainEvent(const BrainEvent *ev)
 		SDL_Log("isomata: [t=%llums] customer #%d adopted errand %s (band %d)",
 			t, ev->id, levelErrandName(ev->tmpl), ev->band);
 		break;
+	case BRAIN_EV_FILL:
+		/* THE BLOCKED-CUSTOMER MOMENT. The wash is waiting on a machine
+		 * somebody else is using, so the framework is doing something
+		 * else with this customer's mind; naming the activity and its
+		 * band is what turns "they are just standing there" into
+		 * "they are bored, and here is how bored". */
+		SDL_Log("isomata: [t=%llums] customer #%d waiting on a machine; filling time with %s (band %d)",
+			t, ev->id, levelActivityName(ev->amount), ev->band);
+		break;
 	case BRAIN_EV_TASK_BEGIN:
 		SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION,
 			     "isomata: [t=%llums] customer #%d chose machine %d (dist %d, score %d, policy %s)",

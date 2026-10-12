@@ -142,11 +142,13 @@ typedef struct SimCustomer {
 	bool wantDespawn;	/* leave: despawn after this step */
 	bool abandoned;		/* gave up the errand (leaves as-is) */
 	bool reported;		/* the errand's terminal state was acted on */
+	bool reportedFill;	/* the current secondary activity was announced */
 } SimCustomer;
 
 typedef enum BrainEventKind {
 	BRAIN_EV_SPAWN = 0,	/* a customer arrived at the door */
 	BRAIN_EV_ERRAND_ADOPT,	/* it adopted an errand, and at what band */
+	BRAIN_EV_FILL,		/* blocked: doing something of its own accord */
 	BRAIN_EV_TASK_BEGIN,	/* a step's machine was chosen */
 	BRAIN_EV_NO_CANDIDATE,	/* no free machine (a bounded retry) */
 	BRAIN_EV_CLAIM_DENIED,	/* claim refused at arrival -> re-plan */
@@ -171,7 +173,8 @@ typedef struct BrainEvent {
 	int id;			/* spawn id */
 	int policy;
 	MachineHandle machine;
-	int amount;		/* fee paid (PAY) / start funds (SPAWN) */
+	int amount;		/* fee paid (PAY) / start funds (SPAWN) / the
+				 * activity it filled time with (FILL) */
 	int score;		/* winning heuristic score (TASK_BEGIN) */
 	int distance;		/* tile distance to the machine (TASK_BEGIN) */
 	int garment;		/* garment state at the event */
