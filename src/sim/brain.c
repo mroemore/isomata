@@ -42,10 +42,7 @@
  *   - brainDriveCollect's completion: the NORMAL release, on the happy path.
  *
  * (The list is about which PATHS can end holding a machine, not about where
- * the call happens: two of the three are not failure paths. Outside this file
- * machineRelease is called only by machines.c's own break path and by the
- * suites — `grep -rn "machineRelease" src/` is the check, and it lists three
- * sites here.)
+ * the call happens: two of the three are not failure paths.)
  *
  * Three oracles back the sentence. tests/test_brain.c asserts the claim
  * invariant on EVERY TICK of every scenario (no machine is ever owned by a

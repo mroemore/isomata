@@ -336,69 +336,64 @@ src/sim/selection.c		95
 #
 # THE OPEN-ARM LIST BELOW IS DERIVED, NOT ASSERTED.
 #
-#   python3 meson/open-arms.py
+#   python3 meson/open-arms.py [source.c]
 #
-# That script reads build-cov/coverage.info (lcov, straight out of gcov) and
-# prints every branch record that reads zero, split into gcov's loop-bound
-# artefacts and genuine never-taken conditionals. At this commit: 408 branch
-# records; 60 lines carry a never-taken branch; 4 of those lines are loop-bound
-# artefacts (813, 1044, 1065, 1169 — `for` conditions whose bodies always leave
-# through `break`, which gcov records as an exit side never taken); the other 56
-# lines, 75 records, are the arms.
+# That script reads build-cov/coverage.info (lcov, straight out of gcov),
+# collects every branch record it did not hit, and sorts them into the three
+# kinds there are: never-taken arms (a decision the suite does not make),
+# loop-bound records (gcov's extra record per loop, whose body always leaves
+# through a break or a return — an artefact, not a decision), and lcov-excluded
+# records (taken == "-", which the gate counts in its denominator but can never
+# count as hit). It resolves paths from the repository root, so it runs from
+# anywhere.
 #
-# The script is the authority. What follows groups those 56 lines by the KIND
-# OF INPUT that would reach them, which is a reading aid and not a completeness
-# claim: this comment does not assert that every arm is classified, and the
-# honest way to check is to re-run the script and read its output. Line numbers
-# are from this commit; a later edit that shifts them is not an error in the
-# script, it is the script telling you to re-read.
+# At this commit brain.c is: 408 branch records, 327 hit, 79 never taken across
+# 59 lines (of which ONE is a loop-bound artefact — the `for` over the customer
+# list in the wake loop), plus 2 lcov-excluded records on one line. That is the
+# floor's arithmetic exactly: 327/408 = 80.1%.
 #
-#   TEMPLATE AND STEP VALIDITY — a hand-built or exhausted errand:
-#     110, 113, 118, 137, 620, 624, 682 (unknown template id, step index past
-#     the table, a job kind with no leg), 818, 821 (the advance loop's two
-#     "the errand went terminal" breaks: a template whose steps run out, or the
-#     retry-cap abandon), 1003 (a served-need band that never beats the 0 it
-#     starts at, i.e. a template with no satisfied want), 989 (no template
-#     registered for the role, so no errand to adopt).
+# The script is the authority. What follows describes, in words, WHAT KIND OF
+# THING each group of arms would need in order to be taken. It deliberately
+# carries no line numbers — a list of line numbers beside prose is a list that
+# goes stale the next time a comment is edited, and it is the reason this entry
+# was wrong twice before this one. It is also not a claim that every arm is
+# classified; the honest way to check is to run the script and read it.
 #
-#   REGISTRY AND WORLD RACES — a handle the customer no longer owns:
-#     326 (machineGet mid-leg), 441 and 507 (a machine that is not ours any
-#     more), 928 (a NULL world), 938/941 (the entity registry refusing a
-#     spawn), 1040 (machineBreak refused), 1042/1047/1049 (a wake with no
-#     machine, no owner, or an owner that is not a live customer),
-#     1062/1063 (a delivered wake that is not a usable one).
-#     None of these is reachable by ordinary play: nothing destroys a machine
-#     (machineBreak keeps the slot and clears the owner) and nothing reclaims a
-#     machine under a live customer.
+#   TEMPLATE AND STEP VALIDITY — a hand-built or exhausted errand: an id no row
+#   claims, a step index past the table, a job kind the driver has no leg for,
+#   the advance loop's two "the errand went terminal" breaks (a template whose
+#   steps run out, or the retry-cap abandon), a served-need band that never
+#   beats the zero it starts at, and the spawn-time adoption finding no template
+#   registered for the role.
 #
-#   THE ERRAND'S OWN JOB IN AN UNEXPECTED STATE:
-#     370, 376, 459, 467, 502, 522, 526, 528, 545 — the job vanishing from the
-#     agent's board between two reads, or sitting in a state the leg does not
-#     expect. agentsUpdate's ownership check turns most of these into "the job
-#     is not mine" before the leg sees them.
+#   REGISTRY AND WORLD RACES — a handle the customer no longer owns: a machine
+#   handle read mid-leg, a machine that is no longer ours, a NULL world, an
+#   entity registry refusing a spawn, a refused break, and a wake that names no
+#   machine, no owner, or an owner that is not a live customer. None is
+#   reachable by ordinary play: nothing destroys a machine (machineBreak keeps
+#   the slot and clears the owner) and nothing reclaims one under a live
+#   customer.
 #
-#   BINDING, BOARD AND CATALOGUE FACTS:
-#     194 (ACT_LEAVE failing to bind — a shipped row), 217 (brainGoToExit's
-#     "already on the way out", duplicated by the check brainDrive performs
-#     before it looks for an errand; kept as the only thing in front of a
-#     double departure if a future caller ever enqueues a leave job from
-#     elsewhere), 221 (the leave job failing to enqueue — a board with
-#     BOARD_MAX live jobs, where the driver holds one), 252 (a second abandon
-#     in one tick; the two give-up tests are separate and a customer that just
-#     paid was not blocked), 379 (machineStartRun refused), 643/664 (a binding
-#     whose machine is not in the state the sub-step expects), 784/785 (the
-#     leave step converging on a leave job that is already enqueued), 693 (the
-#     retry cap: unreachable by construction rather than by accident, because
-#     the leave window is always the shorter of the two — pinned from the other
-#     side by test_a_gate_bound_outlasts_the_patience_window), 735 (the
-#     reported flag being already set on a second visit to the walk-out).
+#   THE ERRAND'S OWN JOB IN AN UNEXPECTED STATE — the job vanishing from the
+#   agent's board between two reads, or sitting in a state the leg does not
+#   expect. agentsUpdate's ownership check turns most of these into "the job is
+#   not mine" before the leg sees them.
 #
-#   EVENT REPORTING:
-#     84 (brainEmit's buffer guard — covered for the whole-tick path, not per
-#     leg), 857 (the FILL announcement's own guard, which duplicates brainEmit's
-#     so it can stamp the band on the event it just wrote), 1006/1007 (the
-#     spawn's adopt announcement, same shape), 1186 (an event for a customer
-#     with no mind), 1193 (an event kind no case names).
+#   BINDING, BOARD AND CATALOGUE FACTS — a shipped catalogue row failing to
+#   bind, a board refusing an enqueue, a second abandon in one tick (the two
+#   give-up tests are separate, and a customer that just paid was not blocked),
+#   a start run refused, a binding whose machine is not in the state the
+#   sub-step expects, the leave step converging on a leave job that is already
+#   enqueued, the retry cap (unreachable by construction rather than by
+#   accident, because the leave window is always the shorter of the two —
+#   pinned from the other side by test_a_gate_bound_outlasts_the_patience_window),
+#   and the reported flag already set on a second visit to the walk-out.
+#
+#   EVENT REPORTING — the emit buffer's guard (covered for the whole-tick path,
+#   not per leg), the FILL announcement's own guard (it duplicates the emit
+#   guard so it can stamp the band on the event it just wrote), the spawn's
+#   adopt announcement (same shape), an event for a customer with no mind, and
+#   an event kind no case names.
 #
 src/sim/brain.c			80
 
@@ -539,8 +534,32 @@ src/agents/job.c		100
 # it carries, the blacklist's idempotence and bound, the rewind (and its
 # "nothing to go back to" failure), and every NULL guard.
 #
-# THE OPEN ARMS, DERIVED LIKE brain.c's: `python3 meson/open-arms.py
-# src/agents/errand.c` prints them from the lcov artifact. At this commit 17 of
+# THE OPEN ARMS, DERIVED LIKE brain.c's:
+# `python3 meson/open-arms.py src/agents/errand.c`. At this commit: 200 branch
+# records, 183 hit, 17 never taken across 17 lines, no loop-bound artefacts and
+# no lcov-excluded records — which is the floor's arithmetic exactly
+# (183/200 = 91.5%). As with brain.c, the words below say what kind of input
+# each group would take, the script is the authority, and no line numbers are
+# printed here because a list of them goes stale.
+#
+#   - the unbound-tile check and the unknown-activity / unscoreable-job checks
+#     inside errandEnqueueJob. Each guards a value its own caller
+#     (errandAdvance) has already checked, or a template row naming an activity
+#     the catalogue always has: with the shipped table no sequence of steps,
+#     failures or adoptions reaches them. Kept because a template is DATA —
+#     the next one loaded can name anything — and a broken row must be reported
+#     and refused rather than walked to the origin.
+#   - the board-full refusal: a personal board is BOARD_MAX jobs and the
+#     laundry errand's longest template holds one live job.
+#   - the gate band's floor comparison, one side only: with the shipped
+#     templates a gate is always enqueued while the step before it is at least
+#     as urgent, so the two sides are not separable without a template whose
+#     steps contradict each other.
+#   - the rest are template and step validity (an id no row claims, an index
+#     past the table) and the errand's own job handle (a list slot matching two
+#     fields at once, an enqueue the board refused, a blacklisted MACHINE
+#     binding that is not one, a gate job that did not land).
+src/agents/errand.c` prints them from the lcov artifact. At this commit 17 of
 # 200 records are never taken, on 17 lines, with no loop-bound artefacts among
 # them. The prose below says what kind of input each group would take; it is a
 # reading aid, not a claim that every arm is classified — the script is the

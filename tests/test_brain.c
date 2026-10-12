@@ -662,16 +662,16 @@ static void test_a_machine_broken_during_the_collect_walk_rewinds(void)
 
 /* AN ERRAND THAT DIES ON ITS OWN LEAVE STEP STILL WALKS OUT — ONCE. The other
  * terminal-errand test ends the errand on the FIRST step, where there is no
- * leave job and the driver has to enqueue one. This is the case where the
- * leave job is already on the board when the errand dies, which is what
- * brainGoToExit's "already on the way out" guard is for: without it the driver
- * would announce a second departure for a customer who is already walking to
- * the door, and enqueue a second leave job for the same walk.
+ * leave job and the driver has to enqueue one. Here the leave job is ALREADY on
+ * the board when the errand dies, so what has to be pinned is the outcome and
+ * not a branch: one departure, not two, for a customer who is already walking
+ * to the door.
  *
- * (The GUARD at the top of brainGoToExit is not reached by this test — the
- * driver notices the leave job before it looks for an errand, so the guard
- * stays duplicated defence. That is recorded in meson/coverage-min.txt, and
- * this test is here for the behaviour, not for the branch.) */
+ * (brainGoToExit's "already on the way out" guard is the thing that WOULD
+ * enforce that, and this arrangement does not reach it: brainDrive checks for a
+ * leave job before it looks for an errand, so the customer never gets as far as
+ * brainGoToExit. The guard is duplicate defence today, recorded as such in
+ * meson/coverage-min.txt; this test is here for the behaviour.) */
 static void test_an_errand_dying_on_its_leave_step_walks_out_once(void)
 {
 	Voxmap *map = smallMap();
